@@ -14,7 +14,8 @@ import '../tensor/tensor.dart';
 import 'optimizer.dart';
 
 class SGD extends Optimizer {
-  final double lr;
+  @override
+  double lr;
   final double momentum;
   final double weightDecay;
 

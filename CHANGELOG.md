@@ -1,5 +1,51 @@
 ## Unreleased
 
+- LR schedulers, BPE tokenizer, and an end-to-end training script.
+  Together these compose the earlier building blocks into a real
+  train → save → load → sample pipeline.
+
+  - `LRScheduler` (abstract) in `lib/core/optim/lr_scheduler.dart`.
+    Wraps an `Optimizer` and mutates `optimizer.lr` on each `step()`.
+    Concrete implementations:
+    - `StepLR(initialLr, stepSize, gamma)` — classic decay every
+      `stepSize` steps (`lr(t) = initialLr * gamma^floor(t/stepSize)`).
+    - `LinearWarmupCosineDecay(warmupSteps, totalSteps, maxLr, minLr)`
+      — the GPT-training standard: linear ramp `0 -> maxLr` over
+      `warmupSteps`, cosine anneal `maxLr -> minLr` across the rest,
+      clamps to `minLr` past `totalSteps`.
+    - Both work polymorphically over `SGD` and `Adam`; the base
+      `Optimizer` now exposes `lr` as a mutable getter/setter (the
+      concrete optimizer fields dropped their `final`).
+
+  - `BpeTokenizer` in `lib/core/data/bpe_tokenizer.dart` — a
+    dependency-free byte-level Byte-Pair-Encoding tokenizer.
+    - `BpeTokenizer.train(corpus, targetVocabSize:, minCount: 2)`
+      learns merges greedily from a UTF-8 corpus. Base vocab is the
+      256 raw byte values; each merge adds one id
+      (`vocabSize == 256 + merges.length`). Deterministic ties.
+    - `encode(text) -> List<int>`, `decode(tokens) -> String`.
+      Multi-byte UTF-8 round-trips correctly.
+    - `saveJson` / `saveFile` / `fromJson` / `loadFile` — versioned
+      JSON format `{version, kind:"byte-bpe", vocabSize, merges}`.
+
+  - `bin/gpt_train.dart` — end-to-end demo tying everything together:
+    train a BPE tokenizer on a short prose corpus (Ecclesiastes ~600
+    chars), tokenize it (vocab 320, ~4× compression), build a small
+    `GPT` (36k scalars, ctx 32, 2 layers × 4 heads × 32-d), train for
+    200 steps with `Adam + LinearWarmupCosineDecay` (warmup 20,
+    maxLr 3e-3, minLr 3e-4), micro-batch 4 via gradient accumulation
+    (scale each micro-loss by `1/microBatch` so the accumulated grad
+    matches a batched forward), clip-grad-norm 1.0, then save the
+    checkpoint + tokenizer, reload into a fresh instance, and sample
+    from `"a time to "` with both greedy and top-k. Runs in ~7 s CPU.
+    Loss trajectory: 6.5 → 2.9 → 0.9 → 0.28.
+
+  - 22 new tests: `test/lr_scheduler_test.dart` (10 — boundary /
+    monotonicity / warmup + cosine analytic values / cross-optimizer)
+    and `test/bpe_tokenizer_test.dart` (12 — train / encode+decode
+    round-trip / UTF-8 / determinism / compression / JSON+file
+    save-load / validation errors). Suite: **206 tests, all green.**
+
 - Model checkpointing — `Checkpoint` in `lib/core/nn/serialize.dart`.
   Trained models can now be persisted to disk and reloaded.
   - Simple, self-describing binary format:

@@ -20,13 +20,20 @@ greedy / temperature / top-k sampling), and
 both `SinusoidalPositionalEncoding`
 / `LearnedPositionalEmbedding` as trainable / regularization layers
 with `train()` / `eval()` mode toggling; `SGD` / `Adam` optimizers
-update parameters in place on their native device, and `clipGradNorm`
-bounds the global gradient L2. `Checkpoint` (in `nn/serialize.dart`)
+update parameters in place on their native device, `clipGradNorm`
+bounds the global gradient L2, and `LRScheduler`s (`StepLR`,
+`LinearWarmupCosineDecay`) mutate the optimizer's `lr` on a schedule.
+`Checkpoint` (in `nn/serialize.dart`)
 persists any `Module`'s parameters to a small binary format on disk
-and loads them back into a same-shape model. Runnable char-level
+and loads them back into a same-shape model. A pure-Dart byte-level
+`BpeTokenizer` in `core/data/bpe_tokenizer.dart` provides
+`train / encode / decode / saveFile / loadFile` for tokenizing real
+text. Runnable char-level
 demos at
 `bin/lm_demo.dart` and `bin/gpt_demo.dart` overfit a short refrain
-end-to-end (`dart run bin/gpt_demo.dart`).
+end-to-end (`dart run bin/gpt_demo.dart`); `bin/gpt_train.dart` shows
+the full pipeline: BPE + `GPT` + `Adam` + warmup/cosine schedule +
+gradient accumulation + checkpoint save/load + sampling.
 
 ## Layout
 
@@ -60,10 +67,13 @@ lib/
     gpt.dart                     # GPT-2 style: tied weights, learned PE, generate()
     serialize.dart               # Checkpoint.save/loadInto — DPTC binary format
   core/optim/
-    optimizer.dart               # abstract Optimizer base (step, zeroGrad)
+    optimizer.dart               # abstract Optimizer base (step, zeroGrad, mutable lr)
     sgd.dart                     # SGD with optional momentum + weight decay
     adam.dart                    # Adam with bias correction + decoupled WD
     grad_utils.dart              # clipGradNorm (global L2 clip, in place)
+    lr_scheduler.dart            # StepLR + LinearWarmupCosineDecay
+  core/data/
+    bpe_tokenizer.dart           # byte-level BPE: train / encode / decode / save / load
   native/
     src/
       engine.cu                  # extern "C" DLLEXPORT wrappers (30 symbols)

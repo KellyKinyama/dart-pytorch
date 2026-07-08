@@ -15,6 +15,11 @@ abstract class Optimizer {
 
   Optimizer(this.parameters);
 
+  /// Current learning rate. Mutable so that [LRScheduler]s can adjust
+  /// it across training steps.
+  double get lr;
+  set lr(double value);
+
   /// Apply one update step using each parameter's current `.grad`.
   /// Parameters with `grad == null` are skipped.
   void step();

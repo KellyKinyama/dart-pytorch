@@ -130,22 +130,30 @@ void main() {
   final ckptBytes = File(ckptPath).lengthSync();
   print('wrote $ckptPath ($ckptBytes bytes)');
 
-  final reloaded = GPT(GPTConfig(
-    vocabSize: chars.length,
-    maxCtx: 64,
-    embedDim: 32,
-    numLayers: 2,
-    numHeads: 4,
-    dropoutP: 0.0,
-    tieWeights: true,
-    seed: 424242, // deliberately different from the trained model
-  ));
-  final freshGreedy =
-      reloaded.generate(prompt, maxNewTokens: 30, temperature: 0.0);
+  final reloaded = GPT(
+    GPTConfig(
+      vocabSize: chars.length,
+      maxCtx: 64,
+      embedDim: 32,
+      numLayers: 2,
+      numHeads: 4,
+      dropoutP: 0.0,
+      tieWeights: true,
+      seed: 424242, // deliberately different from the trained model
+    ),
+  );
+  final freshGreedy = reloaded.generate(
+    prompt,
+    maxNewTokens: 30,
+    temperature: 0.0,
+  );
   print('fresh (untrained) greedy: "${decode(freshGreedy)}"');
   Checkpoint.loadIntoFile(reloaded, ckptPath);
-  final reloadedGreedy =
-      reloaded.generate(prompt, maxNewTokens: 30, temperature: 0.0);
+  final reloadedGreedy = reloaded.generate(
+    prompt,
+    maxNewTokens: 30,
+    temperature: 0.0,
+  );
   print('reloaded greedy         : "${decode(reloadedGreedy)}"');
   print('match: ${greedyCached.toString() == reloadedGreedy.toString()}');
   File(ckptPath).deleteSync();

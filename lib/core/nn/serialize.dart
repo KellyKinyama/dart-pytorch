@@ -122,8 +122,9 @@ class Checkpoint {
         '${bytes.length})',
       );
     }
-    final header = jsonDecode(utf8.decode(bytes.sublist(12, headerEnd)))
-        as Map<String, dynamic>;
+    final header =
+        jsonDecode(utf8.decode(bytes.sublist(12, headerEnd)))
+            as Map<String, dynamic>;
     final paramSpecs = (header['params'] as List).cast<Map<String, dynamic>>();
     final params = module.parameters();
     if (paramSpecs.length != params.length) {
@@ -139,16 +140,17 @@ class Checkpoint {
       final want = (paramSpecs[i]['shape'] as List).cast<int>();
       final have = params[i].shape;
       if (want.length != have.length ||
-          !List<bool>.generate(want.length, (k) => want[k] == have[k])
-              .every((b) => b)) {
+          !List<bool>.generate(
+            want.length,
+            (k) => want[k] == have[k],
+          ).every((b) => b)) {
         throw ArgumentError(
           'Checkpoint: shape mismatch for parameter #$i — checkpoint '
           '$want vs module $have',
         );
       }
     }
-    final expectedScalars =
-        params.fold<int>(0, (a, p) => a + p.length);
+    final expectedScalars = params.fold<int>(0, (a, p) => a + p.length);
     final expectedDataLen = expectedScalars * 4;
     if (bytes.length - headerEnd != expectedDataLen) {
       throw ArgumentError(

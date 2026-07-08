@@ -8,10 +8,7 @@ void main() {
   group('Checkpoint.saveBytes / loadIntoBytes', () {
     test('round-trip a Linear reproduces its output byte-identically', () {
       final l1 = Linear(4, 3, seed: 1);
-      final x = Tensor.fromList(
-        [2, 4],
-        [1, 2, 3, 4, 5, 6, 7, 8],
-      );
+      final x = Tensor.fromList([2, 4], [1, 2, 3, 4, 5, 6, 7, 8]);
       final y1 = l1(x).toList();
 
       final bytes = Checkpoint.saveBytes(l1);
@@ -26,29 +23,35 @@ void main() {
       expect(y2, y1);
     });
 
-    test('preserves values through backward+step (weights actually change)', () {
-      final l = Linear(3, 2, seed: 2);
-      final before = l.weight.toList();
-      // One SGD step on a synthetic loss.
-      final opt = SGD(l.parameters(), lr: 0.1);
-      final x = Tensor.fromList([1, 3], [1, 1, 1]);
-      opt.zeroGrad();
-      l(x).sum().backward();
-      opt.step();
-      final after = l.weight.toList();
-      expect(after, isNot(before));
+    test(
+      'preserves values through backward+step (weights actually change)',
+      () {
+        final l = Linear(3, 2, seed: 2);
+        final before = l.weight.toList();
+        // One SGD step on a synthetic loss.
+        final opt = SGD(l.parameters(), lr: 0.1);
+        final x = Tensor.fromList([1, 3], [1, 1, 1]);
+        opt.zeroGrad();
+        l(x).sum().backward();
+        opt.step();
+        final after = l.weight.toList();
+        expect(after, isNot(before));
 
-      // Save trained weights, then reload into a fresh module.
-      final bytes = Checkpoint.saveBytes(l);
-      final l2 = Linear(3, 2, seed: 12345);
-      Checkpoint.loadIntoBytes(l2, bytes);
-      expect(l2.weight.toList(), after);
-    });
+        // Save trained weights, then reload into a fresh module.
+        final bytes = Checkpoint.saveBytes(l);
+        final l2 = Linear(3, 2, seed: 12345);
+        Checkpoint.loadIntoBytes(l2, bytes);
+        expect(l2.weight.toList(), after);
+      },
+    );
 
     test('rejects bad magic bytes', () {
       final l = Linear(3, 2, seed: 3);
       expect(
-        () => Checkpoint.loadIntoBytes(l, Uint8List.fromList([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])),
+        () => Checkpoint.loadIntoBytes(
+          l,
+          Uint8List.fromList([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+        ),
         throwsArgumentError,
       );
     });
@@ -58,30 +61,21 @@ void main() {
       final bytes = Checkpoint.saveBytes(l);
       // Wrong module: two Linears has more params than one.
       final wrong = TransformerBlock(4, 2, seed: 0);
-      expect(
-        () => Checkpoint.loadIntoBytes(wrong, bytes),
-        throwsArgumentError,
-      );
+      expect(() => Checkpoint.loadIntoBytes(wrong, bytes), throwsArgumentError);
     });
 
     test('rejects shape mismatch', () {
       final l1 = Linear(4, 3, seed: 5);
       final l2 = Linear(3, 4, seed: 5); // swapped dims
       final bytes = Checkpoint.saveBytes(l1);
-      expect(
-        () => Checkpoint.loadIntoBytes(l2, bytes),
-        throwsArgumentError,
-      );
+      expect(() => Checkpoint.loadIntoBytes(l2, bytes), throwsArgumentError);
     });
 
     test('rejects truncated data blob', () {
       final l = Linear(4, 3, seed: 6);
       final bytes = Checkpoint.saveBytes(l);
       final truncated = Uint8List.fromList(bytes.sublist(0, bytes.length - 5));
-      expect(
-        () => Checkpoint.loadIntoBytes(l, truncated),
-        throwsArgumentError,
-      );
+      expect(() => Checkpoint.loadIntoBytes(l, truncated), throwsArgumentError);
     });
 
     test('header records magic + version + all param shapes', () {
@@ -148,64 +142,85 @@ void main() {
         trained(x).crossEntropy(y).mean().backward();
         opt.step();
       }
-      final trainedOut =
-          trained.generate([0.0, 1.0], maxNewTokens: 6, temperature: 0.0);
+      final trainedOut = trained.generate(
+        [0.0, 1.0],
+        maxNewTokens: 6,
+        temperature: 0.0,
+      );
 
       final bytes = Checkpoint.saveBytes(trained);
 
       // Fresh model with a different seed — should generate differently.
-      final fresh = GPT(GPTConfig(
-        vocabSize: config.vocabSize,
-        maxCtx: config.maxCtx,
-        embedDim: config.embedDim,
-        numLayers: config.numLayers,
-        numHeads: config.numHeads,
-        seed: 999,
-      ));
-      final freshOut =
-          fresh.generate([0.0, 1.0], maxNewTokens: 6, temperature: 0.0);
+      final fresh = GPT(
+        GPTConfig(
+          vocabSize: config.vocabSize,
+          maxCtx: config.maxCtx,
+          embedDim: config.embedDim,
+          numLayers: config.numLayers,
+          numHeads: config.numHeads,
+          seed: 999,
+        ),
+      );
+      final freshOut = fresh.generate(
+        [0.0, 1.0],
+        maxNewTokens: 6,
+        temperature: 0.0,
+      );
       expect(freshOut, isNot(trainedOut));
 
       Checkpoint.loadIntoBytes(fresh, bytes);
-      final reloadedOut =
-          fresh.generate([0.0, 1.0], maxNewTokens: 6, temperature: 0.0);
+      final reloadedOut = fresh.generate(
+        [0.0, 1.0],
+        maxNewTokens: 6,
+        temperature: 0.0,
+      );
       expect(reloadedOut, trainedOut);
     });
 
-    test('tied weights: token embedding round-trips once as a single param', () {
-      final gpt = GPT(GPTConfig(
-        vocabSize: 5,
-        maxCtx: 8,
-        embedDim: 4,
-        numLayers: 1,
-        numHeads: 2,
-        tieWeights: true,
-        seed: 12,
-      ));
-      // Only one copy of the embedding matrix in parameters().
-      final embedShape = gpt.tokenEmb.weight.shape;
-      final count = gpt
-          .parameters()
-          .where((p) => p.shape.length == 2 &&
-              p.shape[0] == embedShape[0] &&
-              p.shape[1] == embedShape[1])
-          .length;
-      expect(count, 1);
+    test(
+      'tied weights: token embedding round-trips once as a single param',
+      () {
+        final gpt = GPT(
+          GPTConfig(
+            vocabSize: 5,
+            maxCtx: 8,
+            embedDim: 4,
+            numLayers: 1,
+            numHeads: 2,
+            tieWeights: true,
+            seed: 12,
+          ),
+        );
+        // Only one copy of the embedding matrix in parameters().
+        final embedShape = gpt.tokenEmb.weight.shape;
+        final count = gpt
+            .parameters()
+            .where(
+              (p) =>
+                  p.shape.length == 2 &&
+                  p.shape[0] == embedShape[0] &&
+                  p.shape[1] == embedShape[1],
+            )
+            .length;
+        expect(count, 1);
 
-      // Round-trip still works.
-      final bytes = Checkpoint.saveBytes(gpt);
-      final other = GPT(GPTConfig(
-        vocabSize: 5,
-        maxCtx: 8,
-        embedDim: 4,
-        numLayers: 1,
-        numHeads: 2,
-        tieWeights: true,
-        seed: 22,
-      ));
-      Checkpoint.loadIntoBytes(other, bytes);
-      final x = Tensor.fromList([3], [1, 2, 3]);
-      expect(other(x).toList(), gpt(x).toList());
-    });
+        // Round-trip still works.
+        final bytes = Checkpoint.saveBytes(gpt);
+        final other = GPT(
+          GPTConfig(
+            vocabSize: 5,
+            maxCtx: 8,
+            embedDim: 4,
+            numLayers: 1,
+            numHeads: 2,
+            tieWeights: true,
+            seed: 22,
+          ),
+        );
+        Checkpoint.loadIntoBytes(other, bytes);
+        final x = Tensor.fromList([3], [1, 2, 3]);
+        expect(other(x).toList(), gpt(x).toList());
+      },
+    );
   });
 }

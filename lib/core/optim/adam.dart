@@ -16,7 +16,8 @@ import '../tensor/tensor.dart';
 import 'optimizer.dart';
 
 class Adam extends Optimizer {
-  final double lr;
+  @override
+  double lr;
   final double beta1;
   final double beta2;
   final double eps;

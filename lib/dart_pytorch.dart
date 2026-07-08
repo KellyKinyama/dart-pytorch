@@ -24,6 +24,8 @@ export 'core/optim/optimizer.dart';
 export 'core/optim/sgd.dart';
 export 'core/optim/adam.dart';
 export 'core/optim/grad_utils.dart';
+export 'core/optim/lr_scheduler.dart';
+export 'core/data/bpe_tokenizer.dart';
 
 /// Trivial sanity function used by the smoke test.
 int calculate() {
