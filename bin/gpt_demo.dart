@@ -9,6 +9,7 @@
 ///     dart run bin/gpt_demo.dart
 library;
 
+import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:dart_pytorch/dart_pytorch.dart';
@@ -96,16 +97,56 @@ void main() {
   // KV-cache speedup — same greedy output, measurably fewer FLOPs.
   print('\n--- KV cache speed comparison ---');
   final swNo = Stopwatch()..start();
-  final greedyNoCache =
-      gpt.generate(prompt, maxNewTokens: 30, temperature: 0.0, useCache: false);
+  final greedyNoCache = gpt.generate(
+    prompt,
+    maxNewTokens: 30,
+    temperature: 0.0,
+    useCache: false,
+  );
   swNo.stop();
   final swYes = Stopwatch()..start();
-  final greedyCached =
-      gpt.generate(prompt, maxNewTokens: 30, temperature: 0.0, useCache: true);
+  final greedyCached = gpt.generate(
+    prompt,
+    maxNewTokens: 30,
+    temperature: 0.0,
+    useCache: true,
+  );
   swYes.stop();
-  print('no cache : ${swNo.elapsedMilliseconds} ms  '
-      '"${decode(greedyNoCache)}"');
-  print('with cache: ${swYes.elapsedMilliseconds} ms  '
-      '"${decode(greedyCached)}"');
+  print(
+    'no cache : ${swNo.elapsedMilliseconds} ms  '
+    '"${decode(greedyNoCache)}"',
+  );
+  print(
+    'with cache: ${swYes.elapsedMilliseconds} ms  '
+    '"${decode(greedyCached)}"',
+  );
   print('match: ${greedyNoCache.toString() == greedyCached.toString()}');
+
+  // Save the trained weights, build a fresh model, load, and confirm
+  // greedy output is identical.
+  print('\n--- Checkpoint save / load ---');
+  final ckptPath = '${Directory.systemTemp.path}/gpt_demo.dpt';
+  Checkpoint.saveFile(gpt, ckptPath);
+  final ckptBytes = File(ckptPath).lengthSync();
+  print('wrote $ckptPath ($ckptBytes bytes)');
+
+  final reloaded = GPT(GPTConfig(
+    vocabSize: chars.length,
+    maxCtx: 64,
+    embedDim: 32,
+    numLayers: 2,
+    numHeads: 4,
+    dropoutP: 0.0,
+    tieWeights: true,
+    seed: 424242, // deliberately different from the trained model
+  ));
+  final freshGreedy =
+      reloaded.generate(prompt, maxNewTokens: 30, temperature: 0.0);
+  print('fresh (untrained) greedy: "${decode(freshGreedy)}"');
+  Checkpoint.loadIntoFile(reloaded, ckptPath);
+  final reloadedGreedy =
+      reloaded.generate(prompt, maxNewTokens: 30, temperature: 0.0);
+  print('reloaded greedy         : "${decode(reloadedGreedy)}"');
+  print('match: ${greedyCached.toString() == reloadedGreedy.toString()}');
+  File(ckptPath).deleteSync();
 }

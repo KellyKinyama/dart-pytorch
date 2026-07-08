@@ -123,8 +123,11 @@ extension TensorConcat on Tensor {
             final r = t.shape[0];
             if (t.requiresGrad) {
               final slice = Float32List(r * cols);
-              slice.setRange(0, r * cols,
-                  gOData.sublist(rowOff * cols, (rowOff + r) * cols));
+              slice.setRange(
+                0,
+                r * cols,
+                gOData.sublist(rowOff * cols, (rowOff + r) * cols),
+              );
               final gSlice = t.device == Device.CPU
                   ? Tensor._cpu(t.shape, slice)
                   : Tensor._gpu(t.shape, Tensor._uploadToGpu(t.shape, slice));

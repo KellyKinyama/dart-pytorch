@@ -1,5 +1,37 @@
 ## Unreleased
 
+- Model checkpointing — `Checkpoint` in `lib/core/nn/serialize.dart`.
+  Trained models can now be persisted to disk and reloaded.
+  - Simple, self-describing binary format:
+    `magic "DPTC" | u32 version | u32 headerLen | UTF-8 JSON header |
+    Float32 LE data`. The JSON header lists per-parameter shapes and
+    the total scalar count, in the exact order returned by
+    `module.parameters()` — no reflection, no names, matches PyTorch's
+    `state_dict` semantics.
+  - `Checkpoint.saveBytes(module)` / `Checkpoint.saveFile(module, path)`
+    write the checkpoint (creates parent directories as needed).
+    `Checkpoint.loadIntoBytes(module, bytes)` /
+    `Checkpoint.loadIntoFile(module, path)` load into an
+    **already-constructed** module of the same architecture. Each
+    parameter is `assign`ed in place, so optimizer state buffers keyed
+    by parameter identity remain valid across a load.
+  - GPU parameters are downloaded to host for serialization and
+    re-uploaded on load; the load target keeps its original device.
+  - Weight-tied `GPT` (`tieWeights: true`) round-trips correctly:
+    the shared token embedding appears in `parameters()` exactly once
+    and is saved / loaded once.
+  - `bin/gpt_demo.dart` — extended with a save/load round-trip: the
+    trained model is written to `/tmp/gpt_demo.dpt`, a fresh
+    differently-seeded `GPT` is constructed (producing gibberish),
+    then `Checkpoint.loadIntoFile` restores the trained greedy output
+    byte-for-byte.
+  - 11 new tests in `test/serialize_test.dart` (Linear round-trip
+    reproduces output byte-identically, preserves values after
+    backward+step, rejects bad magic / param-count / shape / truncated
+    blob, header format check, file-based round-trip + parent-dir
+    creation, full-GPT round-trip via `generate()`, tied-weights
+    single-entry check). Suite: **183 tests, all green.**
+
 - KV-cache for autoregressive `GPT.generate()` — ~8× faster greedy
   sampling on the demo, byte-identical output.
   - New `MHACache` (per-head K/V, one per attention layer) and

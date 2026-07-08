@@ -21,7 +21,10 @@ both `SinusoidalPositionalEncoding`
 / `LearnedPositionalEmbedding` as trainable / regularization layers
 with `train()` / `eval()` mode toggling; `SGD` / `Adam` optimizers
 update parameters in place on their native device, and `clipGradNorm`
-bounds the global gradient L2. Runnable char-level demos at
+bounds the global gradient L2. `Checkpoint` (in `nn/serialize.dart`)
+persists any `Module`'s parameters to a small binary format on disk
+and loads them back into a same-shape model. Runnable char-level
+demos at
 `bin/lm_demo.dart` and `bin/gpt_demo.dart` overfit a short refrain
 end-to-end (`dart run bin/gpt_demo.dart`).
 
@@ -55,6 +58,7 @@ lib/
     transformer_lm.dart          # token embed + posEnc + causal encoder + head
     kv_cache.dart                # MHACache + EncoderCache for GPT.generate fast path
     gpt.dart                     # GPT-2 style: tied weights, learned PE, generate()
+    serialize.dart               # Checkpoint.save/loadInto — DPTC binary format
   core/optim/
     optimizer.dart               # abstract Optimizer base (step, zeroGrad)
     sgd.dart                     # SGD with optional momentum + weight decay

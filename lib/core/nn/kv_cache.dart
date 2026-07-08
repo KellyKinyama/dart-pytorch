@@ -66,12 +66,13 @@ class EncoderCache {
 
   /// Fresh cache sized for a stack of `numLayers` blocks each with
   /// `numHeads` heads.
-  factory EncoderCache.empty(int numLayers, int numHeads) =>
-      EncoderCache(List<MHACache>.generate(
-        numLayers,
-        (_) => MHACache.empty(numHeads),
-        growable: false,
-      ));
+  factory EncoderCache.empty(int numLayers, int numHeads) => EncoderCache(
+    List<MHACache>.generate(
+      numLayers,
+      (_) => MHACache.empty(numHeads),
+      growable: false,
+    ),
+  );
 
   /// Length of the sequence cached so far. Reads from layer 0.
   int get seqLen => layers.isEmpty ? 0 : layers[0].seqLen;

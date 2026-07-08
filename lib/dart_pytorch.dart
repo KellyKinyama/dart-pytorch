@@ -19,6 +19,7 @@ export 'core/nn/transformer_encoder.dart';
 export 'core/nn/transformer_lm.dart';
 export 'core/nn/kv_cache.dart';
 export 'core/nn/gpt.dart';
+export 'core/nn/serialize.dart';
 export 'core/optim/optimizer.dart';
 export 'core/optim/sgd.dart';
 export 'core/optim/adam.dart';

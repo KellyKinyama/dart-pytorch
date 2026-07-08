@@ -130,6 +130,7 @@ CPU implementations planned since they're only useful at model scale.
 | `clipGradNorm`         | impl | impl | Rescales in-place across a list of parameters so their global L2 grad norm ≤ `maxNorm`. Uses `Tensor.assign` to swap the scaled grad into each param's `.grad`. |
 | `im2col` / `col2im`    | none planned | planned | `conv_misc.cuh`                   |
 | `SGD.step` / `Adam.step` | impl | impl | Composed from existing tensor ops on parameters' native device; state buffers (velocity, m/v) live alongside their parameter. No dedicated kernel. |
+| `Checkpoint.save/loadInto` | impl (host I/O) | impl (host I/O) | Simple `DPTC | version | JSON header | Float32 LE` binary format. GPU parameters are downloaded via `toList()` for save and re-uploaded via `Tensor.fromList` on load; the target module keeps its original device. Weight-tied params appear once in `parameters()` and therefore round-trip once. |
 
 ## Size threshold (default)
 

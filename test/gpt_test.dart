@@ -233,27 +233,30 @@ void main() {
       }
     });
 
-    test('useCache=false slides context when prompt+generated exceeds maxCtx', () {
-      final m = GPT(
-        GPTConfig(
-          vocabSize: 5,
-          maxCtx: 4,
-          embedDim: 8,
-          numLayers: 1,
-          numHeads: 2,
-          seed: 11,
-        ),
-      );
-      // Cache-mode can't slide (see next test); disable it and each
-      // step re-runs on the last `maxCtx` tokens.
-      final out = m.generate(
-        [0.0, 1.0, 2.0, 3.0],
-        maxNewTokens: 6,
-        temperature: 0.0,
-        useCache: false,
-      );
-      expect(out.length, 10);
-    });
+    test(
+      'useCache=false slides context when prompt+generated exceeds maxCtx',
+      () {
+        final m = GPT(
+          GPTConfig(
+            vocabSize: 5,
+            maxCtx: 4,
+            embedDim: 8,
+            numLayers: 1,
+            numHeads: 2,
+            seed: 11,
+          ),
+        );
+        // Cache-mode can't slide (see next test); disable it and each
+        // step re-runs on the last `maxCtx` tokens.
+        final out = m.generate(
+          [0.0, 1.0, 2.0, 3.0],
+          maxNewTokens: 6,
+          temperature: 0.0,
+          useCache: false,
+        );
+        expect(out.length, 10);
+      },
+    );
 
     test('useCache=true stops when the cache is full', () {
       final m = GPT(
@@ -288,7 +291,8 @@ void main() {
         ),
       );
       expect(
-        () => m.generate([0.0, 1.0, 2.0, 3.0], maxNewTokens: 2, temperature: 0.0),
+        () =>
+            m.generate([0.0, 1.0, 2.0, 3.0], maxNewTokens: 2, temperature: 0.0),
         throwsArgumentError,
       );
     });

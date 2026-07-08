@@ -219,7 +219,11 @@ class GPT extends Module {
         [next.toDouble()],
         device: config.device,
       );
-      logits = _forward(tokTensor, startPos: cache.seqLen, cache: cache).toList();
+      logits = _forward(
+        tokTensor,
+        startPos: cache.seqLen,
+        cache: cache,
+      ).toList();
       // [1, V] — the whole row is the "last" row.
       row = List<double>.generate(v, (i) => logits[i]);
       next = _sampleFromLogits(row, temperature, topK, rng);
@@ -239,9 +243,7 @@ class GPT extends Module {
     final out = List<double>.of(prompt);
     for (int step = 0; step < maxNewTokens; step++) {
       // Take at most maxCtx trailing tokens as the context window.
-      final start = out.length > config.maxCtx
-          ? out.length - config.maxCtx
-          : 0;
+      final start = out.length > config.maxCtx ? out.length - config.maxCtx : 0;
       final ctxList = out.sublist(start);
       final ctx = Tensor.fromList(
         [ctxList.length],

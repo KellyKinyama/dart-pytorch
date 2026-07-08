@@ -41,10 +41,10 @@ void main() {
       // reproduce the classic (no-cache) forward exactly.
       final baseline = MultiHeadAttention(8, 2, seed: 1);
       final withCache = MultiHeadAttention(8, 2, seed: 1);
-      final x = Tensor.fromList(
-        [4, 8],
-        List<double>.generate(32, (i) => math.sin(i * 0.31)),
-      );
+      final x = Tensor.fromList([
+        4,
+        8,
+      ], List<double>.generate(32, (i) => math.sin(i * 0.31)));
       final mask = causalMask(4);
       final y1 = baseline(x, mask: mask).toList();
       final cache = MHACache.empty(2);
@@ -59,15 +59,15 @@ void main() {
     test('rejects mask when appending to a non-empty cache', () {
       final mha = MultiHeadAttention(8, 2, seed: 2);
       final cache = MHACache.empty(2);
-      final x1 = Tensor.fromList(
-        [3, 8],
-        List<double>.generate(24, (i) => math.cos(i * 0.2)),
-      );
+      final x1 = Tensor.fromList([
+        3,
+        8,
+      ], List<double>.generate(24, (i) => math.cos(i * 0.2)));
       mha(x1, mask: causalMask(3), cache: cache); // fill cache
-      final xNew = Tensor.fromList(
-        [1, 8],
-        List<double>.generate(8, (i) => i * 0.1),
-      );
+      final xNew = Tensor.fromList([
+        1,
+        8,
+      ], List<double>.generate(8, (i) => i * 0.1));
       expect(
         () => mha(xNew, mask: causalMask(1), cache: cache),
         throwsArgumentError,
@@ -80,14 +80,16 @@ void main() {
       // Run a length-5 forward without cache; compare its last row to
       // the sequence of "fill first 4, then append 5th one" using the
       // cache. Both should give the same 5th-row logits.
-      final gpt = GPT(GPTConfig(
-        vocabSize: 6,
-        maxCtx: 16,
-        embedDim: 8,
-        numLayers: 2,
-        numHeads: 2,
-        seed: 3,
-      ));
+      final gpt = GPT(
+        GPTConfig(
+          vocabSize: 6,
+          maxCtx: 16,
+          embedDim: 8,
+          numLayers: 2,
+          numHeads: 2,
+          seed: 3,
+        ),
+      );
       gpt.eval();
       final seq = [0.0, 1.0, 2.0, 3.0, 4.0];
       final full = gpt(Tensor.fromList([seq.length], seq)).toList();
@@ -99,35 +101,45 @@ void main() {
       // and dropout RNG state can't diverge — actually same model
       // is fine since we're in eval() and dropout=0.
       final cache = EncoderCache.empty(
-          gpt.config.numLayers, gpt.config.numHeads);
+        gpt.config.numLayers,
+        gpt.config.numHeads,
+      );
       final fill = seq.sublist(0, 4);
       gpt.callForward(
         Tensor.fromList([fill.length], fill),
         startPos: 0,
         cache: cache,
       );
-      final stepLogits = gpt.callForward(
-        Tensor.fromList([1], [seq.last]),
-        startPos: 4,
-        cache: cache,
-      ).toList();
+      final stepLogits = gpt
+          .callForward(
+            Tensor.fromList([1], [seq.last]),
+            startPos: 4,
+            cache: cache,
+          )
+          .toList();
       // stepLogits has shape [1, V] — it *is* the last row.
       for (int i = 0; i < v; i++) {
-        expect((lastRowNoCache[i] - stepLogits[i]).abs() < 1e-4, isTrue,
-            reason: 'mismatch at vocab index $i: no-cache=${lastRowNoCache[i]} '
-                'cached=${stepLogits[i]}');
+        expect(
+          (lastRowNoCache[i] - stepLogits[i]).abs() < 1e-4,
+          isTrue,
+          reason:
+              'mismatch at vocab index $i: no-cache=${lastRowNoCache[i]} '
+              'cached=${stepLogits[i]}',
+        );
       }
     });
 
     test('generate: useCache=true reproduces useCache=false (greedy)', () {
-      final gpt = GPT(GPTConfig(
-        vocabSize: 7,
-        maxCtx: 32,
-        embedDim: 8,
-        numLayers: 2,
-        numHeads: 2,
-        seed: 4,
-      ));
+      final gpt = GPT(
+        GPTConfig(
+          vocabSize: 7,
+          maxCtx: 32,
+          embedDim: 8,
+          numLayers: 2,
+          numHeads: 2,
+          seed: 4,
+        ),
+      );
       final prompt = [1.0, 3.0, 5.0];
       final greedy = gpt.generate(
         prompt,
@@ -144,59 +156,77 @@ void main() {
       expect(greedyCached, greedy);
     });
 
-    test('generate: useCache=true reproduces useCache=false with fixed RNG', () {
-      final gpt = GPT(GPTConfig(
-        vocabSize: 6,
-        maxCtx: 24,
-        embedDim: 8,
-        numLayers: 2,
-        numHeads: 2,
-        seed: 5,
-      ));
-      final prompt = [0.0, 1.0];
-      final noCache = gpt.generate(
-        prompt,
-        maxNewTokens: 8,
-        temperature: 1.0,
-        rng: math.Random(7),
-        useCache: false,
-      );
-      final cached = gpt.generate(
-        prompt,
-        maxNewTokens: 8,
-        temperature: 1.0,
-        rng: math.Random(7),
-        useCache: true,
-      );
-      expect(cached, noCache);
-    });
+    test(
+      'generate: useCache=true reproduces useCache=false with fixed RNG',
+      () {
+        final gpt = GPT(
+          GPTConfig(
+            vocabSize: 6,
+            maxCtx: 24,
+            embedDim: 8,
+            numLayers: 2,
+            numHeads: 2,
+            seed: 5,
+          ),
+        );
+        final prompt = [0.0, 1.0];
+        final noCache = gpt.generate(
+          prompt,
+          maxNewTokens: 8,
+          temperature: 1.0,
+          rng: math.Random(7),
+          useCache: false,
+        );
+        final cached = gpt.generate(
+          prompt,
+          maxNewTokens: 8,
+          temperature: 1.0,
+          rng: math.Random(7),
+          useCache: true,
+        );
+        expect(cached, noCache);
+      },
+    );
 
-    test('overfit-then-generate still reproduces the memorized continuation', () {
-      // Train briefly, then check that cache-mode sampling matches
-      // no-cache sampling on a real (overfit) model.
-      final gpt = GPT(GPTConfig(
-        vocabSize: 5,
-        maxCtx: 16,
-        embedDim: 8,
-        numLayers: 2,
-        numHeads: 2,
-        seed: 6,
-      ));
-      final opt = Adam(gpt.parameters(), lr: 0.05);
-      final x = Tensor.fromList([8], [0, 1, 2, 3, 4, 0, 1, 2]);
-      final y = Tensor.fromList([8], [1, 2, 3, 4, 0, 1, 2, 3]);
-      for (int i = 0; i < 150; i++) {
-        opt.zeroGrad();
-        gpt(x).crossEntropy(y).mean().backward();
-        opt.step();
-      }
-      final prompt = [0.0, 1.0, 2.0];
-      final a = gpt.generate(prompt,
-          maxNewTokens: 6, temperature: 0.0, useCache: false);
-      final b = gpt.generate(prompt,
-          maxNewTokens: 6, temperature: 0.0, useCache: true);
-      expect(b, a);
-    });
+    test(
+      'overfit-then-generate still reproduces the memorized continuation',
+      () {
+        // Train briefly, then check that cache-mode sampling matches
+        // no-cache sampling on a real (overfit) model.
+        final gpt = GPT(
+          GPTConfig(
+            vocabSize: 5,
+            maxCtx: 16,
+            embedDim: 8,
+            numLayers: 2,
+            numHeads: 2,
+            seed: 6,
+          ),
+        );
+        final opt = Adam(gpt.parameters(), lr: 0.05);
+        final x = Tensor.fromList([8], [0, 1, 2, 3, 4, 0, 1, 2]);
+        final y = Tensor.fromList([8], [1, 2, 3, 4, 0, 1, 2, 3]);
+        for (int i = 0; i < 150; i++) {
+          opt.zeroGrad();
+          gpt(x).crossEntropy(y).mean().backward();
+          opt.step();
+        }
+        final prompt = [0.0, 1.0, 2.0];
+        final a = gpt.generate(
+          prompt,
+          maxNewTokens: 6,
+          temperature: 0.0,
+          useCache: false,
+        );
+        final b = gpt.generate(
+          prompt,
+          maxNewTokens: 6,
+          temperature: 0.0,
+          useCache: true,
+        );
+        expect(b, a);
+      },
+    );
   });
 }
 
@@ -204,7 +234,11 @@ void main() {
 /// can compare cached and non-cached forwards without going through
 /// the sampler.
 extension _GPTTestAccess on GPT {
-  Tensor callForward(Tensor tokens, {required int startPos, EncoderCache? cache}) {
+  Tensor callForward(
+    Tensor tokens, {
+    required int startPos,
+    EncoderCache? cache,
+  }) {
     // Re-implement the tiny wrapper (identical to the private one)
     // so the test file doesn't need library-private access.
     var h = tokenEmb(tokens);
