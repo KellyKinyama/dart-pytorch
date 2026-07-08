@@ -376,8 +376,11 @@ void main() {
     });
 
     test('autograd routes grads back to correct source rows', () {
-      final t = Tensor.fromList([4, 2], _rand(8, seed: 401),
-          requiresGrad: true);
+      final t = Tensor.fromList(
+        [4, 2],
+        _rand(8, seed: 401),
+        requiresGrad: true,
+      );
       final parts = TensorConcat.splitRows(t, 2);
       // Give each chunk a distinct downstream scaling and check the
       // source grad is the concatenation of those.
@@ -431,29 +434,27 @@ void main() {
 
   group('GPT accepts batched [B, S] tokens', () {
     test('[B,S] -> [B,S,V] equals per-sample forward', () {
-      final gpt = GPT(GPTConfig(
-        vocabSize: 8,
-        maxCtx: 8,
-        embedDim: 8,
-        numLayers: 2,
-        numHeads: 2,
-        seed: 600,
-      ));
+      final gpt = GPT(
+        GPTConfig(
+          vocabSize: 8,
+          maxCtx: 8,
+          embedDim: 8,
+          numLayers: 2,
+          numHeads: 2,
+          seed: 600,
+        ),
+      );
       gpt.eval(); // disable dropout for deterministic comparison
       const b = 2;
       const s = 5;
-      final tokens = Tensor.fromList(
-        [b, s],
-        [0, 1, 2, 3, 4, 5, 6, 7, 0, 1],
-      );
+      final tokens = Tensor.fromList([b, s], [0, 1, 2, 3, 4, 5, 6, 7, 0, 1]);
       final logits = gpt(tokens);
       expect(logits.shape, [b, s, 8]);
 
       for (int i = 0; i < b; i++) {
-        final sliceTok = Tensor.fromList(
-          [s],
-          tokens.toList().sublist(i * s, (i + 1) * s),
-        );
+        final sliceTok = Tensor.fromList([
+          s,
+        ], tokens.toList().sublist(i * s, (i + 1) * s));
         final ref = gpt(sliceTok).toList();
         final got = logits.toList().sublist(i * s * 8, (i + 1) * s * 8);
         _closeList(got, ref);
@@ -461,14 +462,16 @@ void main() {
     });
 
     test('batched training step reduces loss', () {
-      final gpt = GPT(GPTConfig(
-        vocabSize: 6,
-        maxCtx: 8,
-        embedDim: 8,
-        numLayers: 1,
-        numHeads: 2,
-        seed: 700,
-      ));
+      final gpt = GPT(
+        GPTConfig(
+          vocabSize: 6,
+          maxCtx: 8,
+          embedDim: 8,
+          numLayers: 1,
+          numHeads: 2,
+          seed: 700,
+        ),
+      );
       const b = 3;
       const s = 4;
       final rng = math.Random(0);
@@ -478,10 +481,10 @@ void main() {
       );
       final tokens = Tensor.fromList([b, s], flat.sublist(0, b * s));
       // Targets = tokens shifted (arbitrary; we just need SOME target).
-      final targets = Tensor.fromList(
-        [b, s],
-        List<double>.generate(b * s, (i) => flat[(i + 1) % (b * s)]),
-      );
+      final targets = Tensor.fromList([
+        b,
+        s,
+      ], List<double>.generate(b * s, (i) => flat[(i + 1) % (b * s)]));
 
       final opt = SGD(gpt.parameters(), lr: 0.1);
       final l0 = gpt(tokens).crossEntropy(targets).mean().toList()[0];
@@ -491,10 +494,13 @@ void main() {
         opt.step();
       }
       final l1 = gpt(tokens).crossEntropy(targets).mean().toList()[0];
-      expect(l1, lessThan(l0),
-          reason: 'expected loss to decrease across 20 batched steps '
-              '(before=$l0, after=$l1)');
+      expect(
+        l1,
+        lessThan(l0),
+        reason:
+            'expected loss to decrease across 20 batched steps '
+            '(before=$l0, after=$l1)',
+      );
     });
   });
 }
-

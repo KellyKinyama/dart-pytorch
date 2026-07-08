@@ -177,10 +177,10 @@ extension TensorConcat on Tensor {
       );
       final chunk = t.device == Device.CPU
           ? Tensor._cpu([chunkSize, c], buf)
-          : Tensor._gpu(
-              [chunkSize, c],
-              Tensor._uploadToGpu([chunkSize, c], buf),
-            );
+          : Tensor._gpu([
+              chunkSize,
+              c,
+            ], Tensor._uploadToGpu([chunkSize, c], buf));
       if (t.requiresGrad) {
         final offset = i * chunkSize;
         chunk._setBackward([t], () {

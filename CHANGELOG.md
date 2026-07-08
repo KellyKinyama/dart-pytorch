@@ -1,5 +1,41 @@
 ## Unreleased
 
+- Seq2seq decoder + encoder-decoder Transformer. Fills in the missing
+  half of the classic "Attention Is All You Need" architecture — the
+  existing `GPT` remains the decoder-only LM path; this milestone adds
+  cross-attention and a proper seq2seq decoder for translation-style
+  tasks.
+  - `nn.MultiHeadCrossAttention(embedDim, kvEmbedDim, numHeads)` —
+    Q from the target side, K/V from a memory (encoder output).
+    Query and memory may have different sequence lengths and even
+    different embedding widths. Accepts both `[Sq, D]` / `[Skv, Dkv]`
+    (2D) and `[B, Sq, D]` / `[B, Skv, Dkv]` (3D, batch sizes must
+    match). No causal masking (memory is fully visible), no KV cache
+    (memory is fixed across decoding).
+  - `nn.TransformerDecoderBlock` — pre-LN with **three** sub-layers:
+    masked self-attention → cross-attention over memory → FFN. Matches
+    the reference `dart_cuda` seq2seq decoder block.
+  - `nn.TransformerDecoder(numLayers, embedDim, numHeads,
+    kvEmbedDim: ...)` — stack of decoder blocks + optional final
+    `LayerNorm`. Takes decoder hidden state + memory + optional causal
+    self-mask; no embeddings / LM head baked in.
+  - `nn.EncoderDecoderTransformer` — full seq2seq wrapper:
+    source embedding + sinusoidal PE + `TransformerEncoder` (no
+    causal mask) produces memory; target embedding + sinusoidal PE +
+    `TransformerDecoder` (with causal self-mask) + `Linear` head
+    produces target-vocab logits. Convenience `encode` and `decode`
+    methods for cached-memory generation. Accepts 1D or 2D tokens
+    (src and tgt must share rank).
+  - 10 new tests in `test/encoder_decoder_test.dart`: cross-attention
+    2D shape, 3D batched vs. per-sample parity, shape-rejection;
+    `TransformerDecoderBlock` 2D and batched shape preservation;
+    `TransformerDecoder` stack matches manual composition; end-to-end
+    `EncoderDecoderTransformer` forward (1D and batched), a copy-task
+    training loop that halves the loss, and rank-mismatch rejection.
+    Suite: **242 tests, all green.**
+
+## Prior Unreleased entries
+
 - Batched (3D) tensors — end-to-end. Attention, `GPT.forward`,
   `TransformerLM.forward`, and the training demo now all accept a
   `[batch, seq, dim]` (or `[batch, seq]` for token ids) tensor and
