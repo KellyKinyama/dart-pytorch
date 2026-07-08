@@ -5,12 +5,13 @@
 /// attention matrix). This demo shows it converges on the same
 /// character-LM task as `bin/shakespeare_gpt.dart`.
 ///
-/// AFT is currently 2D-only and CPU-only, so this uses a modest
-/// `_blockSize` for a fast turnaround.
+/// Runs on CPU by default. Pass `--gpu` to use the CUDA kernels
+/// (`aft_full_forward/backward` + `slice_top_left_*` + `relu_bwd`).
 ///
 /// Run from the repository root:
 ///
-///     dart run bin/shakespeare_aft.dart
+///     dart run bin/shakespeare_aft.dart          # CPU
+///     dart run bin/shakespeare_aft.dart --gpu    # GPU
 library;
 
 import 'dart:math' as math;
@@ -27,8 +28,12 @@ const int _trainSteps = 500;
 const double _lr = 3e-3;
 const int _sampleTokens = 200;
 
-void main() {
-  print('=== shakespeare_aft : Attention-Free Transformer LM ===');
+void main(List<String> args) {
+  final useGpu = args.contains('--gpu');
+  final device = useGpu ? Device.GPU : Device.CPU;
+  print(
+    '=== shakespeare_aft : Attention-Free Transformer LM (${useGpu ? "GPU" : "CPU"}) ===',
+  );
   final text = loadCorpus(maxChars: _corpusChars);
   final tok = CharTokenizer.fromText(text);
   final ids = tok.encode(text);
@@ -41,6 +46,7 @@ void main() {
     embedDim: _embedDim,
     numLayers: _numLayers,
     maxLen: _blockSize,
+    device: device,
     seed: 1,
   );
   final params = lm.parameters();
@@ -56,7 +62,7 @@ void main() {
   double lastLoss = double.nan;
   for (int step = 1; step <= _trainSteps; step++) {
     opt.zeroGrad();
-    final (x, y) = getWindow(ids, _blockSize, rng);
+    final (x, y) = getWindow(ids, _blockSize, rng, device: device);
     final loss = lm(x).crossEntropy(y).mean();
     loss.backward();
     clipGradNorm(params, 1.0);
@@ -81,7 +87,7 @@ void main() {
   lm.eval();
 
   List<double> stepFn(List<double> ctx) {
-    final x = Tensor.fromList([ctx.length], ctx);
+    final x = Tensor.fromList([ctx.length], ctx, device: device);
     return lastRowLogits(lm(x), tok.vocabSize);
   }
 

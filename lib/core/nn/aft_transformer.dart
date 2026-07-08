@@ -41,8 +41,8 @@ class AFTBlock extends Module {
     Device device = Device.CPU,
     int seed = 0,
   }) : ffnDim = ffnDim ?? embedDim * 4,
-       ln1 = LayerNorm(embedDim),
-       ln2 = LayerNorm(embedDim),
+       ln1 = LayerNorm(embedDim, device: device),
+       ln2 = LayerNorm(embedDim, device: device),
        attn = AFTAttention(
          embedDim,
          maxSeqLen: maxSeqLen,
@@ -120,7 +120,7 @@ class AFTLanguageModel extends Module {
            seed: seed + 100000 + i * 10000,
          ),
        ),
-       finalLn = LayerNorm(embedDim),
+       finalLn = LayerNorm(embedDim, device: device),
        head = Linear(embedDim, vocabSize, device: device, seed: seed + 900000);
 
   /// Forward pass. `tokens` is 1D `[seqLen]` — returns logits

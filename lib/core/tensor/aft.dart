@@ -28,8 +28,9 @@ part of 'tensor.dart';
 /// `q`, `k`, `v`, `w` in one backward pass, closing over the cached
 /// softmax weights `[T, T, D]`.
 ///
-/// CPU-only for now; GPU support can wrap the reference `aft_full_fwd`
-/// kernel later. All inputs must be on CPU.
+/// Runs on CPU or GPU (matches the device of the inputs — all four
+/// must share device). GPU calls into the `aft_full_forward` /
+/// `aft_full_backward` kernels; CPU is the plain-Dart triple loop.
 extension TensorAft on Tensor {
   static Tensor aftFull(
     Tensor q,
@@ -58,15 +59,88 @@ extension TensorAft on Tensor {
     if (w.shape.length != 2 || w.shape[0] != t || w.shape[1] != t) {
       throw ArgumentError('aftFull: w must be [T, T]=[$t, $t]; got ${w.shape}');
     }
-    if (q.device != Device.CPU ||
-        k.device != Device.CPU ||
-        v.device != Device.CPU ||
-        w.device != Device.CPU) {
+    if (q.device != k.device || q.device != v.device || q.device != w.device) {
       throw ArgumentError(
-        'aftFull: currently CPU-only (got '
-        'q=${q.device} k=${k.device} v=${v.device} w=${w.device})',
+        'aftFull: mixed devices (q=${q.device} k=${k.device} v=${v.device} '
+        'w=${w.device}); move all operands to the same device first.',
       );
     }
+    if (q.device == Device.GPU) {
+      return _aftFullGpu(q, k, v, w, masked: masked);
+    }
+    return _aftFullCpu(q, k, v, w, masked: masked);
+  }
+
+  static Tensor _aftFullGpu(
+    Tensor q,
+    Tensor k,
+    Tensor v,
+    Tensor w, {
+    required bool masked,
+  }) {
+    final t = q.shape[0];
+    final d = q.shape[1];
+    final outHandle = engine.aftFullForward(
+      q._handle!,
+      k._handle!,
+      v._handle!,
+      w._handle!,
+      masked ? 1 : 0,
+    );
+    final out = Tensor._gpu([t, d], outHandle);
+    if (q.requiresGrad || k.requiresGrad || v.requiresGrad || w.requiresGrad) {
+      out._setBackward([q, k, v, w], () {
+        // Fresh zero-init grad tensors for the kernel to atomicAdd into.
+        final gQ = Tensor.fill(q.shape, 0.0, device: Device.GPU);
+        final gK = Tensor.fill(k.shape, 0.0, device: Device.GPU);
+        final gV = Tensor.fill(v.shape, 0.0, device: Device.GPU);
+        final gW = Tensor.fill(w.shape, 0.0, device: Device.GPU);
+        engine.aftFullBackward(
+          q._handle!,
+          k._handle!,
+          v._handle!,
+          w._handle!,
+          out._grad!._handle!,
+          masked ? 1 : 0,
+          gQ._handle!,
+          gK._handle!,
+          gV._handle!,
+          gW._handle!,
+        );
+        if (q.requiresGrad) {
+          q._accumulateGrad(gQ);
+        } else {
+          gQ.dispose();
+        }
+        if (k.requiresGrad) {
+          k._accumulateGrad(gK);
+        } else {
+          gK.dispose();
+        }
+        if (v.requiresGrad) {
+          v._accumulateGrad(gV);
+        } else {
+          gV.dispose();
+        }
+        if (w.requiresGrad) {
+          w._accumulateGrad(gW);
+        } else {
+          gW.dispose();
+        }
+      });
+    }
+    return out;
+  }
+
+  static Tensor _aftFullCpu(
+    Tensor q,
+    Tensor k,
+    Tensor v,
+    Tensor w, {
+    required bool masked,
+  }) {
+    final t = q.shape[0];
+    final d = q.shape[1];
 
     final qd = q._cpuData!;
     final kd = k._cpuData!;
@@ -168,13 +242,10 @@ extension TensorAft on Tensor {
   /// tensor. Autograd scatters the slice's gradient back to the same
   /// top-left region of the source (rest gets zero).
   ///
-  /// CPU-only.
+  /// Runs on CPU or GPU (matches the input's device).
   static Tensor sliceTopLeft(Tensor t, int rows, int cols) {
     if (t.shape.length != 2) {
       throw ArgumentError('sliceTopLeft: expected 2D input; got ${t.shape}');
-    }
-    if (t.device != Device.CPU) {
-      throw ArgumentError('sliceTopLeft: CPU-only (got ${t.device})');
     }
     final r = t.shape[0];
     final c = t.shape[1];
@@ -182,6 +253,21 @@ extension TensorAft on Tensor {
       throw ArgumentError(
         'sliceTopLeft: requested [$rows, $cols] exceeds source [$r, $c]',
       );
+    }
+    if (t.device == Device.GPU) {
+      final outHandle = engine.sliceTopLeftForward(t._handle!, rows, cols);
+      final sliced = Tensor._gpu([rows, cols], outHandle);
+      if (t.requiresGrad) {
+        sliced._setBackward([t], () {
+          final gHandle = engine.sliceTopLeftBackward(
+            sliced._grad!._handle!,
+            r,
+            c,
+          );
+          t._accumulateGrad(Tensor._gpu(t.shape, gHandle));
+        });
+      }
+      return sliced;
     }
     final src = t._cpuData!;
     final out = Float32List(rows * cols);

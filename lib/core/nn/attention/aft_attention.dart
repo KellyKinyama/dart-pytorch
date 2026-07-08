@@ -8,7 +8,9 @@
 /// Set `masked: true` for a causal (decoder-only) variant.
 ///
 /// Notes:
-///   * CPU-only for now (the underlying tensor op is CPU-only).
+///   * Runs on CPU or GPU (matches the `device:` passed to the
+///     constructor). The underlying `TensorAft.aftFull` +
+///     `sliceTopLeft` both have GPU kernels.
 ///   * 2D input `[T, embedDim]` only — no 3D batched fast-path yet
 ///     (call it in a batch loop from higher-level code if needed).
 ///   * The position bias is a single `[maxSeqLen, maxSeqLen]` trainable
@@ -55,21 +57,20 @@ class AFTAttention extends Module {
          device: device,
          seed: seed + 2000,
        ),
-       posBias = _initPosBias(maxSeqLen, seed + 3000) {
-    if (device != Device.CPU) {
-      throw ArgumentError(
-        'AFTAttention: currently CPU-only (got device $device)',
-      );
-    }
-  }
+       posBias = _initPosBias(maxSeqLen, seed + 3000, device);
 
-  static Tensor _initPosBias(int n, int seed) {
+  static Tensor _initPosBias(int n, int seed, Device device) {
     final rng = math.Random(seed);
     final data = List<double>.generate(
       n * n,
       (_) => (rng.nextDouble() * 2 - 1) * 0.02,
     );
-    return Tensor.fromList([n, n], data, requiresGrad: true);
+    return Tensor.fromList(
+      [n, n],
+      data,
+      requiresGrad: true,
+      device: device,
+    );
   }
 
   /// Forward pass. `x` is `[T, embedDim]` (2D single sequence).

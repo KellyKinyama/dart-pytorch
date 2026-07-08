@@ -121,6 +121,83 @@ typedef DEmbBwd =
       int,
     );
 
+// AFT forward: (Q, K, V, WB, masked) -> out
+typedef CAftFwd =
+    ffi.Pointer<ffi.Void> Function(
+      ffi.Pointer<ffi.Void>,
+      ffi.Pointer<ffi.Void>,
+      ffi.Pointer<ffi.Void>,
+      ffi.Pointer<ffi.Void>,
+      ffi.Int32,
+    );
+typedef DAftFwd =
+    ffi.Pointer<ffi.Void> Function(
+      ffi.Pointer<ffi.Void>,
+      ffi.Pointer<ffi.Void>,
+      ffi.Pointer<ffi.Void>,
+      ffi.Pointer<ffi.Void>,
+      int,
+    );
+
+// AFT backward: (Q, K, V, WB, gOut, masked, gQ, gK, gV, gWB) -> void.
+// gQ/gK/gV/gWB are caller-allocated zero-init tensors; the kernel
+// atomicAdds analytical gradients into them.
+typedef CAftBwd =
+    ffi.Void Function(
+      ffi.Pointer<ffi.Void>,
+      ffi.Pointer<ffi.Void>,
+      ffi.Pointer<ffi.Void>,
+      ffi.Pointer<ffi.Void>,
+      ffi.Pointer<ffi.Void>,
+      ffi.Int32,
+      ffi.Pointer<ffi.Void>,
+      ffi.Pointer<ffi.Void>,
+      ffi.Pointer<ffi.Void>,
+      ffi.Pointer<ffi.Void>,
+    );
+typedef DAftBwd =
+    void Function(
+      ffi.Pointer<ffi.Void>,
+      ffi.Pointer<ffi.Void>,
+      ffi.Pointer<ffi.Void>,
+      ffi.Pointer<ffi.Void>,
+      ffi.Pointer<ffi.Void>,
+      int,
+      ffi.Pointer<ffi.Void>,
+      ffi.Pointer<ffi.Void>,
+      ffi.Pointer<ffi.Void>,
+      ffi.Pointer<ffi.Void>,
+    );
+
+// slice_top_left_forward: (x, rows, cols) -> out
+typedef CSliceFwd =
+    ffi.Pointer<ffi.Void> Function(
+      ffi.Pointer<ffi.Void>,
+      ffi.Int32,
+      ffi.Int32,
+    );
+typedef DSliceFwd =
+    ffi.Pointer<ffi.Void> Function(ffi.Pointer<ffi.Void>, int, int);
+
+// slice_top_left_backward: (gOut, R, C) -> gIn (freshly-allocated zeroed).
+typedef CSliceBwd = CSliceFwd;
+typedef DSliceBwd = DSliceFwd;
+
+// relu_backward_op: (a, gO, gA) -> void.
+// gA is caller-allocated zero-init; kernel atomicAdds into it.
+typedef CReluBwd =
+    ffi.Void Function(
+      ffi.Pointer<ffi.Void>,
+      ffi.Pointer<ffi.Void>,
+      ffi.Pointer<ffi.Void>,
+    );
+typedef DReluBwd =
+    void Function(
+      ffi.Pointer<ffi.Void>,
+      ffi.Pointer<ffi.Void>,
+      ffi.Pointer<ffi.Void>,
+    );
+
 class CudaEngine {
   late ffi.DynamicLibrary _lib;
 
@@ -177,6 +254,17 @@ class CudaEngine {
   // Embedding
   late DEmbFwd embeddingForward;
   late DEmbBwd embeddingBackward;
+
+  // AFT-full
+  late DAftFwd aftFullForward;
+  late DAftBwd aftFullBackward;
+
+  // sliceTopLeft
+  late DSliceFwd sliceTopLeftForward;
+  late DSliceBwd sliceTopLeftBackward;
+
+  // ReLU backward (fwd is a plain `reluTensor` above).
+  late DReluBwd reluBackwardOp;
 
   CudaEngine() {
     _lib = ffi.DynamicLibrary.open(
@@ -235,6 +323,24 @@ class CudaEngine {
     );
     embeddingBackward = _lib.lookupFunction<CEmbBwd, DEmbBwd>(
       'embedding_backward',
+    );
+
+    aftFullForward = _lib.lookupFunction<CAftFwd, DAftFwd>(
+      'aft_full_forward',
+    );
+    aftFullBackward = _lib.lookupFunction<CAftBwd, DAftBwd>(
+      'aft_full_backward',
+    );
+
+    sliceTopLeftForward = _lib.lookupFunction<CSliceFwd, DSliceFwd>(
+      'slice_top_left_forward',
+    );
+    sliceTopLeftBackward = _lib.lookupFunction<CSliceBwd, DSliceBwd>(
+      'slice_top_left_backward',
+    );
+
+    reluBackwardOp = _lib.lookupFunction<CReluBwd, DReluBwd>(
+      'relu_backward_op',
     );
   }
 }

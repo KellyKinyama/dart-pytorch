@@ -227,15 +227,21 @@ void main() {
       expectClose(xGpu.grad!.toList(), xCpu.grad!.toList(), tol: 1e-4);
     });
 
-    test('relu backward throws on GPU with helpful message', () {
-      final x = Tensor.fromList(
+    test('relu backward on GPU matches CPU', () {
+      final xCpu = Tensor.fromList(
+        [4],
+        [-1.0, 0.0, 1.0, 2.0],
+        requiresGrad: true,
+      );
+      final xGpu = Tensor.fromList(
         [4],
         [-1.0, 0.0, 1.0, 2.0],
         device: Device.GPU,
         requiresGrad: true,
       );
-      final loss = x.relu().sum();
-      expect(() => loss.backward(), throwsA(isA<UnimplementedError>()));
+      xCpu.relu().sum().backward();
+      xGpu.relu().sum().backward();
+      expectClose(xGpu.grad!.toList(), xCpu.grad!.toList(), tol: 1e-6);
     });
   });
 

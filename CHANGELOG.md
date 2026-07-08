@@ -1,5 +1,64 @@
 ## Unreleased
 
+- AFT on GPU + `relu` backward on GPU + `TransformerLM` /
+  `TransformerDecoder` device-threading fix for `LayerNorm`.
+  - `TensorAft.aftFull` and `TensorAft.sliceTopLeft` now dispatch to
+    new CUDA kernels when the inputs live on `Device.GPU`. All four
+    of `q, k, v, w` (and the input to `sliceTopLeft`) must share the
+    same device. GPU vs CPU parity is exact to ~1e-7 for both masked
+    and unmasked AFT, for both the forward and every input gradient.
+  - New kernels in `lib/native/src/kernels/attention.cuh`:
+    `aft_full_fwd` (one thread per `t`, stable softmax over t' of
+    `K[tp*D+d] + WB[t*T+tp]`) and `aft_full_bwd` (recomputes weights
+    to avoid the `[T,T,D]` scratch buffer, atomicAdds into caller-
+    allocated zero-init grad tensors — `grad_Q += gO * ratio *
+    sigQ*(1-sigQ)`, `grad_V[tp,d] += gO * sigQ * norm_w`, and
+    `grad_K` / `grad_WB` both `+= gO * sigQ * norm_w * (V[tp,d] -
+    ratio)`).
+  - New C-ABI wrappers in `lib/native/src/engine.cu`:
+    `aft_full_forward`, `aft_full_backward`,
+    `slice_top_left_forward` (`cudaMemcpy2D` D2D), and
+    `slice_top_left_backward` (`cudaMemset` zero + `cudaMemcpy2D`
+    into the top-left region).
+  - `AFTAttention` and `AFTLanguageModel` now accept
+    `device: Device.GPU`; the old CPU-only guard on `AFTAttention` is
+    removed. `AFTBlock`'s LayerNorms (`ln1`, `ln2`) and
+    `AFTLanguageModel`'s `finalLn` now thread `device:` through so
+    the whole model actually lives on the requested device.
+  - `relu` backward on GPU: `relu_bwd` was already compiled in
+    `elementwise.cuh` but not exposed. Added `relu_backward_op` C
+    wrapper + `reluBackwardOp` FFI binding. `Tensor.relu()`'s GPU
+    backward now dispatches to it (caller allocates the zero-init
+    grad via `Tensor.fill`, kernel `atomicAdd`s into it). This
+    unblocks the standard ReLU FFN in `AFTBlock`, `TransformerBlock`,
+    and `TransformerDecoderBlock` on GPU. Also removes the earlier
+    `MoEFeedForward on Device.GPU requires ExpertActivation.silu`
+    guard — MoE on GPU can now use either activation.
+  - Same LayerNorm-device threading fix applied to
+    `TransformerBlock` (`ln1`, `ln2`), `TransformerEncoder`
+    (`finalNorm`), `TransformerDecoderBlock` (`ln1`, `ln2`, `ln3`),
+    and `TransformerDecoder` (`finalNorm`). This is what made
+    `TransformerLM` crash with a `mixed devices` error the moment it
+    was constructed with `device: Device.GPU` — pre-existing, not
+    introduced by this change, but only became reachable now that
+    `bin/aft_demo.dart --gpu` exercises the MHA baseline on GPU too.
+  - `bin/shakespeare_aft.dart` and `bin/aft_demo.dart` now accept
+    `--gpu`. Existing `bin/shakespeare_util.dart::getWindow(device:)`
+    is reused.
+  - Measured on a `(vocab=65, seq=128, embed=128, layers=2)`
+    `AFTLanguageModel` training loop (fwd + bwd + Adam step, 3-step
+    warmup, 10 timed steps): **CPU 300 ms/step → GPU 102 ms/step
+    (~2.9× speedup)**. On the tiny `bin/aft_demo.dart` config AFT-GPU
+    also beats MHA-GPU (~41 ms/step vs ~96 ms/step at
+    `embed=16, layers=2, seq=16`).
+  - Suite: **279 tests, all green** (+4 AFT-on-GPU parity tests: full
+    aftFull fwd+bwd for masked and unmasked, `sliceTopLeft`
+    fwd+bwd, `AFTAttention.parameters()` all get grads on GPU,
+    `AFTLanguageModel` GPU training loss decreases). The
+    `test/autograd_test.dart::relu backward throws on GPU with
+    helpful message` regression test was replaced with the new
+    CPU/GPU parity test.
+
 - MoE on GPU + `+`/`-` broadcast-backward aliasing fix.
   - `MoEFeedForward` / `MoELanguageModel` now run end-to-end on
     `Device.GPU`. New `ExpertActivation` enum on `Expert` selects

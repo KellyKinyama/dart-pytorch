@@ -50,7 +50,7 @@ class TransformerDecoder extends Module {
            seed: seed + i * 10000,
          ),
        ),
-       finalNorm = finalNorm ? LayerNorm(embedDim) : null;
+       finalNorm = finalNorm ? LayerNorm(embedDim, device: device) : null;
 
   Tensor call(Tensor x, Tensor memory, {Tensor? selfMask}) {
     var h = x;

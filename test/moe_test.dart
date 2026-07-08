@@ -309,18 +309,25 @@ void main() {
       expect(x.grad!.device, Device.GPU);
     });
 
-    test('MoEFeedForward on GPU requires SiLU', () {
-      expect(
-        () => MoEFeedForward(
-          embedDim: 8,
-          numRoutedExperts: 2,
-          numSharedExperts: 0,
-          topK: 1,
-          expertHiddenDim: 8,
-          device: Device.GPU,
-        ),
-        throwsArgumentError,
+    test('MoEFeedForward on GPU accepts ReLU (relu_bwd on GPU landed)', () {
+      // Historically this threw; now ReLU has a GPU backward.
+      final ffn = MoEFeedForward(
+        embedDim: 8,
+        numRoutedExperts: 2,
+        numSharedExperts: 0,
+        topK: 1,
+        expertHiddenDim: 8,
+        device: Device.GPU,
       );
+      final x = Tensor.fromList(
+        [3, 8],
+        List<double>.generate(24, (i) => (i % 5) * 0.1),
+        device: Device.GPU,
+        requiresGrad: true,
+      );
+      final y = ffn(x);
+      expect(y.shape, [3, 8]);
+      y.sum().backward();
     });
 
     test('MoEFeedForward GPU backward populates gate + expert grads', () {

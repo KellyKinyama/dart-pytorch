@@ -15,6 +15,7 @@
 #include "kernels/layernorm.cuh"
 #include "kernels/softmax.cuh"
 #include "kernels/embedding.cuh"
+#include "kernels/attention.cuh"
 
 extern "C"
 {
@@ -260,6 +261,18 @@ extern "C"
         return (void *)out;
     }
 
+    // ReLU backward: gA += (a > 0) * gO. `gA` is caller-allocated
+    // zero-init; kernel uses atomicAdd (safe with grad accumulation
+    // from other branches). Same pattern as layernorm/embedding bwd.
+    DLLEXPORT void relu_backward_op(void *ah, void *goh, void *gaH)
+    {
+        Tensor *a = (Tensor *)ah;
+        Tensor *gO = (Tensor *)goh;
+        Tensor *gA = (Tensor *)gaH;
+        relu_bwd<<<(a->size + 255) / 256, 256>>>(
+            a->data_gpu, gO->data_gpu, gA->data_gpu, a->size);
+    }
+
     // ---------------------------------------------------------------------
     // Rearrangement.
     // ---------------------------------------------------------------------
@@ -421,5 +434,83 @@ extern "C"
         int threads = D < 256 ? D : 256;
         embedding_bwd<<<N, threads>>>(indices->data_gpu, gOut->data_gpu,
                                       gTable->data_gpu, gTable->rows, D, N);
+    }
+
+    // ---------------------------------------------------------------------
+    // AFT-full forward + backward.
+    //   Q, K, V, out : [T, D]     WB : [T, T]
+    //   forward:  (Q, K, V, WB, masked) -> out
+    //   backward: (Q, K, V, WB, gOut, masked, gQ, gK, gV, gWB) writes into
+    //             pre-allocated grad tensors via atomicAdd — same pattern
+    //             as layernorm_backward / embedding_backward.
+    // ---------------------------------------------------------------------
+
+    DLLEXPORT void *aft_full_forward(void *qh, void *kh, void *vh, void *wbh,
+                                     int masked)
+    {
+        Tensor *Q = (Tensor *)qh;
+        Tensor *K = (Tensor *)kh;
+        Tensor *V = (Tensor *)vh;
+        Tensor *WB = (Tensor *)wbh;
+        int T = Q->rows;
+        int D = Q->cols;
+        Tensor *out = new Tensor(T, D);
+        aft_full_fwd<<<(T + 255) / 256, 256>>>(
+            Q->data_gpu, K->data_gpu, V->data_gpu, WB->data_gpu,
+            out->data_gpu, T, D, masked);
+        return (void *)out;
+    }
+
+    DLLEXPORT void aft_full_backward(void *qh, void *kh, void *vh, void *wbh,
+                                     void *goh, int masked,
+                                     void *gqh, void *gkh, void *gvh,
+                                     void *gwbh)
+    {
+        Tensor *Q = (Tensor *)qh;
+        Tensor *K = (Tensor *)kh;
+        Tensor *V = (Tensor *)vh;
+        Tensor *WB = (Tensor *)wbh;
+        Tensor *gOut = (Tensor *)goh;
+        Tensor *gQ = (Tensor *)gqh;
+        Tensor *gK = (Tensor *)gkh;
+        Tensor *gV = (Tensor *)gvh;
+        Tensor *gWB = (Tensor *)gwbh;
+        int T = Q->rows;
+        int D = Q->cols;
+        aft_full_bwd<<<(T + 255) / 256, 256>>>(
+            Q->data_gpu, K->data_gpu, V->data_gpu, WB->data_gpu,
+            gOut->data_gpu,
+            gQ->data_gpu, gK->data_gpu, gV->data_gpu, gWB->data_gpu,
+            T, D, masked);
+    }
+
+    // ---------------------------------------------------------------------
+    // Top-left slice: extract a `[rows, cols]` submatrix from `[R, C]`
+    // input. Backward pads with zeros back to `[R, C]`. Both directions
+    // use cudaMemcpy2D since the copy is contiguous per-row with a
+    // stride mismatch (source pitch = C, dest pitch = cols).
+    // ---------------------------------------------------------------------
+
+    DLLEXPORT void *slice_top_left_forward(void *xh, int rows, int cols)
+    {
+        Tensor *x = (Tensor *)xh;
+        Tensor *out = new Tensor(rows, cols);
+        cudaMemcpy2D(out->data_gpu, cols * sizeof(float),
+                     x->data_gpu, x->cols * sizeof(float),
+                     cols * sizeof(float), rows,
+                     cudaMemcpyDeviceToDevice);
+        return (void *)out;
+    }
+
+    DLLEXPORT void *slice_top_left_backward(void *gOutH, int R, int C)
+    {
+        Tensor *gOut = (Tensor *)gOutH;
+        Tensor *gIn = new Tensor(R, C);
+        cudaMemset(gIn->data_gpu, 0, R * C * sizeof(float));
+        cudaMemcpy2D(gIn->data_gpu, C * sizeof(float),
+                     gOut->data_gpu, gOut->cols * sizeof(float),
+                     gOut->cols * sizeof(float), gOut->rows,
+                     cudaMemcpyDeviceToDevice);
+        return (void *)gIn;
     }
 }

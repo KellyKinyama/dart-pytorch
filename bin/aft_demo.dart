@@ -12,13 +12,14 @@
 ///   * greedy next-token decode from a short prompt.
 ///
 /// Not a fair "big-scale" throughput benchmark — the two models don't
-/// have quite the same parameter count and AFT here is a pure-Dart
-/// CPU implementation (`Tensor.aftFull`), while standard attention
-/// leans on the batched matmul path.
+/// have quite the same parameter count. AFT can now run on either
+/// CPU (pure-Dart `Tensor.aftFull`) or GPU (`aft_full_forward`/
+/// `aft_full_backward` CUDA kernels).
 ///
 /// Run with:
 ///
-///     dart run bin/aft_demo.dart
+///     dart run bin/aft_demo.dart          # CPU
+///     dart run bin/aft_demo.dart --gpu    # GPU
 library;
 
 import 'package:dart_pytorch/dart_pytorch.dart';
@@ -28,15 +29,19 @@ import 'package:dart_pytorch/dart_pytorch.dart';
 const int _vocab = 12;
 const int _seq = 16;
 
-({Tensor x, Tensor y}) _makeSequence() {
+({Tensor x, Tensor y}) _makeSequence({Device device = Device.CPU}) {
   final tokens = List<int>.generate(_seq + 1, (i) => i % _vocab);
   return (
-    x: Tensor.fromList([
-      _seq,
-    ], tokens.sublist(0, _seq).map((i) => i.toDouble()).toList()),
-    y: Tensor.fromList([
-      _seq,
-    ], tokens.sublist(1).map((i) => i.toDouble()).toList()),
+    x: Tensor.fromList(
+      [_seq],
+      tokens.sublist(0, _seq).map((i) => i.toDouble()).toList(),
+      device: device,
+    ),
+    y: Tensor.fromList(
+      [_seq],
+      tokens.sublist(1).map((i) => i.toDouble()).toList(),
+      device: device,
+    ),
   );
 }
 
@@ -69,6 +74,7 @@ _Result _run(
   required double lr,
   required List<int> promptIds,
   required int decodeSteps,
+  Device device = Device.CPU,
 }) {
   final opt = Adam(params, lr: lr);
   final scalars = params.fold<int>(0, (a, p) => a + p.length);
@@ -90,7 +96,7 @@ _Result _run(
   for (int i = 0; i < decodeSteps; i++) {
     final ids = Tensor.fromList([
       buf.length,
-    ], buf.map((v) => v.toDouble()).toList());
+    ], buf.map((v) => v.toDouble()).toList(), device: device);
     final logits = forward(ids).toList();
     final off = (buf.length - 1) * _vocab;
     int best = 0;
@@ -114,8 +120,10 @@ _Result _run(
   );
 }
 
-void main() {
-  print('=== AFT vs standard attention ===');
+void main(List<String> args) {
+  final useGpu = args.contains('--gpu');
+  final device = useGpu ? Device.GPU : Device.CPU;
+  print('=== AFT vs standard attention (${useGpu ? "GPU" : "CPU"}) ===');
   print('task     : next-token on mod-$_vocab counting (seq=$_seq)');
   const embedDim = 16;
   const numLayers = 2;
@@ -126,7 +134,7 @@ void main() {
     'lr=${lr.toStringAsExponential(0)}\n',
   );
 
-  final data = _makeSequence();
+  final data = _makeSequence(device: device);
 
   // AFT model.
   final aft = AFTLanguageModel(
@@ -134,6 +142,7 @@ void main() {
     embedDim: embedDim,
     numLayers: numLayers,
     maxLen: _seq,
+    device: device,
     seed: 1,
   );
 
@@ -144,6 +153,7 @@ void main() {
     numLayers: numLayers,
     numHeads: 2,
     maxLen: _seq,
+    device: device,
     seed: 1,
   );
 
@@ -163,6 +173,7 @@ void main() {
     lr: lr,
     promptIds: promptIds,
     decodeSteps: 8,
+    device: device,
   );
   print(
     'AFT   done: loss ${resAft.lossInit.toStringAsFixed(3)} -> '
@@ -181,6 +192,7 @@ void main() {
     lr: lr,
     promptIds: promptIds,
     decodeSteps: 8,
+    device: device,
   );
   print(
     'MHA   done: loss ${resMha.lossInit.toStringAsFixed(3)} -> '
@@ -224,7 +236,7 @@ void main() {
     '(${low.lossFinal.toStringAsFixed(3)})',
   );
   print(
-    '\nnote: AFT here is a pure-Dart CPU op; standard attention uses the '
-    'batched matmul path.',
+    '\nnote: AFT now runs on the CUDA kernels when device=Device.GPU '
+    '(aft_full_forward/backward + slice_top_left).',
   );
 }

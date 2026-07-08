@@ -37,8 +37,8 @@ class TransformerBlock extends Module {
     Device device = Device.CPU,
     int seed = 0,
   }) : ffnDim = ffnDim ?? embedDim * 4,
-       ln1 = LayerNorm(embedDim),
-       ln2 = LayerNorm(embedDim),
+       ln1 = LayerNorm(embedDim, device: device),
+       ln2 = LayerNorm(embedDim, device: device),
        mha = MultiHeadAttention(
          embedDim,
          numHeads,

@@ -284,8 +284,7 @@ extension TensorOps on Tensor {
   // Unary elementwise (activations + math).
   // ---------------------------------------------------------------------
 
-  /// ReLU. Backward requires a `>0` mask, currently CPU-only; a GPU
-  /// backward for ReLU throws with a hint to `.to(Device.CPU)`.
+  /// ReLU. Backward: `dX = dOut * (X > 0)`.
   Tensor relu() {
     final out = _unaryFwd(
       cpuFn: (x) => x < 0 ? 0.0 : x,
@@ -295,13 +294,13 @@ extension TensorOps on Tensor {
       final x = this;
       out._setBackward([x], () {
         if (x.device == Device.GPU) {
-          throw UnimplementedError(
-            'relu.backward on GPU needs a mask kernel; '
-            'call .to(Device.CPU) before the ReLU or add relu_bwd_tensor.',
-          );
+          final gX = Tensor.fill(x.shape, 0.0, device: Device.GPU);
+          engine.reluBackwardOp(x._handle!, out._grad!._handle!, gX._handle!);
+          x._accumulateGrad(gX);
+        } else {
+          final mask = x._reluMaskCpu();
+          x._accumulateGrad(out._grad! * mask);
         }
-        final mask = x._reluMaskCpu();
-        x._accumulateGrad(out._grad! * mask);
       });
     }
     return out;

@@ -10,6 +10,15 @@ import 'package:test/test.dart';
 const double _tol = 1e-4;
 const double _numGradTol = 3e-2;
 
+void expectClose(List<double> got, List<double> want, {double tol = 1e-4}) {
+  expect(got.length, want.length,
+      reason: 'length got=${got.length} want=${want.length}');
+  for (int i = 0; i < got.length; i++) {
+    expect((got[i] - want[i]).abs() < tol, isTrue,
+        reason: 'idx $i got=${got[i]} want=${want[i]} (tol=$tol)');
+  }
+}
+
 List<double> _rand(int n, {int seed = 0, double scale = 0.5}) {
   final r = math.Random(seed);
   return List<double>.generate(n, (_) => (r.nextDouble() * 2 - 1) * scale);
@@ -338,6 +347,141 @@ void main() {
         l1,
         lessThan(0.1),
         reason: 'expected loss to drop near zero (l0=$l0 l1=$l1)',
+      );
+    });
+  });
+
+  group('AFT on GPU (parity)', () {
+    test('aftFull GPU vs CPU parity (masked + unmasked)', () {
+      const t = 6;
+      const d = 4;
+      for (final masked in [false, true]) {
+        final qData = _rand(t * d, seed: 1);
+        final kData = _rand(t * d, seed: 2);
+        final vData = _rand(t * d, seed: 3);
+        final wData = _rand(t * t, seed: 4);
+
+        final qCpu = Tensor.fromList([t, d], qData, requiresGrad: true);
+        final kCpu = Tensor.fromList([t, d], kData, requiresGrad: true);
+        final vCpu = Tensor.fromList([t, d], vData, requiresGrad: true);
+        final wCpu = Tensor.fromList([t, t], wData, requiresGrad: true);
+
+        final qGpu = Tensor.fromList(
+          [t, d],
+          qData,
+          device: Device.GPU,
+          requiresGrad: true,
+        );
+        final kGpu = Tensor.fromList(
+          [t, d],
+          kData,
+          device: Device.GPU,
+          requiresGrad: true,
+        );
+        final vGpu = Tensor.fromList(
+          [t, d],
+          vData,
+          device: Device.GPU,
+          requiresGrad: true,
+        );
+        final wGpu = Tensor.fromList(
+          [t, t],
+          wData,
+          device: Device.GPU,
+          requiresGrad: true,
+        );
+
+        final outCpu = TensorAft.aftFull(qCpu, kCpu, vCpu, wCpu, masked: masked);
+        final outGpu = TensorAft.aftFull(qGpu, kGpu, vGpu, wGpu, masked: masked);
+        expectClose(outGpu.toList(), outCpu.toList(), tol: 1e-5);
+
+        outCpu.sum().backward();
+        outGpu.sum().backward();
+        expectClose(qGpu.grad!.toList(), qCpu.grad!.toList(), tol: 1e-5);
+        expectClose(kGpu.grad!.toList(), kCpu.grad!.toList(), tol: 1e-5);
+        expectClose(vGpu.grad!.toList(), vCpu.grad!.toList(), tol: 1e-5);
+        expectClose(wGpu.grad!.toList(), wCpu.grad!.toList(), tol: 1e-5);
+      }
+    });
+
+    test('sliceTopLeft GPU vs CPU parity (forward + backward)', () {
+      const bigR = 8;
+      const bigC = 8;
+      const r = 5;
+      const c = 3;
+      final data = _rand(bigR * bigC, seed: 7);
+      final xCpu = Tensor.fromList([bigR, bigC], data, requiresGrad: true);
+      final xGpu = Tensor.fromList(
+        [bigR, bigC],
+        data,
+        device: Device.GPU,
+        requiresGrad: true,
+      );
+      final yCpu = TensorAft.sliceTopLeft(xCpu, r, c);
+      final yGpu = TensorAft.sliceTopLeft(xGpu, r, c);
+      expectClose(yGpu.toList(), yCpu.toList(), tol: 1e-6);
+      yCpu.sum().backward();
+      yGpu.sum().backward();
+      expectClose(xGpu.grad!.toList(), xCpu.grad!.toList(), tol: 1e-6);
+    });
+
+    test('AFTAttention on GPU: forward + backward populates all param grads', () {
+      final layer = AFTAttention(
+        4,
+        maxSeqLen: 8,
+        masked: true,
+        device: Device.GPU,
+        seed: 42,
+      );
+      final x = Tensor.fromList(
+        [5, 4],
+        _rand(5 * 4, seed: 11),
+        device: Device.GPU,
+        requiresGrad: true,
+      );
+      final y = layer(x);
+      expect(y.shape, [5, 4]);
+      y.sum().backward();
+      for (final p in layer.parameters()) {
+        expect(p.grad, isNotNull, reason: 'param without grad after backward');
+      }
+    });
+
+    test('AFTLanguageModel on GPU trains a tiny sequence (loss decreases)', () {
+      final vocab = 5;
+      final seq = 6;
+      final lm = AFTLanguageModel(
+        vocabSize: vocab,
+        embedDim: 8,
+        numLayers: 1,
+        maxLen: 8,
+        ffnDim: 16,
+        dropoutP: 0.0,
+        device: Device.GPU,
+        seed: 3,
+      );
+      final tokens = Tensor.fromList(
+        [seq],
+        List<double>.generate(seq, (i) => (i % vocab).toDouble()),
+        device: Device.GPU,
+      );
+      final targets = Tensor.fromList(
+        [seq],
+        List<double>.generate(seq, (i) => ((i + 1) % vocab).toDouble()),
+        device: Device.GPU,
+      );
+      final opt = SGD(lm.parameters(), lr: 0.5);
+      final l0 = lm(tokens).crossEntropy(targets).mean().toList()[0];
+      for (int step = 0; step < 40; step++) {
+        opt.zeroGrad();
+        lm(tokens).crossEntropy(targets).mean().backward();
+        opt.step();
+      }
+      final l1 = lm(tokens).crossEntropy(targets).mean().toList()[0];
+      expect(
+        l1,
+        lessThan(l0 * 0.5),
+        reason: 'expected GPU AFT loss to drop (l0=$l0 l1=$l1)',
       );
     });
   });

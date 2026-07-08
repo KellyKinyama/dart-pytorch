@@ -42,7 +42,7 @@ class TransformerEncoder extends Module {
            seed: seed + i * 10000,
          ),
        ),
-       finalNorm = finalNorm ? LayerNorm(embedDim) : null;
+       finalNorm = finalNorm ? LayerNorm(embedDim, device: device) : null;
 
   Tensor call(Tensor x, {Tensor? mask, EncoderCache? cache}) {
     if (cache != null && cache.layers.length != blocks.length) {

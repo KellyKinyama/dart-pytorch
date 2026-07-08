@@ -148,12 +148,6 @@ class MoEFeedForward extends Module {
         '($numRoutedExperts)]',
       );
     }
-    if (device == Device.GPU && activation == ExpertActivation.relu) {
-      throw ArgumentError(
-        'MoEFeedForward on Device.GPU requires ExpertActivation.silu — '
-        'relu.backward is CPU-only. Pass activation: ExpertActivation.silu.',
-      );
-    }
   }
 
   static Tensor _initGate(int inDim, int e, int seed, Device device) {

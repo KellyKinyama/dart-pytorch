@@ -48,9 +48,9 @@ class TransformerDecoderBlock extends Module {
     int seed = 0,
   }) : kvEmbedDim = kvEmbedDim ?? embedDim,
        ffnDim = ffnDim ?? embedDim * 4,
-       ln1 = LayerNorm(embedDim),
-       ln2 = LayerNorm(embedDim),
-       ln3 = LayerNorm(embedDim),
+       ln1 = LayerNorm(embedDim, device: device),
+       ln2 = LayerNorm(embedDim, device: device),
+       ln3 = LayerNorm(embedDim, device: device),
        selfAttn = MultiHeadAttention(
          embedDim,
          numHeads,
