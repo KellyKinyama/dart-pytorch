@@ -1,5 +1,29 @@
 ## Unreleased
 
+- MoE: SwiGLU expert body (matches DeepSeek-V3 and Mixtral).
+  - New `enum ExpertVariant { mlp, swiGlu }`.
+    * `mlp` (default) keeps the current two-layer body
+      `x -> w2(act(w1(x)))`.
+    * `swiGlu` uses the gated body `x -> w2(silu(w1(x)) * w3(x))`,
+      allocating an extra `w3: Linear[dim, hiddenDim]` gate
+      projection per expert. SwiGLU always uses SiLU regardless of
+      `ExpertActivation` — the gate itself is the nonlinearity, per
+      DeepSeek-V3 `inference/model.py` and Mixtral's
+      `MixtralBlockSparseTop2MLP`.
+  - `Expert.w3` is nullable, present only for `swiGlu`.
+    `parameters()` and `submodules()` include it when set.
+  - `MoEFeedForward`, `MoEBlock`, and `MoELanguageModel` all accept
+    `expertVariant` and forward it through to their experts.
+    `MoEBlock` and `MoELanguageModel` additionally now expose the
+    `gateFunction`, `biasUpdateRule`, and `renormalizeTopK` options
+    that were previously reachable only on `MoEFeedForward`
+    directly.
+  - `test/moe_test.dart`: +4 tests (`SwiGLU variant allocates w3 and
+    produces correct shape`, `SwiGLU variant: gradients flow through
+    w1, w2, and w3`, `SwiGLU variant matches manual computation`,
+    `expertVariant swiGlu: forward + gradients through experts
+    w1/w2/w3`). Full suite 288/288 green.
+
 - MoE: reference-aligned gating options (sigmoid gate, top-K weight
   renormalization, sign-based bias update). Verified against
   DeepSeek-V3 (`inference/model.py`), the aux-loss-free paper

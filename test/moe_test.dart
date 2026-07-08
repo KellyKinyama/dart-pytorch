@@ -24,6 +24,56 @@ void main() {
       // Linear has weight + bias by default => 4 tensors total.
       expect(e.parameters().length, 4);
     });
+
+    test('SwiGLU variant allocates w3 and produces correct shape', () {
+      final e = Expert(4, 8, seed: 1, variant: ExpertVariant.swiGlu);
+      // w1 + w2 + w3, each with weight + bias => 6 tensors.
+      expect(e.parameters().length, 6);
+      expect(e.w3, isNotNull);
+      final x = Tensor.fromList([
+        3,
+        4,
+      ], List<double>.generate(12, (i) => (i - 6) * 0.1));
+      final y = e(x);
+      expect(y.shape, [3, 4]);
+      for (final v in y.toList()) {
+        expect(v.isFinite, isTrue);
+      }
+    });
+
+    test('SwiGLU variant: gradients flow through w1, w2, and w3', () {
+      final e = Expert(4, 8, seed: 3, variant: ExpertVariant.swiGlu);
+      final x = Tensor.fromList([
+        2,
+        4,
+      ], List<double>.generate(8, (i) => (i - 4) * 0.1));
+      final y = e(x);
+      y.sum().backward();
+      for (final w in [e.w1.weight, e.w2.weight, e.w3!.weight]) {
+        expect(w.grad, isNotNull);
+        expect(w.grad!.toList().any((v) => v.abs() > 1e-8), isTrue);
+      }
+    });
+
+    test('SwiGLU variant matches manual computation', () {
+      final e = Expert(4, 8, seed: 42, variant: ExpertVariant.swiGlu);
+      final x = Tensor.fromList([
+        2,
+        4,
+      ], List<double>.generate(8, (i) => (i - 4) * 0.1));
+      final y = e(x);
+      // Manual: w2(silu(w1(x)) * w3(x))
+      final gate = e.w1(x);
+      final up = e.w3!(x);
+      final silu = gate * gate.sigmoid();
+      final expected = e.w2(silu * up);
+      final yList = y.toList();
+      final eList = expected.toList();
+      expect(yList.length, eList.length);
+      for (int i = 0; i < yList.length; i++) {
+        expect((yList[i] - eList[i]).abs(), lessThan(1e-9));
+      }
+    });
   });
 
   group('MoEFeedForward', () {
@@ -194,8 +244,8 @@ void main() {
         final expected = loadBefore[j] < mean
             ? biasesBefore[j] + 0.25
             : loadBefore[j] > mean
-                ? biasesBefore[j] - 0.25
-                : biasesBefore[j];
+            ? biasesBefore[j] - 0.25
+            : biasesBefore[j];
         expect((moe.routingBias[j] - expected).abs(), lessThan(1e-9));
       }
     });
@@ -250,81 +300,128 @@ void main() {
       }
     });
 
-    test('top-K renormalization: routed contribution weights sum to ~1 per row',
-        () {
-      // Set up a moe that is purely routed (no shared) and identity-ish so we
-      // can inspect the weights indirectly via a probe input. We instead
-      // verify the renormalization by checking that a single-expert-topK moe
-      // with renormalize=true reproduces its selected expert's output
-      // scale-invariantly of the gate value.
-      final moe = MoEFeedForward(
-        embedDim: 4,
-        numRoutedExperts: 3,
-        numSharedExperts: 0,
-        topK: 1,
-        expertHiddenDim: 4,
-        seed: 11,
-        renormalizeTopK: true,
-      );
-      // For topK=1 with renormalization, the selected expert's weight is
-      // always 1.0, so the moe output equals exactly the selected expert's
-      // output on that row.
-      final x = Tensor.fromList([
-        1,
-        4,
-      ], [0.1, 0.2, -0.1, 0.05]);
-      final y = moe(x);
-      // Find which expert was routed.
-      final gateLogits = x.matmul(moe.gateW);
-      final gateScores = gateLogits.softmax();
-      final s = gateScores.toList();
-      int argmax = 0;
-      double best = s[0];
-      for (int j = 1; j < 3; j++) {
-        if (s[j] > best) {
-          best = s[j];
-          argmax = j;
+    test(
+      'top-K renormalization: routed contribution weights sum to ~1 per row',
+      () {
+        // Set up a moe that is purely routed (no shared) and identity-ish so we
+        // can inspect the weights indirectly via a probe input. We instead
+        // verify the renormalization by checking that a single-expert-topK moe
+        // with renormalize=true reproduces its selected expert's output
+        // scale-invariantly of the gate value.
+        final moe = MoEFeedForward(
+          embedDim: 4,
+          numRoutedExperts: 3,
+          numSharedExperts: 0,
+          topK: 1,
+          expertHiddenDim: 4,
+          seed: 11,
+          renormalizeTopK: true,
+        );
+        // For topK=1 with renormalization, the selected expert's weight is
+        // always 1.0, so the moe output equals exactly the selected expert's
+        // output on that row.
+        final x = Tensor.fromList([1, 4], [0.1, 0.2, -0.1, 0.05]);
+        final y = moe(x);
+        // Find which expert was routed.
+        final gateLogits = x.matmul(moe.gateW);
+        final gateScores = gateLogits.softmax();
+        final s = gateScores.toList();
+        int argmax = 0;
+        double best = s[0];
+        for (int j = 1; j < 3; j++) {
+          if (s[j] > best) {
+            best = s[j];
+            argmax = j;
+          }
         }
-      }
-      final expected = moe.routedExperts[argmax](x);
-      final yList = y.toList();
-      final eList = expected.toList();
-      for (int i = 0; i < 4; i++) {
-        expect((yList[i] - eList[i]).abs(), lessThan(1e-6));
-      }
-    });
+        final expected = moe.routedExperts[argmax](x);
+        final yList = y.toList();
+        final eList = expected.toList();
+        for (int i = 0; i < 4; i++) {
+          expect((yList[i] - eList[i]).abs(), lessThan(1e-6));
+        }
+      },
+    );
 
-    test('sigmoid + renormalize: gradients still flow to gateW and experts',
-        () {
-      final moe = MoEFeedForward(
-        embedDim: 4,
-        numRoutedExperts: 4,
-        numSharedExperts: 0,
-        topK: 2,
-        expertHiddenDim: 4,
-        seed: 13,
-        gateFunction: GateFunction.sigmoid,
-        renormalizeTopK: true,
-      );
-      final x = Tensor.fromList([
-        3,
-        4,
-      ], List<double>.generate(12, (i) => (i - 6) * 0.1));
-      final y = moe(x);
-      final loss = y.sum();
-      loss.backward();
-      expect(moe.gateW.grad, isNotNull);
-      expect(
-        moe.gateW.grad!.toList().any((v) => v.abs() > 1e-8),
-        isTrue,
-      );
-      final ew = moe.routedExperts[0].w1.weight;
-      expect(ew.grad, isNotNull);
-      expect(
-        ew.grad!.toList().any((v) => v.abs() > 1e-8),
-        isTrue,
-      );
-    });
+    test(
+      'sigmoid + renormalize: gradients still flow to gateW and experts',
+      () {
+        final moe = MoEFeedForward(
+          embedDim: 4,
+          numRoutedExperts: 4,
+          numSharedExperts: 0,
+          topK: 2,
+          expertHiddenDim: 4,
+          seed: 13,
+          gateFunction: GateFunction.sigmoid,
+          renormalizeTopK: true,
+        );
+        final x = Tensor.fromList([
+          3,
+          4,
+        ], List<double>.generate(12, (i) => (i - 6) * 0.1));
+        final y = moe(x);
+        final loss = y.sum();
+        loss.backward();
+        expect(moe.gateW.grad, isNotNull);
+        expect(moe.gateW.grad!.toList().any((v) => v.abs() > 1e-8), isTrue);
+        final ew = moe.routedExperts[0].w1.weight;
+        expect(ew.grad, isNotNull);
+        expect(ew.grad!.toList().any((v) => v.abs() > 1e-8), isTrue);
+      },
+    );
+
+    test(
+      'expertVariant swiGlu: forward + gradients through experts w1/w2/w3',
+      () {
+        final moe = MoEFeedForward(
+          embedDim: 4,
+          numRoutedExperts: 3,
+          numSharedExperts: 1,
+          topK: 2,
+          expertHiddenDim: 8,
+          seed: 17,
+          expertVariant: ExpertVariant.swiGlu,
+          gateFunction: GateFunction.sigmoid,
+        );
+        // Every routed expert should have a w3.
+        for (final e in moe.routedExperts) {
+          expect(e.w3, isNotNull);
+        }
+        for (final e in moe.sharedExperts) {
+          expect(e.w3, isNotNull);
+        }
+        final x = Tensor.fromList([
+          4,
+          4,
+        ], List<double>.generate(16, (i) => (i - 8) * 0.05));
+        final y = moe(x);
+        expect(y.shape, [4, 4]);
+        y.sum().backward();
+        // Pick one routed expert and one shared expert; both should get
+        // grads on w3.
+        expect(moe.routedExperts[0].w3!.weight.grad, isNotNull);
+        expect(
+          moe.routedExperts[0]
+              .w3!
+              .weight
+              .grad!
+              .toList()
+              .any((v) => v.abs() > 1e-8),
+          isTrue,
+        );
+        expect(moe.sharedExperts[0].w3!.weight.grad, isNotNull);
+        expect(
+          moe.sharedExperts[0]
+              .w3!
+              .weight
+              .grad!
+              .toList()
+              .any((v) => v.abs() > 1e-8),
+          isTrue,
+        );
+      },
+    );
   });
 
   group('MoELanguageModel', () {

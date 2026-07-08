@@ -77,13 +77,32 @@ enum BiasUpdateRule { sign, proportional }
 /// (`x * sigmoid(x)`) both have fwd+bwd on CPU and GPU.
 enum ExpertActivation { relu, silu }
 
-/// A single expert — a two-layer MLP `x -> act(x @ W1.T) @ W2.T`.
+/// Feed-forward body inside an [Expert].
+///
+/// * [ExpertVariant.mlp] — the classical two-layer MLP
+///   `x -> w2(act(w1(x)))`.
+/// * [ExpertVariant.swiGlu] — the SwiGLU gated body used by both
+///   DeepSeek-V3 (`inference/model.py`) and Mixtral
+///   (`transformers/models/mixtral/modeling_mixtral.py`):
+///   `x -> w2(silu(w1(x)) * w3(x))`. Adds one extra `w3` projection
+///   of shape `[hiddenDim, dim]`. Uses SiLU regardless of
+///   [ExpertActivation] (the gate itself is the nonlinearity).
+enum ExpertVariant { mlp, swiGlu }
+
+/// A single expert. Either a two-layer MLP (`variant = mlp`, default)
+/// or a SwiGLU gated FFN (`variant = swiGlu`), matching DeepSeek-V3
+/// and Mixtral.
 class Expert extends Module {
   final int dim;
   final int hiddenDim;
   final ExpertActivation activation;
+  final ExpertVariant variant;
   final Linear w1;
   final Linear w2;
+
+  /// Gate projection `[dim, hiddenDim]`, only allocated when
+  /// [variant] is [ExpertVariant.swiGlu].
+  final Linear? w3;
 
   Expert(
     this.dim,
@@ -91,10 +110,22 @@ class Expert extends Module {
     Device device = Device.CPU,
     int seed = 0,
     this.activation = ExpertActivation.relu,
+    this.variant = ExpertVariant.mlp,
   }) : w1 = Linear(dim, hiddenDim, device: device, seed: seed),
-       w2 = Linear(hiddenDim, dim, device: device, seed: seed + 1);
+       w2 = Linear(hiddenDim, dim, device: device, seed: seed + 1),
+       w3 = variant == ExpertVariant.swiGlu
+           ? Linear(dim, hiddenDim, device: device, seed: seed + 2)
+           : null;
 
   Tensor call(Tensor x) {
+    if (variant == ExpertVariant.swiGlu) {
+      // SwiGLU: w2(silu(w1(x)) * w3(x)). Always uses silu — the gate
+      // itself is the nonlinearity, per DeepSeek-V3 / Mixtral.
+      final gate = w1(x);
+      final up = w3!(x);
+      final silu = gate * gate.sigmoid();
+      return w2(silu * up);
+    }
     final h = w1(x);
     final a = switch (activation) {
       ExpertActivation.relu => h.relu(),
@@ -104,10 +135,14 @@ class Expert extends Module {
   }
 
   @override
-  List<Tensor> parameters() => [...w1.parameters(), ...w2.parameters()];
+  List<Tensor> parameters() => [
+    ...w1.parameters(),
+    ...w2.parameters(),
+    if (w3 != null) ...w3!.parameters(),
+  ];
 
   @override
-  List<Module> submodules() => [w1, w2];
+  List<Module> submodules() => [w1, w2, if (w3 != null) w3!];
 }
 
 class MoEFeedForward extends Module {
@@ -118,6 +153,7 @@ class MoEFeedForward extends Module {
   final int expertHiddenDim;
   final double biasUpdateRate;
   final ExpertActivation activation;
+  final ExpertVariant expertVariant;
   final GateFunction gateFunction;
   final BiasUpdateRule biasUpdateRule;
 
@@ -165,6 +201,7 @@ class MoEFeedForward extends Module {
     Device device = Device.CPU,
     int seed = 0,
     this.activation = ExpertActivation.relu,
+    this.expertVariant = ExpertVariant.mlp,
     this.gateFunction = GateFunction.softmax,
     this.biasUpdateRule = BiasUpdateRule.sign,
     bool? renormalizeTopK,
@@ -179,6 +216,7 @@ class MoEFeedForward extends Module {
            device: device,
            seed: seed + 1000 + i * 100,
            activation: activation,
+           variant: expertVariant,
          ),
        ),
        sharedExperts = List<Expert>.generate(
@@ -189,19 +227,18 @@ class MoEFeedForward extends Module {
            device: device,
            seed: seed + 500000 + i * 100,
            activation: activation,
+           variant: expertVariant,
          ),
        ),
        routingBias = List<double>.filled(numRoutedExperts, 0.0),
        _expertLoad = List<int>.filled(numRoutedExperts, 0),
        _selectors = _buildSelectors(numRoutedExperts, embedDim, device),
-       _onesE1 =
-           (renormalizeTopK ?? (gateFunction == GateFunction.sigmoid))
-               ? Tensor.fill([numRoutedExperts, 1], 1.0, device: device)
-               : null,
-       _ones1E =
-           (renormalizeTopK ?? (gateFunction == GateFunction.sigmoid))
-               ? Tensor.fill([1, numRoutedExperts], 1.0, device: device)
-               : null {
+       _onesE1 = (renormalizeTopK ?? (gateFunction == GateFunction.sigmoid))
+           ? Tensor.fill([numRoutedExperts, 1], 1.0, device: device)
+           : null,
+       _ones1E = (renormalizeTopK ?? (gateFunction == GateFunction.sigmoid))
+           ? Tensor.fill([1, numRoutedExperts], 1.0, device: device)
+           : null {
     if (topK <= 0 || topK > numRoutedExperts) {
       throw ArgumentError(
         'MoEFeedForward: topK ($topK) must be in [1, numRoutedExperts '
@@ -323,8 +360,8 @@ class MoEFeedForward extends Module {
           e > 0
               ? 1.0
               : e < 0
-                  ? -1.0
-                  : 0.0,
+              ? -1.0
+              : 0.0,
         BiasUpdateRule.proportional => e / mean,
       };
       routingBias[j] += biasUpdateRate * delta;
