@@ -11,11 +11,17 @@ const double _tol = 1e-4;
 const double _numGradTol = 3e-2;
 
 void expectClose(List<double> got, List<double> want, {double tol = 1e-4}) {
-  expect(got.length, want.length,
-      reason: 'length got=${got.length} want=${want.length}');
+  expect(
+    got.length,
+    want.length,
+    reason: 'length got=${got.length} want=${want.length}',
+  );
   for (int i = 0; i < got.length; i++) {
-    expect((got[i] - want[i]).abs() < tol, isTrue,
-        reason: 'idx $i got=${got[i]} want=${want[i]} (tol=$tol)');
+    expect(
+      (got[i] - want[i]).abs() < tol,
+      isTrue,
+      reason: 'idx $i got=${got[i]} want=${want[i]} (tol=$tol)',
+    );
   }
 }
 
@@ -391,8 +397,20 @@ void main() {
           requiresGrad: true,
         );
 
-        final outCpu = TensorAft.aftFull(qCpu, kCpu, vCpu, wCpu, masked: masked);
-        final outGpu = TensorAft.aftFull(qGpu, kGpu, vGpu, wGpu, masked: masked);
+        final outCpu = TensorAft.aftFull(
+          qCpu,
+          kCpu,
+          vCpu,
+          wCpu,
+          masked: masked,
+        );
+        final outGpu = TensorAft.aftFull(
+          qGpu,
+          kGpu,
+          vGpu,
+          wGpu,
+          masked: masked,
+        );
         expectClose(outGpu.toList(), outCpu.toList(), tol: 1e-5);
 
         outCpu.sum().backward();
@@ -425,27 +443,34 @@ void main() {
       expectClose(xGpu.grad!.toList(), xCpu.grad!.toList(), tol: 1e-6);
     });
 
-    test('AFTAttention on GPU: forward + backward populates all param grads', () {
-      final layer = AFTAttention(
-        4,
-        maxSeqLen: 8,
-        masked: true,
-        device: Device.GPU,
-        seed: 42,
-      );
-      final x = Tensor.fromList(
-        [5, 4],
-        _rand(5 * 4, seed: 11),
-        device: Device.GPU,
-        requiresGrad: true,
-      );
-      final y = layer(x);
-      expect(y.shape, [5, 4]);
-      y.sum().backward();
-      for (final p in layer.parameters()) {
-        expect(p.grad, isNotNull, reason: 'param without grad after backward');
-      }
-    });
+    test(
+      'AFTAttention on GPU: forward + backward populates all param grads',
+      () {
+        final layer = AFTAttention(
+          4,
+          maxSeqLen: 8,
+          masked: true,
+          device: Device.GPU,
+          seed: 42,
+        );
+        final x = Tensor.fromList(
+          [5, 4],
+          _rand(5 * 4, seed: 11),
+          device: Device.GPU,
+          requiresGrad: true,
+        );
+        final y = layer(x);
+        expect(y.shape, [5, 4]);
+        y.sum().backward();
+        for (final p in layer.parameters()) {
+          expect(
+            p.grad,
+            isNotNull,
+            reason: 'param without grad after backward',
+          );
+        }
+      },
+    );
 
     test('AFTLanguageModel on GPU trains a tiny sequence (loss decreases)', () {
       final vocab = 5;

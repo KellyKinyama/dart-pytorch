@@ -1,5 +1,45 @@
 ## Unreleased
 
+- MoE: reference-aligned gating options (sigmoid gate, top-K weight
+  renormalization, sign-based bias update). Verified against
+  DeepSeek-V3 (`inference/model.py`), the aux-loss-free paper
+  (Wang et al. 2024, arXiv:2408.15664), and Mixtral
+  (`transformers/models/mixtral/modeling_mixtral.py`).
+  - New `enum GateFunction { softmax, sigmoid }`. `softmax` (default)
+    keeps the previous behavior; `sigmoid` applies a per-expert
+    independent sigmoid to the router logits, which the aux-loss-free
+    paper reports outperforms softmax under equal load balance.
+  - New `renormalizeTopK` constructor option. When true, the K
+    selected routing weights are divided by their per-token sum so
+    each token's expert contributions sum to 1. Defaults to `true`
+    for `sigmoid` (matches DeepSeek-V3) and `false` for `softmax`
+    (backward-compatible with existing training tests). Mixtral
+    renormalizes unconditionally. Implementation uses two cached
+    all-ones matmul factors — `[E,1]` for the row-sum and `[1,E]`
+    for the row-broadcast — so it works on both CPU and GPU with
+    correct autograd through existing ops.
+  - New `enum BiasUpdateRule { sign, proportional }` and matching
+    constructor option. Default is now `sign`
+    (`b_i += u * sign(mean_load - load_i)`), which is the aux-loss-
+    free paper's main variant (best perplexity per §4.3). The
+    previous proportional rule
+    (`b_i += u * (mean_load - load_i) / mean_load`) is preserved as
+    `BiasUpdateRule.proportional`.
+  - `MoEFeedForward.updateRoutingBias` docstring corrected to reflect
+    the paper's Algorithm 1: update per batch, not per epoch.
+  - Confirmed already-correct behaviors: bias is added ONLY to the
+    top-K sort key and never to the differentiable weights that
+    combine expert outputs; shared experts are added unweighted.
+  - Not changed here (deliberately out of scope): SwiGLU expert body
+    (still `w2(act(w1(x)))`), grouped routing / `route_scale`, and
+    sparse expert execution (all experts still run on all tokens).
+  - `test/moe_test.dart`: +5 tests (`sign bias update rule adjusts by
+    exactly biasUpdateRate`, `proportional bias update rule preserved
+    as opt-in`, `sigmoid gate: forward runs and produces correct
+    shape`, `top-K renormalization: routed contribution weights sum
+    to ~1 per row`, `sigmoid + renormalize: gradients still flow to
+    gateW and experts`). All 284 tests pass.
+
 - AFT on GPU + `relu` backward on GPU + `TransformerLM` /
   `TransformerDecoder` device-threading fix for `LayerNorm`.
   - `TensorAft.aftFull` and `TensorAft.sliceTopLeft` now dispatch to

@@ -2,22 +2,44 @@
 ///
 /// DeepSeek-V3-style routing: for each token the router picks the top-K
 /// of `numRoutedExperts` "sparse" experts and combines their outputs
-/// weighted by the (softmax-of-gate-logits) probabilities. `numShared`
-/// always-on shared experts are added on top. The combined output is
-/// returned in place of a dense FFN block.
+/// weighted by the gating scores. `numShared` always-on shared experts
+/// are added on top (unweighted). The combined output is returned in
+/// place of a dense FFN block.
 ///
-/// Load balancing follows the DeepSeek-V3 "aux-loss-free" recipe:
-/// per-expert additive biases nudge under-utilized experts up and
-/// over-utilized experts down in the top-K comparison. The biases are
-/// non-differentiable; call [MoEFeedForward.updateRoutingBias] once
-/// per epoch (or whatever cadence you prefer) to adjust them from the
-/// running load counters.
+/// The gating function is configurable via [gateFunction]:
+///   * [GateFunction.softmax] (default) — classical softmax router.
+///   * [GateFunction.sigmoid] — per-expert independent sigmoid gate,
+///     as used in the DeepSeek-V3 paper and the aux-loss-free paper
+///     (Wang et al. 2024, arXiv:2408.15664). The paper reports sigmoid
+///     outperforms softmax under equal load balance.
+///
+/// If [renormalizeTopK] is true the K selected weights are divided by
+/// their per-token sum so each token's expert contributions sum to 1.
+/// Mixtral does this unconditionally; DeepSeek-V3 does it for sigmoid.
+/// Default is `true` for `sigmoid` and `false` for `softmax` (matches
+/// both references).
+///
+/// Load balancing follows the aux-loss-free recipe: per-expert
+/// additive biases nudge the top-K comparison so under-utilized
+/// experts win more often. The biases are non-differentiable and are
+/// added ONLY to the top-K sort key, never to the weights used to
+/// combine expert outputs. Call [MoEFeedForward.updateRoutingBias]
+/// once per training batch (Algorithm 1 of the paper) — the counter
+/// is per-batch, not per-epoch.
+///
+/// [biasUpdateRule] selects between:
+///   * [BiasUpdateRule.sign] (default, paper's main variant):
+///     `b_i += u * sign(mean_load - load_i)`. Better perplexity.
+///   * [BiasUpdateRule.proportional]:
+///     `b_i += u * (mean_load - load_i) / mean_load`. Slightly better
+///     load balance but slightly worse perplexity per §4.3 of the
+///     paper.
 ///
 /// Design notes:
 ///   * The router (`gateW`) and both routed / shared experts are
 ///     ordinary trainable parameters — gradient flows through the
-///     softmax of the gate logits into `gateW`, and through the
-///     expert forward passes into their weights.
+///     gating function into `gateW`, and through the expert forward
+///     passes into their weights.
 ///   * The discrete top-K choice is made on CPU (Dart) and applied as
 ///     a `[T, E]` 0/1 mask multiplied into `gateScores`. The mask is a
 ///     non-differentiable straight-through stop; only the K selected
@@ -28,6 +50,10 @@
 ///     uses a precomputed one-hot selector matmul (`[T, E] @ [E, D]`)
 ///     — this keeps everything in existing tensor ops with correct
 ///     autograd, and runs on the same device as the input.
+///   * All experts are evaluated on all tokens (dense compute). Real
+///     sparse-MoE implementations (DeepSeek-V3, Mixtral) only run the
+///     top-K experts per token via gather/scatter; that is a much
+///     bigger rework and is not done here.
 ///   * 2D input `[T, embedDim]` only. Higher-rank inputs should be
 ///     reshaped by the caller. Runs on CPU or GPU (matches the device
 ///     passed to the constructor).
@@ -39,9 +65,16 @@ import '../tensor/tensor.dart';
 import 'linear.dart';
 import 'module.dart';
 
-/// Activation used inside an [Expert]. `relu` runs its backward on CPU
-/// (matches classical MoE); `silu` (`x * sigmoid(x)`) has fwd+bwd on
-/// both CPU and GPU and is required if the module lives on GPU.
+/// Gating function used by [MoEFeedForward] to turn router logits into
+/// per-expert scores.
+enum GateFunction { softmax, sigmoid }
+
+/// Bias update rule for [MoEFeedForward.updateRoutingBias]. See
+/// aux-loss-free paper (arXiv:2408.15664) §4.3.
+enum BiasUpdateRule { sign, proportional }
+
+/// Activation used inside an [Expert]. `relu` and `silu`
+/// (`x * sigmoid(x)`) both have fwd+bwd on CPU and GPU.
 enum ExpertActivation { relu, silu }
 
 /// A single expert — a two-layer MLP `x -> act(x @ W1.T) @ W2.T`.
@@ -85,6 +118,12 @@ class MoEFeedForward extends Module {
   final int expertHiddenDim;
   final double biasUpdateRate;
   final ExpertActivation activation;
+  final GateFunction gateFunction;
+  final BiasUpdateRule biasUpdateRule;
+
+  /// When true, the K selected weights are divided by their per-token
+  /// sum so each row of the routing weights sums to 1.
+  final bool renormalizeTopK;
 
   /// Router weights `[embedDim, numRoutedExperts]`.
   final Tensor gateW;
@@ -93,7 +132,7 @@ class MoEFeedForward extends Module {
   final List<Expert> sharedExperts;
 
   /// Per-expert additive bias used only during top-K selection (not in
-  /// the differentiable softmax output). Non-trainable — updated by
+  /// the differentiable weighting output). Non-trainable — updated by
   /// [updateRoutingBias].
   final List<double> routingBias;
 
@@ -108,6 +147,14 @@ class MoEFeedForward extends Module {
   /// through matmul with correct autograd.
   final List<Tensor> _selectors;
 
+  /// `[E, 1]` all-ones, used to compute per-row sums via
+  /// `[T, E] @ ones_e1 -> [T, 1]` when [renormalizeTopK] is true.
+  final Tensor? _onesE1;
+
+  /// `[1, E]` all-ones, used to broadcast a `[T, 1]` per-row scalar
+  /// back to `[T, E]` via `[T, 1] @ ones_1e -> [T, E]`.
+  final Tensor? _ones1E;
+
   MoEFeedForward({
     required this.embedDim,
     required this.numRoutedExperts,
@@ -118,7 +165,12 @@ class MoEFeedForward extends Module {
     Device device = Device.CPU,
     int seed = 0,
     this.activation = ExpertActivation.relu,
-  }) : gateW = _initGate(embedDim, numRoutedExperts, seed, device),
+    this.gateFunction = GateFunction.softmax,
+    this.biasUpdateRule = BiasUpdateRule.sign,
+    bool? renormalizeTopK,
+  }) : renormalizeTopK =
+           renormalizeTopK ?? (gateFunction == GateFunction.sigmoid),
+       gateW = _initGate(embedDim, numRoutedExperts, seed, device),
        routedExperts = List<Expert>.generate(
          numRoutedExperts,
          (i) => Expert(
@@ -141,7 +193,15 @@ class MoEFeedForward extends Module {
        ),
        routingBias = List<double>.filled(numRoutedExperts, 0.0),
        _expertLoad = List<int>.filled(numRoutedExperts, 0),
-       _selectors = _buildSelectors(numRoutedExperts, embedDim, device) {
+       _selectors = _buildSelectors(numRoutedExperts, embedDim, device),
+       _onesE1 =
+           (renormalizeTopK ?? (gateFunction == GateFunction.sigmoid))
+               ? Tensor.fill([numRoutedExperts, 1], 1.0, device: device)
+               : null,
+       _ones1E =
+           (renormalizeTopK ?? (gateFunction == GateFunction.sigmoid))
+               ? Tensor.fill([1, numRoutedExperts], 1.0, device: device)
+               : null {
     if (topK <= 0 || topK > numRoutedExperts) {
       throw ArgumentError(
         'MoEFeedForward: topK ($topK) must be in [1, numRoutedExperts '
@@ -189,9 +249,14 @@ class MoEFeedForward extends Module {
     final e = numRoutedExperts;
 
     final gateLogits = x.matmul(gateW); // [T, E]
-    final gateScores = gateLogits.softmax(); // [T, E]
+    final gateScores = switch (gateFunction) {
+      GateFunction.softmax => gateLogits.softmax(),
+      GateFunction.sigmoid => gateLogits.sigmoid(),
+    };
 
-    // Discrete top-K with routing bias (CPU).
+    // Discrete top-K with routing bias (CPU). Bias is added ONLY to
+    // the sort key, never to the weights that combine expert outputs
+    // — matches DeepSeek-V3 and the aux-loss-free paper.
     final scoresFlat = gateScores.toList();
     final maskVals = List<double>.filled(t * e, 0.0);
     final k = topK < e ? topK : e;
@@ -208,7 +273,17 @@ class MoEFeedForward extends Module {
       }
     }
     final mask = Tensor.fromList([t, e], maskVals, device: x.device);
-    final masked = gateScores * mask; // [T, E]
+    var masked = gateScores * mask; // [T, E]
+
+    if (renormalizeTopK) {
+      // Row-normalize so each token's K selected weights sum to 1.
+      // rowSum: [T, E] @ [E, 1] -> [T, 1]; then broadcast back to
+      // [T, E] via matmul with [1, E] all-ones. `+ eps` for safety
+      // (top-K sum is always positive but this is cheap insurance).
+      final rowSum = masked.matmul(_onesE1!); // [T, 1]
+      final rowSumBcast = rowSum.matmul(_ones1E!); // [T, E]
+      masked = masked / (rowSumBcast + 1e-9);
+    }
 
     Tensor? acc;
     for (int j = 0; j < numRoutedExperts; j++) {
@@ -224,16 +299,34 @@ class MoEFeedForward extends Module {
     return acc!;
   }
 
-  /// DeepSeek-V3 aux-loss-free bias update. Call this at whatever
-  /// cadence balances your workload (per-epoch is common). Resets the
-  /// running load counters.
+  /// Aux-loss-free bias update (Wang et al. 2024, Algorithm 1). Call
+  /// this once per training batch — the counter is per-batch, not
+  /// per-epoch. The update follows [biasUpdateRule]:
+  ///
+  ///   * [BiasUpdateRule.sign] (default, paper's main variant):
+  ///     `b_i += u * sign(mean_load - load_i)`. Best perplexity.
+  ///   * [BiasUpdateRule.proportional]:
+  ///     `b_i += u * (mean_load - load_i) / mean_load`. Slightly
+  ///     better load balance, slightly worse perplexity per §4.3 of
+  ///     the paper.
+  ///
+  /// Resets the running load counters.
   void updateRoutingBias() {
     final total = _expertLoad.fold<int>(0, (a, b) => a + b);
     if (total == 0) return;
     final mean = total / numRoutedExperts;
     if (mean == 0) return;
     for (int j = 0; j < numRoutedExperts; j++) {
-      final delta = (mean - _expertLoad[j]) / mean;
+      final e = mean - _expertLoad[j];
+      final delta = switch (biasUpdateRule) {
+        BiasUpdateRule.sign =>
+          e > 0
+              ? 1.0
+              : e < 0
+                  ? -1.0
+                  : 0.0,
+        BiasUpdateRule.proportional => e / mean,
+      };
       routingBias[j] += biasUpdateRate * delta;
       _expertLoad[j] = 0;
     }

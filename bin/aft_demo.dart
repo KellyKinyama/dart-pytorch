@@ -94,9 +94,11 @@ _Result _run(
   // Greedy decode from `promptIds`.
   final buf = List<int>.from(promptIds);
   for (int i = 0; i < decodeSteps; i++) {
-    final ids = Tensor.fromList([
-      buf.length,
-    ], buf.map((v) => v.toDouble()).toList(), device: device);
+    final ids = Tensor.fromList(
+      [buf.length],
+      buf.map((v) => v.toDouble()).toList(),
+      device: device,
+    );
     final logits = forward(ids).toList();
     final off = (buf.length - 1) * _vocab;
     int best = 0;

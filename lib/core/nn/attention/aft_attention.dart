@@ -65,12 +65,7 @@ class AFTAttention extends Module {
       n * n,
       (_) => (rng.nextDouble() * 2 - 1) * 0.02,
     );
-    return Tensor.fromList(
-      [n, n],
-      data,
-      requiresGrad: true,
-      device: device,
-    );
+    return Tensor.fromList([n, n], data, requiresGrad: true, device: device);
   }
 
   /// Forward pass. `x` is `[T, embedDim]` (2D single sequence).

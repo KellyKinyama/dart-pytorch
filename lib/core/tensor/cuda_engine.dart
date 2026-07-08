@@ -171,11 +171,7 @@ typedef DAftBwd =
 
 // slice_top_left_forward: (x, rows, cols) -> out
 typedef CSliceFwd =
-    ffi.Pointer<ffi.Void> Function(
-      ffi.Pointer<ffi.Void>,
-      ffi.Int32,
-      ffi.Int32,
-    );
+    ffi.Pointer<ffi.Void> Function(ffi.Pointer<ffi.Void>, ffi.Int32, ffi.Int32);
 typedef DSliceFwd =
     ffi.Pointer<ffi.Void> Function(ffi.Pointer<ffi.Void>, int, int);
 
@@ -325,9 +321,7 @@ class CudaEngine {
       'embedding_backward',
     );
 
-    aftFullForward = _lib.lookupFunction<CAftFwd, DAftFwd>(
-      'aft_full_forward',
-    );
+    aftFullForward = _lib.lookupFunction<CAftFwd, DAftFwd>('aft_full_forward');
     aftFullBackward = _lib.lookupFunction<CAftBwd, DAftBwd>(
       'aft_full_backward',
     );
