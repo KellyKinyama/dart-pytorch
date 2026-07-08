@@ -1,5 +1,39 @@
 ## Unreleased
 
+- `GPT` — GPT-2 style causal language model, pure composition on top
+  of `TransformerEncoder` (no new kernels).
+  - `GPTConfig({vocabSize, maxCtx, embedDim, numLayers, numHeads,
+    ffnDim, dropoutP, tieWeights = true, device, seed})` — small
+    config object; `ffnDim` defaults to `4 * embedDim`.
+  - `GPT(config)` — token embedding + `LearnedPositionalEmbedding` +
+    embedding `Dropout` + `TransformerEncoder(finalNorm: true)` +
+    output head. Head is **weight-tied** to the token embedding by
+    default (`h @ W_e.T`, no separate `Linear`, no head bias). Set
+    `tieWeights: false` to allocate a separate `Linear(embedDim,
+    vocabSize, bias: false)` head. Because the tied weight tensor
+    participates in both the embedding lookup and the head matmul,
+    its gradient accumulates from both paths through the existing
+    autograd graph — no bookkeeping needed.
+  - `GPT.generate(prompt, {maxNewTokens, temperature, topK, rng})` —
+    autoregressive sampler. `temperature <= 0` and `topK == 1` both
+    collapse to greedy argmax; otherwise samples from a
+    temperature-scaled, optionally top-k-filtered categorical.
+    Truncates context to the trailing `maxCtx` tokens each step.
+    Returns the full `prompt + generated` list of token indices
+    (float32 convention). Puts the model in `eval()` for the duration
+    and restores the previous `training` flag on exit.
+  - `bin/gpt_demo.dart` — runnable char-level GPT demo. Overfits
+    `"to be or not to be that is the question "` in a couple hundred
+    Adam steps and prints greedy / T=0.8 / top-k=3 completions.
+  - 12 new tests in `test/gpt_test.dart` covering forward shape,
+    input validation, tied vs untied parameter counts, gradient
+    accumulation through the tied weight, `train()/eval()`
+    propagation into the embedding dropout and every block, an
+    overfit convergence check, and `generate()`: length, greedy
+    determinism, `topK=1` == argmax invariant, RNG reproducibility,
+    context-window truncation, and training-flag restoration.
+    Suite grows to 161 tests, all green.
+
 - `TransformerEncoder` + `TransformerLM` + char-level LM demo — a full
   stackable transformer and a minimal language model built entirely by
   composition over the existing primitives (no new CUDA kernels).

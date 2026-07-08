@@ -13,13 +13,16 @@ backward CPU-only for now). A small `nn.Module` scaffolding exposes
 `Linear`, `LayerNorm`, `Embedding`, `Dropout`, `MultiHeadAttention`,
 a pre-LN `TransformerBlock`, `TransformerEncoder` (stacked blocks with
 optional final LN), `TransformerLM` (token embed + positional encoding
-+ causal encoder + linear head), and both `SinusoidalPositionalEncoding`
++ causal encoder + linear head), `GPT` (weight-tied GPT-2 style causal
+LM with learned position embeddings, embedding dropout, and a
+`generate()` method with greedy / temperature / top-k sampling), and
+both `SinusoidalPositionalEncoding`
 / `LearnedPositionalEmbedding` as trainable / regularization layers
 with `train()` / `eval()` mode toggling; `SGD` / `Adam` optimizers
 update parameters in place on their native device, and `clipGradNorm`
-bounds the global gradient L2. A runnable char-level LM demo at
-`bin/lm_demo.dart` overfits a short refrain end-to-end (`dart run
-bin/lm_demo.dart`).
+bounds the global gradient L2. Runnable char-level demos at
+`bin/lm_demo.dart` and `bin/gpt_demo.dart` overfit a short refrain
+end-to-end (`dart run bin/gpt_demo.dart`).
 
 ## Layout
 
@@ -49,6 +52,7 @@ lib/
     masks.dart                   # causalMask(n) additive attention mask helper
     transformer_encoder.dart     # stacked TransformerBlocks + optional final LN
     transformer_lm.dart          # token embed + posEnc + causal encoder + head
+    gpt.dart                     # GPT-2 style: tied weights, learned PE, generate()
   core/optim/
     optimizer.dart               # abstract Optimizer base (step, zeroGrad)
     sgd.dart                     # SGD with optional momentum + weight decay

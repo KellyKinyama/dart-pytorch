@@ -17,6 +17,7 @@ export 'core/nn/positional.dart';
 export 'core/nn/masks.dart';
 export 'core/nn/transformer_encoder.dart';
 export 'core/nn/transformer_lm.dart';
+export 'core/nn/gpt.dart';
 export 'core/optim/optimizer.dart';
 export 'core/optim/sgd.dart';
 export 'core/optim/adam.dart';
