@@ -36,21 +36,21 @@ class TransformerDecoder extends Module {
     bool finalNorm = true,
     Device device = Device.CPU,
     int seed = 0,
-  })  : kvEmbedDim = kvEmbedDim ?? embedDim,
-        ffnDim = ffnDim ?? embedDim * 4,
-        blocks = List<TransformerDecoderBlock>.generate(
-          numLayers,
-          (i) => TransformerDecoderBlock(
-            embedDim,
-            numHeads,
-            kvEmbedDim: kvEmbedDim,
-            ffnDim: ffnDim,
-            dropoutP: dropoutP,
-            device: device,
-            seed: seed + i * 10000,
-          ),
-        ),
-        finalNorm = finalNorm ? LayerNorm(embedDim) : null;
+  }) : kvEmbedDim = kvEmbedDim ?? embedDim,
+       ffnDim = ffnDim ?? embedDim * 4,
+       blocks = List<TransformerDecoderBlock>.generate(
+         numLayers,
+         (i) => TransformerDecoderBlock(
+           embedDim,
+           numHeads,
+           kvEmbedDim: kvEmbedDim,
+           ffnDim: ffnDim,
+           dropoutP: dropoutP,
+           device: device,
+           seed: seed + i * 10000,
+         ),
+       ),
+       finalNorm = finalNorm ? LayerNorm(embedDim) : null;
 
   Tensor call(Tensor x, Tensor memory, {Tensor? selfMask}) {
     var h = x;
@@ -65,13 +65,10 @@ class TransformerDecoder extends Module {
 
   @override
   List<Tensor> parameters() => [
-        for (final b in blocks) ...b.parameters(),
-        if (finalNorm != null) ...finalNorm!.parameters(),
-      ];
+    for (final b in blocks) ...b.parameters(),
+    if (finalNorm != null) ...finalNorm!.parameters(),
+  ];
 
   @override
-  List<Module> submodules() => [
-        ...blocks,
-        if (finalNorm != null) finalNorm!,
-      ];
+  List<Module> submodules() => [...blocks, if (finalNorm != null) finalNorm!];
 }

@@ -46,21 +46,18 @@ void main() {
       const skv = 4;
       final mha = MultiHeadCrossAttention(d, dkv, heads, seed: 2);
       final q = Tensor.fromList([b, sq, d], _rand(b * sq * d, seed: 20));
-      final kv = Tensor.fromList(
-        [b, skv, dkv],
-        _rand(b * skv * dkv, seed: 21),
-      );
+      final kv = Tensor.fromList([b, skv, dkv], _rand(b * skv * dkv, seed: 21));
       final out = mha(q, kv);
       expect(out.shape, [b, sq, d]);
       for (int i = 0; i < b; i++) {
-        final qi = Tensor.fromList(
-          [sq, d],
-          q.toList().sublist(i * sq * d, (i + 1) * sq * d),
-        );
-        final kvi = Tensor.fromList(
-          [skv, dkv],
-          kv.toList().sublist(i * skv * dkv, (i + 1) * skv * dkv),
-        );
+        final qi = Tensor.fromList([
+          sq,
+          d,
+        ], q.toList().sublist(i * sq * d, (i + 1) * sq * d));
+        final kvi = Tensor.fromList([
+          skv,
+          dkv,
+        ], kv.toList().sublist(i * skv * dkv, (i + 1) * skv * dkv));
         final ref = mha(qi, kvi).toList();
         final got = out.toList().sublist(i * sq * d, (i + 1) * sq * d);
         _closeList(got, ref);
@@ -84,8 +81,7 @@ void main() {
   });
 
   group('TransformerDecoderBlock', () {
-    test('2D forward preserves shape and reduces loss under training',
-        () {
+    test('2D forward preserves shape and reduces loss under training', () {
       const d = 8;
       const heads = 2;
       const sq = 4;
@@ -106,10 +102,7 @@ void main() {
       const skv = 4;
       final block = TransformerDecoderBlock(d, heads, seed: 5);
       final x = Tensor.fromList([b, sq, d], _rand(b * sq * d, seed: 40));
-      final mem = Tensor.fromList(
-        [b, skv, d],
-        _rand(b * skv * d, seed: 41),
-      );
+      final mem = Tensor.fromList([b, skv, d], _rand(b * skv * d, seed: 41));
       final mask = causalMask(sq);
       final out = block(x, mem, selfMask: mask);
       expect(out.shape, [b, sq, d]);
@@ -117,8 +110,7 @@ void main() {
   });
 
   group('TransformerDecoder stack', () {
-    test('stacks blocks; matches manual composition on a single sequence',
-        () {
+    test('stacks blocks; matches manual composition on a single sequence', () {
       const d = 8;
       const heads = 2;
       const layers = 2;
@@ -177,14 +169,12 @@ void main() {
 
       // Per-sample parity.
       for (int i = 0; i < 2; i++) {
-        final si = Tensor.fromList(
-          [5],
-          src.toList().sublist(i * 5, (i + 1) * 5),
-        );
-        final ti = Tensor.fromList(
-          [4],
-          tgt.toList().sublist(i * 4, (i + 1) * 4),
-        );
+        final si = Tensor.fromList([
+          5,
+        ], src.toList().sublist(i * 5, (i + 1) * 5));
+        final ti = Tensor.fromList([
+          4,
+        ], tgt.toList().sublist(i * 4, (i + 1) * 4));
         final ref = m(si, ti).toList();
         final got = logits.toList().sublist(i * 4 * 10, (i + 1) * 4 * 10);
         _closeList(got, ref);
@@ -217,8 +207,11 @@ void main() {
         opt.step();
       }
       final l1 = m(src, tgtIn).crossEntropy(tgtOut).mean().toList()[0];
-      expect(l1, lessThan(l0 * 0.5),
-          reason: 'expected loss to at least halve (before=$l0, after=$l1)');
+      expect(
+        l1,
+        lessThan(l0 * 0.5),
+        reason: 'expected loss to at least halve (before=$l0, after=$l1)',
+      );
     });
 
     test('rejects rank mismatch between src and tgt', () {

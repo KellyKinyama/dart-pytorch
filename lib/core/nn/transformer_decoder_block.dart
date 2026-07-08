@@ -46,39 +46,39 @@ class TransformerDecoderBlock extends Module {
     double dropoutP = 0.0,
     Device device = Device.CPU,
     int seed = 0,
-  })  : kvEmbedDim = kvEmbedDim ?? embedDim,
-        ffnDim = ffnDim ?? embedDim * 4,
-        ln1 = LayerNorm(embedDim),
-        ln2 = LayerNorm(embedDim),
-        ln3 = LayerNorm(embedDim),
-        selfAttn = MultiHeadAttention(
-          embedDim,
-          numHeads,
-          dropoutP: dropoutP,
-          device: device,
-          seed: seed,
-        ),
-        crossAttn = MultiHeadCrossAttention(
-          embedDim,
-          kvEmbedDim ?? embedDim,
-          numHeads,
-          dropoutP: dropoutP,
-          device: device,
-          seed: seed + 6000,
-        ),
-        ffn1 = Linear(
-          embedDim,
-          ffnDim ?? embedDim * 4,
-          device: device,
-          seed: seed + 4000,
-        ),
-        ffn2 = Linear(
-          ffnDim ?? embedDim * 4,
-          embedDim,
-          device: device,
-          seed: seed + 5000,
-        ),
-        dropout = Dropout(dropoutP);
+  }) : kvEmbedDim = kvEmbedDim ?? embedDim,
+       ffnDim = ffnDim ?? embedDim * 4,
+       ln1 = LayerNorm(embedDim),
+       ln2 = LayerNorm(embedDim),
+       ln3 = LayerNorm(embedDim),
+       selfAttn = MultiHeadAttention(
+         embedDim,
+         numHeads,
+         dropoutP: dropoutP,
+         device: device,
+         seed: seed,
+       ),
+       crossAttn = MultiHeadCrossAttention(
+         embedDim,
+         kvEmbedDim ?? embedDim,
+         numHeads,
+         dropoutP: dropoutP,
+         device: device,
+         seed: seed + 6000,
+       ),
+       ffn1 = Linear(
+         embedDim,
+         ffnDim ?? embedDim * 4,
+         device: device,
+         seed: seed + 4000,
+       ),
+       ffn2 = Linear(
+         ffnDim ?? embedDim * 4,
+         embedDim,
+         device: device,
+         seed: seed + 5000,
+       ),
+       dropout = Dropout(dropoutP);
 
   /// Forward. `x` is the decoder input (target-side hidden state).
   /// `memory` is the encoder output. `selfMask` is the causal mask
@@ -92,16 +92,24 @@ class TransformerDecoderBlock extends Module {
 
   @override
   List<Tensor> parameters() => [
-        ...ln1.parameters(),
-        ...ln2.parameters(),
-        ...ln3.parameters(),
-        ...selfAttn.parameters(),
-        ...crossAttn.parameters(),
-        ...ffn1.parameters(),
-        ...ffn2.parameters(),
-      ];
+    ...ln1.parameters(),
+    ...ln2.parameters(),
+    ...ln3.parameters(),
+    ...selfAttn.parameters(),
+    ...crossAttn.parameters(),
+    ...ffn1.parameters(),
+    ...ffn2.parameters(),
+  ];
 
   @override
-  List<Module> submodules() =>
-      [ln1, ln2, ln3, selfAttn, crossAttn, ffn1, ffn2, dropout];
+  List<Module> submodules() => [
+    ln1,
+    ln2,
+    ln3,
+    selfAttn,
+    crossAttn,
+    ffn1,
+    ffn2,
+    dropout,
+  ];
 }

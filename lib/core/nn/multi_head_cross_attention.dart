@@ -43,45 +43,45 @@ class MultiHeadCrossAttention extends Module {
     double dropoutP = 0.0,
     Device device = Device.CPU,
     int seed = 0,
-  })  : headDim = embedDim ~/ numHeads,
-        wq = List<Linear>.generate(
-          numHeads,
-          (h) => Linear(
-            embedDim,
-            embedDim ~/ numHeads,
-            bias: bias,
-            device: device,
-            seed: seed + h,
-          ),
-        ),
-        wk = List<Linear>.generate(
-          numHeads,
-          (h) => Linear(
-            kvEmbedDim,
-            embedDim ~/ numHeads,
-            bias: bias,
-            device: device,
-            seed: seed + 1000 + h,
-          ),
-        ),
-        wv = List<Linear>.generate(
-          numHeads,
-          (h) => Linear(
-            kvEmbedDim,
-            embedDim ~/ numHeads,
-            bias: bias,
-            device: device,
-            seed: seed + 2000 + h,
-          ),
-        ),
-        wo = Linear(
-          embedDim,
-          embedDim,
-          bias: bias,
-          device: device,
-          seed: seed + 3000,
-        ),
-        attnDropout = dropoutP > 0.0 ? Dropout(dropoutP) : null {
+  }) : headDim = embedDim ~/ numHeads,
+       wq = List<Linear>.generate(
+         numHeads,
+         (h) => Linear(
+           embedDim,
+           embedDim ~/ numHeads,
+           bias: bias,
+           device: device,
+           seed: seed + h,
+         ),
+       ),
+       wk = List<Linear>.generate(
+         numHeads,
+         (h) => Linear(
+           kvEmbedDim,
+           embedDim ~/ numHeads,
+           bias: bias,
+           device: device,
+           seed: seed + 1000 + h,
+         ),
+       ),
+       wv = List<Linear>.generate(
+         numHeads,
+         (h) => Linear(
+           kvEmbedDim,
+           embedDim ~/ numHeads,
+           bias: bias,
+           device: device,
+           seed: seed + 2000 + h,
+         ),
+       ),
+       wo = Linear(
+         embedDim,
+         embedDim,
+         bias: bias,
+         device: device,
+         seed: seed + 3000,
+       ),
+       attnDropout = dropoutP > 0.0 ? Dropout(dropoutP) : null {
     if (embedDim % numHeads != 0) {
       throw ArgumentError(
         'MultiHeadCrossAttention: embedDim ($embedDim) must be '
@@ -176,18 +176,18 @@ class MultiHeadCrossAttention extends Module {
 
   @override
   List<Tensor> parameters() => [
-        for (final l in wq) ...l.parameters(),
-        for (final l in wk) ...l.parameters(),
-        for (final l in wv) ...l.parameters(),
-        ...wo.parameters(),
-      ];
+    for (final l in wq) ...l.parameters(),
+    for (final l in wk) ...l.parameters(),
+    for (final l in wv) ...l.parameters(),
+    ...wo.parameters(),
+  ];
 
   @override
   List<Module> submodules() => [
-        ...wq,
-        ...wk,
-        ...wv,
-        wo,
-        if (attnDropout != null) attnDropout!,
-      ];
+    ...wq,
+    ...wk,
+    ...wv,
+    wo,
+    if (attnDropout != null) attnDropout!,
+  ];
 }

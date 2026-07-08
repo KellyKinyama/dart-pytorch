@@ -58,33 +58,45 @@ class EncoderDecoderTransformer extends Module {
     double dropoutP = 0.0,
     Device device = Device.CPU,
     int seed = 0,
-  })  : sourceEmb =
-            Embedding(sourceVocabSize, embedDim, device: device, seed: seed),
-        targetEmb = Embedding(targetVocabSize, embedDim,
-            device: device, seed: seed + 500000),
-        srcPosEnc = SinusoidalPositionalEncoding(embedDim),
-        tgtPosEnc = SinusoidalPositionalEncoding(embedDim),
-        encoder = TransformerEncoder(
-          numLayers,
-          embedDim,
-          numHeads,
-          ffnDim: ffnDim,
-          dropoutP: dropoutP,
-          device: device,
-          seed: seed + 100000,
-        ),
-        decoder = TransformerDecoder(
-          numLayers,
-          embedDim,
-          numHeads,
-          kvEmbedDim: embedDim,
-          ffnDim: ffnDim,
-          dropoutP: dropoutP,
-          device: device,
-          seed: seed + 700000,
-        ),
-        head = Linear(embedDim, targetVocabSize,
-            device: device, seed: seed + 900000);
+  }) : sourceEmb = Embedding(
+         sourceVocabSize,
+         embedDim,
+         device: device,
+         seed: seed,
+       ),
+       targetEmb = Embedding(
+         targetVocabSize,
+         embedDim,
+         device: device,
+         seed: seed + 500000,
+       ),
+       srcPosEnc = SinusoidalPositionalEncoding(embedDim),
+       tgtPosEnc = SinusoidalPositionalEncoding(embedDim),
+       encoder = TransformerEncoder(
+         numLayers,
+         embedDim,
+         numHeads,
+         ffnDim: ffnDim,
+         dropoutP: dropoutP,
+         device: device,
+         seed: seed + 100000,
+       ),
+       decoder = TransformerDecoder(
+         numLayers,
+         embedDim,
+         numHeads,
+         kvEmbedDim: embedDim,
+         ffnDim: ffnDim,
+         dropoutP: dropoutP,
+         device: device,
+         seed: seed + 700000,
+       ),
+       head = Linear(
+         embedDim,
+         targetVocabSize,
+         device: device,
+         seed: seed + 900000,
+       );
 
   /// Encoder-only pass returning "memory" for the decoder.
   Tensor encode(Tensor srcTokens) {
@@ -151,23 +163,23 @@ class EncoderDecoderTransformer extends Module {
 
   @override
   List<Tensor> parameters() => [
-        ...sourceEmb.parameters(),
-        ...targetEmb.parameters(),
-        ...srcPosEnc.parameters(),
-        ...tgtPosEnc.parameters(),
-        ...encoder.parameters(),
-        ...decoder.parameters(),
-        ...head.parameters(),
-      ];
+    ...sourceEmb.parameters(),
+    ...targetEmb.parameters(),
+    ...srcPosEnc.parameters(),
+    ...tgtPosEnc.parameters(),
+    ...encoder.parameters(),
+    ...decoder.parameters(),
+    ...head.parameters(),
+  ];
 
   @override
   List<Module> submodules() => [
-        sourceEmb,
-        targetEmb,
-        srcPosEnc,
-        tgtPosEnc,
-        encoder,
-        decoder,
-        head,
-      ];
+    sourceEmb,
+    targetEmb,
+    srcPosEnc,
+    tgtPosEnc,
+    encoder,
+    decoder,
+    head,
+  ];
 }
