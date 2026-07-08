@@ -9,8 +9,16 @@ part of 'tensor.dart';
 /// the `softmax_backward` kernel for one fused pass.
 extension TensorSoftmax on Tensor {
   Tensor softmax() {
+    // Accept any rank >= 2: treat leading dims as batch, softmax along
+    // the last dim, and restore the input shape.
+    if (shape.length > 2) {
+      final cols = shape.last;
+      final rows = length ~/ cols;
+      final original = List<int>.of(shape);
+      return reshape([rows, cols]).softmax().reshape(original);
+    }
     if (shape.length != 2) {
-      throw ArgumentError('softmax requires 2D input; got $shape');
+      throw ArgumentError('softmax requires rank >= 2 input; got $shape');
     }
     final r = shape[0];
     final c = shape[1];
@@ -90,8 +98,22 @@ extension TensorSoftmax on Tensor {
 /// (the classic fused form; numerically stable and single-pass).
 extension TensorCrossEntropy on Tensor {
   Tensor crossEntropy(Tensor targets) {
+    // 3D logits [B, S, V] + N-D targets [B, S, ...] are supported by
+    // flattening the leading dims. Output is per-sample loss of shape
+    // [prod(leading), 1] — the caller reduces via .mean() / .sum().
+    if (shape.length > 2) {
+      final v = shape.last;
+      final n = length ~/ v;
+      if (targets.length != n) {
+        throw ArgumentError(
+          'crossEntropy: expected $n target values for logits $shape; '
+          'got targets ${targets.shape}',
+        );
+      }
+      return reshape([n, v]).crossEntropy(targets.reshape([n]));
+    }
     if (shape.length != 2) {
-      throw ArgumentError('crossEntropy requires 2D logits; got $shape');
+      throw ArgumentError('crossEntropy requires rank >= 2 logits; got $shape');
     }
     final r = shape[0];
     final c = shape[1];

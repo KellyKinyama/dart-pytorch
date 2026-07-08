@@ -433,6 +433,34 @@ extension TensorOps on Tensor {
   // Rearrangement.
   // ---------------------------------------------------------------------
 
+  /// Return a view of this tensor with a new shape. The product of the
+  /// new shape must equal [length]. CPU tensors share the underlying
+  /// `Float32List` (zero-copy); GPU tensors copy their contents to a
+  /// fresh handle to keep ownership simple.
+  ///
+  /// Backward reshapes the outgoing gradient back to the source shape.
+  Tensor reshape(List<int> newShape) {
+    final n = newShape.fold<int>(1, (a, b) => a * b);
+    if (n != length) {
+      throw ArgumentError(
+        'reshape: new shape $newShape has $n elements, expected $length',
+      );
+    }
+    final out = device == Device.CPU
+        ? Tensor._cpu(List<int>.of(newShape), _cpuData!)
+        : Tensor._gpu(
+            List<int>.of(newShape),
+            Tensor._uploadToGpu(newShape, toList()),
+          );
+    if (requiresGrad) {
+      final x = this;
+      out._setBackward([x], () {
+        x._accumulateGrad(out._grad!.reshape(x.shape));
+      });
+    }
+    return out;
+  }
+
   /// 2D transpose. Backward: `dX = dOut.transpose()`.
   Tensor transpose() {
     if (shape.length != 2) {

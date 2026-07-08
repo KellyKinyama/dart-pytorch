@@ -43,11 +43,7 @@ void main() {
     test('honours minCount by stopping early on tiny corpora', () {
       // Each character occurs only once in a short unique string —
       // no adjacent pair occurs >= minCount times, so no merges.
-      final t = BpeTokenizer.train(
-        'abcdef',
-        targetVocabSize: 300,
-        minCount: 2,
-      );
+      final t = BpeTokenizer.train('abcdef', targetVocabSize: 300, minCount: 2);
       expect(t.merges, isEmpty);
       expect(t.vocabSize, equals(256));
     });
@@ -125,13 +121,17 @@ void main() {
 
     test('rejects unknown kind / version', () {
       expect(
-        () => BpeTokenizer.fromJson('{"kind":"not-bpe","version":1,'
-            '"vocabSize":256,"merges":[]}'),
+        () => BpeTokenizer.fromJson(
+          '{"kind":"not-bpe","version":1,'
+          '"vocabSize":256,"merges":[]}',
+        ),
         throwsArgumentError,
       );
       expect(
-        () => BpeTokenizer.fromJson('{"kind":"byte-bpe","version":99,'
-            '"vocabSize":256,"merges":[]}'),
+        () => BpeTokenizer.fromJson(
+          '{"kind":"byte-bpe","version":99,'
+          '"vocabSize":256,"merges":[]}',
+        ),
         throwsArgumentError,
       );
     });

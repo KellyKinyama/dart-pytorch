@@ -29,20 +29,49 @@ class SinusoidalPositionalEncoding extends Module {
 
   SinusoidalPositionalEncoding(this.embedDim);
 
-  /// Adds sinusoidal PE to `x`. `startPos` is the position of the
-  /// first row of `x` (used by autoregressive / cached inference so
-  /// that a single new token gets the encoding for its true position
-  /// rather than position 0).
+  /// Adds sinusoidal PE to `x`. Accepts `[seqLen, embedDim]` or a
+  /// batched `[batch, seqLen, embedDim]`. `startPos` is the position
+  /// of the first row of `x` (used by autoregressive / cached
+  /// inference so that a single new token gets the encoding for its
+  /// true position rather than position 0).
   Tensor call(Tensor x, {int startPos = 0}) {
-    if (x.shape.length != 2 || x.shape[1] != embedDim) {
+    if (x.shape.isEmpty || x.shape.last != embedDim) {
       throw ArgumentError(
-        'SinusoidalPositionalEncoding: expected [*, $embedDim]; '
+        'SinusoidalPositionalEncoding: expected [..., $embedDim]; '
         'got ${x.shape}',
+      );
+    }
+    if (x.shape.length == 3) {
+      final b = x.shape[0];
+      final s = x.shape[1];
+      final peBS = _computePEBatched(b, s, startPos, x.device);
+      return (x.reshape([b * s, embedDim]) + peBS).reshape([b, s, embedDim]);
+    }
+    if (x.shape.length != 2) {
+      throw ArgumentError(
+        'SinusoidalPositionalEncoding: expected rank 2 or 3; got ${x.shape}',
       );
     }
     final n = x.shape[0];
     final pe = _computePE(n, startPos, x.device);
     return x + pe;
+  }
+
+  Tensor _computePEBatched(int b, int s, int startPos, Device device) {
+    final data = Float32List(b * s * embedDim);
+    for (int row = 0; row < s; row++) {
+      final pos = row + startPos;
+      for (int i = 0; i < embedDim; i++) {
+        final pairIdx = i ~/ 2;
+        final freq = math.pow(10000.0, -2.0 * pairIdx / embedDim);
+        final angle = pos * freq;
+        final v = (i.isEven ? math.sin(angle) : math.cos(angle));
+        for (int batch = 0; batch < b; batch++) {
+          data[(batch * s + row) * embedDim + i] = v.toDouble();
+        }
+      }
+    }
+    return Tensor.fromList([b * s, embedDim], data, device: device);
   }
 
   Tensor _computePE(int n, int startPos, Device device) {
@@ -79,10 +108,32 @@ class LearnedPositionalEmbedding extends Module {
   }) : table = Embedding(maxLen, embedDim, device: device, seed: seed);
 
   Tensor call(Tensor x, {int startPos = 0}) {
-    if (x.shape.length != 2 || x.shape[1] != embedDim) {
+    if (x.shape.isEmpty || x.shape.last != embedDim) {
       throw ArgumentError(
-        'LearnedPositionalEmbedding: expected [*, $embedDim]; '
+        'LearnedPositionalEmbedding: expected [..., $embedDim]; '
         'got ${x.shape}',
+      );
+    }
+    if (x.shape.length == 3) {
+      final b = x.shape[0];
+      final s = x.shape[1];
+      if (startPos + s > maxLen) {
+        throw ArgumentError(
+          'LearnedPositionalEmbedding: startPos+seqLen ${startPos + s} '
+          'exceeds maxLen $maxLen',
+        );
+      }
+      // Same positions across every batch element => shape [B, S].
+      final positions = Tensor.fromList(
+        [b, s],
+        List<double>.generate(b * s, (i) => ((i % s) + startPos).toDouble()),
+        device: x.device,
+      );
+      return x + table(positions);
+    }
+    if (x.shape.length != 2) {
+      throw ArgumentError(
+        'LearnedPositionalEmbedding: expected rank 2 or 3; got ${x.shape}',
       );
     }
     final n = x.shape[0];

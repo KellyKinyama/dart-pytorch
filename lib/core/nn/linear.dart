@@ -61,12 +61,28 @@ class Linear extends Module {
     return Tensor.fromList([1, outF], vals, requiresGrad: true, device: device);
   }
 
-  /// Forward: `x @ W.T + b`. `x` shape `[N, inFeatures]`, returns
-  /// `[N, outFeatures]`. When `bias == null`, the affine term is skipped.
+  /// Forward: `x @ W.T + b`. `x` shape `[..., inFeatures]`, returns
+  /// `[..., outFeatures]`. Rank-3 or higher input is handled by
+  /// reshaping the leading dims into a single row axis and back.
   Tensor call(Tensor x) {
-    if (x.shape.length != 2 || x.shape[1] != inFeatures) {
+    if (x.shape.isEmpty || x.shape.last != inFeatures) {
       throw ArgumentError(
-        'Linear: expected input [*, $inFeatures]; got ${x.shape}',
+        'Linear: expected input [..., $inFeatures]; got ${x.shape}',
+      );
+    }
+    if (x.shape.length > 2) {
+      final rows = x.length ~/ inFeatures;
+      final original = List<int>.of(x.shape);
+      final flat = x.reshape([rows, inFeatures]);
+      var y = flat.matmul(weight.transpose());
+      if (bias != null) {
+        y = y + bias!;
+      }
+      return y.reshape([...original.sublist(0, original.length - 1), outFeatures]);
+    }
+    if (x.shape.length != 2) {
+      throw ArgumentError(
+        'Linear: expected input [..., $inFeatures]; got ${x.shape}',
       );
     }
     var y = x.matmul(weight.transpose());

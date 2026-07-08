@@ -41,11 +41,15 @@ void main() {
 
   // ---------------- BPE tokenizer ----------------
   final tok = BpeTokenizer.train(_corpus, targetVocabSize: 320);
-  print('BPE vocab size    : ${tok.vocabSize} '
-      '(${tok.merges.length} merges over 256 bytes)');
+  print(
+    'BPE vocab size    : ${tok.vocabSize} '
+    '(${tok.merges.length} merges over 256 bytes)',
+  );
   final ids = tok.encode(_corpus);
-  print('encoded length    : ${ids.length} tokens '
-      '(compression x${(_corpus.length / ids.length).toStringAsFixed(2)})');
+  print(
+    'encoded length    : ${ids.length} tokens '
+    '(compression x${(_corpus.length / ids.length).toStringAsFixed(2)})',
+  );
   final roundTrip = tok.decode(ids);
   if (roundTrip != _corpus) {
     stderr.writeln('!! BPE round-trip mismatch');
@@ -68,8 +72,10 @@ void main() {
     ),
   );
   final numScalars = gpt.parameters().fold<int>(0, (a, p) => a + p.length);
-  print('model params      : ${gpt.parameters().length} tensors, '
-      '$numScalars scalars (weight-tied)');
+  print(
+    'model params      : ${gpt.parameters().length} tensors, '
+    '$numScalars scalars (weight-tied)',
+  );
   print('context length    : $maxCtx\n');
 
   // ---------------- Optimizer + scheduler ----------------
@@ -84,8 +90,10 @@ void main() {
     maxLr: 3e-3,
     minLr: 3e-4,
   );
-  print('optimizer         : Adam + LinearWarmupCosineDecay '
-      '(warmup=$warmupSteps, total=$totalSteps, maxLr=3e-3, minLr=3e-4)');
+  print(
+    'optimizer         : Adam + LinearWarmupCosineDecay '
+    '(warmup=$warmupSteps, total=$totalSteps, maxLr=3e-3, minLr=3e-4)',
+  );
   print('micro-batch size  : $microBatch (via gradient accumulation)\n');
 
   // ---------------- Training ----------------
@@ -105,14 +113,12 @@ void main() {
     for (int m = 0; m < microBatch; m++) {
       final start = rng.nextInt(trainable);
       final window = ids.sublist(start, start + maxCtx + 1);
-      final x = Tensor.fromList(
-        [maxCtx],
-        window.sublist(0, maxCtx).map((i) => i.toDouble()).toList(),
-      );
-      final y = Tensor.fromList(
-        [maxCtx],
-        window.sublist(1).map((i) => i.toDouble()).toList(),
-      );
+      final x = Tensor.fromList([
+        maxCtx,
+      ], window.sublist(0, maxCtx).map((i) => i.toDouble()).toList());
+      final y = Tensor.fromList([
+        maxCtx,
+      ], window.sublist(1).map((i) => i.toDouble()).toList());
       // Scale by 1/microBatch so the accumulated grad equals the
       // average micro-loss grad (matches a batched forward).
       final loss = gpt(x).crossEntropy(y).mean() / microBatch;
@@ -126,9 +132,11 @@ void main() {
 
     if (step == 1 || step % 20 == 0 || step == totalSteps) {
       final avg = lossAccum / microBatch;
-      print('  step ${step.toString().padLeft(3)}  '
-          'loss=${avg.toStringAsFixed(4)}  '
-          'lr=${opt.lr.toStringAsExponential(2)}');
+      print(
+        '  step ${step.toString().padLeft(3)}  '
+        'loss=${avg.toStringAsFixed(4)}  '
+        'lr=${opt.lr.toStringAsExponential(2)}',
+      );
     }
   }
   sw.stop();

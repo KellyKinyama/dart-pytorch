@@ -1,5 +1,40 @@
 ## Unreleased
 
+- Batched (3D) tensors — foundation. A tensor with shape
+  `[batch, seq, dim]` now flows through the row-wise ops and the
+  affected `nn.Module`s and produces the same result as running the
+  op per-sequence and stacking. Attention / `GPT.forward` /
+  `generate` / `bin/gpt_train.dart` are **not** yet batched (deferred
+  to the next milestone).
+  - `Tensor.reshape(newShape)` — validates the element count, shares
+    the CPU `Float32List` (zero-copy view), copies on GPU. Wires
+    autograd: the outgoing gradient is reshaped back to the source
+    shape.
+  - The row-wise `Tensor` ops now accept rank >= 2 by treating leading
+    dims as batch and normalizing / reducing / looking up along the
+    last axis — internally they reshape to `[prod(leading), last]`,
+    invoke the existing 2D kernel, and reshape back. Ops updated:
+    `layerNorm`, `softmax`, `crossEntropy`, `embedding`. Semantics:
+    - `layerNorm([B,S,D], gamma[D], beta[D]) -> [B,S,D]`.
+    - `softmax([B,S,D]) -> [B,S,D]` (softmax over last dim).
+    - `crossEntropy([B,S,V], targets[B,S]) -> loss[B*S,1]`; caller
+      reduces with `.mean()` / `.sum()`.
+    - `embedding(indices[B,S])` on a table `[V,D]` returns `[B,S,D]`.
+  - `nn.Linear.call(x)` accepts `x` of shape `[..., inFeatures]` and
+    returns `[..., outFeatures]` (reshapes internally for the matmul).
+  - `nn.SinusoidalPositionalEncoding` and
+    `nn.LearnedPositionalEmbedding` accept 3D `[B, S, D]` and add PE
+    per position, broadcast across the batch.
+  - `nn.LayerNorm`, `nn.Embedding`, `nn.Dropout` inherit 3D support
+    for free (they delegate to the `Tensor` ops above).
+  - 18 new tests in `test/batched_test.dart`: reshape roundtrip +
+    autograd + storage sharing, per-op batched-vs-per-sample numerical
+    equivalence (softmax / layerNorm / crossEntropy / embedding /
+    Linear / LayerNorm / dropout / both PE variants), and an
+    end-to-end forward+backward parity check on an
+    `Embedding -> Linear -> crossEntropy` stack. Suite: **224 tests,
+    all green.**
+
 - LR schedulers, BPE tokenizer, and an end-to-end training script.
   Together these compose the earlier building blocks into a real
   train → save → load → sample pipeline.

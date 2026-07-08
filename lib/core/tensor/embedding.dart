@@ -19,6 +19,12 @@ extension TensorEmbedding on Tensor {
     if (shape.length != 2) {
       throw ArgumentError('embedding requires 2D table; got $shape');
     }
+    // Multi-axis indices are supported by flattening then re-shaping:
+    // indices [B, S] with table [V, D] -> output [B, S, D].
+    if (indices.shape.length > 1) {
+      final outShape = [...indices.shape, shape[1]];
+      return embedding(indices.reshape([indices.length])).reshape(outShape);
+    }
     final v = shape[0];
     final d = shape[1];
     final n = indices.length;

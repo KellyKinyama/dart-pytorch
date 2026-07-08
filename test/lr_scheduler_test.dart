@@ -5,17 +5,15 @@ import 'package:test/test.dart';
 
 // Any real Tensor parameter list will do; a single scalar parameter
 // is enough — the scheduler only reads/writes `optimizer.lr`.
-List<Tensor> _params() => [Tensor.fill([1, 1], 0.0)];
+List<Tensor> _params() => [
+  Tensor.fill([1, 1], 0.0),
+];
 
 void main() {
   group('StepLR', () {
     test('rejects non-positive stepSize', () {
       expect(
-        () => StepLR(
-          SGD(_params(), lr: 0.1),
-          initialLr: 0.1,
-          stepSize: 0,
-        ),
+        () => StepLR(SGD(_params(), lr: 0.1), initialLr: 0.1, stepSize: 0),
         throwsArgumentError,
       );
     });
@@ -64,18 +62,31 @@ void main() {
     test('rejects invalid arguments', () {
       final opt = SGD(_params(), lr: 0.0);
       expect(
-        () => LinearWarmupCosineDecay(opt,
-            warmupSteps: -1, totalSteps: 10, maxLr: 1.0),
+        () => LinearWarmupCosineDecay(
+          opt,
+          warmupSteps: -1,
+          totalSteps: 10,
+          maxLr: 1.0,
+        ),
         throwsArgumentError,
       );
       expect(
-        () => LinearWarmupCosineDecay(opt,
-            warmupSteps: 20, totalSteps: 10, maxLr: 1.0),
+        () => LinearWarmupCosineDecay(
+          opt,
+          warmupSteps: 20,
+          totalSteps: 10,
+          maxLr: 1.0,
+        ),
         throwsArgumentError,
       );
       expect(
-        () => LinearWarmupCosineDecay(opt,
-            warmupSteps: 2, totalSteps: 10, maxLr: 0.5, minLr: 0.9),
+        () => LinearWarmupCosineDecay(
+          opt,
+          warmupSteps: 2,
+          totalSteps: 10,
+          maxLr: 0.5,
+          minLr: 0.9,
+        ),
         throwsArgumentError,
       );
     });

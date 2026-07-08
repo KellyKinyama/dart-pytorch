@@ -14,8 +14,18 @@ part of 'tensor.dart';
 /// writes a fresh `dX` handle.
 extension TensorLayerNorm on Tensor {
   Tensor layerNorm(Tensor gamma, Tensor beta, {double eps = 1e-5}) {
+    // Any rank >= 2 works: leading dims are treated as batch, and
+    // normalization happens per row of the last axis. Composed via
+    // reshape so the 2D kernel stays the single implementation.
+    if (shape.length > 2) {
+      final cols = shape.last;
+      final rows = length ~/ cols;
+      final original = List<int>.of(shape);
+      return reshape([rows, cols]).layerNorm(gamma, beta, eps: eps)
+          .reshape(original);
+    }
     if (shape.length != 2) {
-      throw ArgumentError('layerNorm requires 2D x; got $shape');
+      throw ArgumentError('layerNorm requires rank >= 2 x; got $shape');
     }
     final r = shape[0];
     final c = shape[1];

@@ -83,7 +83,8 @@ class BpeTokenizer {
       int bestKey = -1;
       int bestCount = 0;
       counts.forEach((k, c) {
-        if (c > bestCount || (c == bestCount && (bestKey == -1 || k < bestKey))) {
+        if (c > bestCount ||
+            (c == bestCount && (bestKey == -1 || k < bestKey))) {
           bestCount = c;
           bestKey = k;
         }
@@ -134,11 +135,7 @@ class BpeTokenizer {
       }
       if (bestI == -1) break;
       final newId = 256 + bestRank;
-      seq = [
-        ...seq.sublist(0, bestI),
-        newId,
-        ...seq.sublist(bestI + 2),
-      ];
+      seq = [...seq.sublist(0, bestI), newId, ...seq.sublist(bestI + 2)];
     }
     return seq;
   }
