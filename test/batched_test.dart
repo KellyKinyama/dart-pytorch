@@ -38,9 +38,10 @@ void _batchedMatchesPerSample(
   final flatOut = op(batched).toList();
   final singleShape = [s, lastDim];
   for (int i = 0; i < b; i++) {
-    final row = batched
-        .toList()
-        .sublist(i * s * lastDim, (i + 1) * s * lastDim);
+    final row = batched.toList().sublist(
+      i * s * lastDim,
+      (i + 1) * s * lastDim,
+    );
     final sample = Tensor.fromList(singleShape, row);
     final sampleOut = op(sample).toList();
     final slice = flatOut.sublist(
@@ -102,22 +103,16 @@ void main() {
       final gamma = Tensor.fromList([d], List<double>.filled(d, 1.0));
       final beta = Tensor.fromList([d], List<double>.filled(d, 0.0));
       final x = Tensor.fromList([b, s, d], _rand(b * s * d, seed: 2));
-      _batchedMatchesPerSample(
-        x,
-        (t) => t.layerNorm(gamma, beta),
-        b,
-        s,
-        d,
-      );
+      _batchedMatchesPerSample(x, (t) => t.layerNorm(gamma, beta), b, s, d);
     });
 
     test('crossEntropy [B,S,V] + [B,S] matches [B*S,V] + [B*S]', () {
       const v = 5;
       final logits = Tensor.fromList([b, s, v], _rand(b * s * v, seed: 3));
-      final tgts = Tensor.fromList(
-        [b, s],
-        List<double>.generate(b * s, (i) => (i % v).toDouble()),
-      );
+      final tgts = Tensor.fromList([
+        b,
+        s,
+      ], List<double>.generate(b * s, (i) => (i % v).toDouble()));
       final loss3D = logits.crossEntropy(tgts);
       expect(loss3D.shape, [b * s, 1]);
 
@@ -135,18 +130,14 @@ void main() {
       const b = 2;
       const s = 3;
       final emb = Embedding(v, d, seed: 42);
-      final idx = Tensor.fromList(
-        [b, s],
-        [0, 1, 2, 3, 4, 5],
-      );
+      final idx = Tensor.fromList([b, s], [0, 1, 2, 3, 4, 5]);
       final out = emb(idx);
       expect(out.shape, [b, s, d]);
 
       for (int i = 0; i < b; i++) {
-        final sliceIdx = Tensor.fromList(
-          [s],
-          idx.toList().sublist(i * s, (i + 1) * s),
-        );
+        final sliceIdx = Tensor.fromList([
+          s,
+        ], idx.toList().sublist(i * s, (i + 1) * s));
         final sampleOut = emb(sliceIdx).toList();
         final got = out.toList().sublist(i * s * d, (i + 1) * s * d);
         _closeList(got, sampleOut);
@@ -174,8 +165,7 @@ void main() {
       }
     });
 
-    test('autograd through batched Linear -> weight grad accumulates',
-        () {
+    test('autograd through batched Linear -> weight grad accumulates', () {
       const b = 2;
       const s = 3;
       const inF = 4;
@@ -276,8 +266,7 @@ void main() {
       }
     });
 
-    test('LearnedPositionalEmbedding rejects startPos+seqLen > maxLen',
-        () {
+    test('LearnedPositionalEmbedding rejects startPos+seqLen > maxLen', () {
       final pe = LearnedPositionalEmbedding(4, d);
       final x = Tensor.fromList([2, 4, d], _rand(2 * 4 * d));
       expect(() => pe(x, startPos: 1), throwsArgumentError);
@@ -301,18 +290,16 @@ void main() {
       expect(batchedOut.shape, [b, s, d]);
 
       for (int i = 0; i < b; i++) {
-        final sliceIdx = Tensor.fromList(
-          [s],
-          idx.toList().sublist(i * s, (i + 1) * s),
-        );
+        final sliceIdx = Tensor.fromList([
+          s,
+        ], idx.toList().sublist(i * s, (i + 1) * s));
         final sampleOut = forward(sliceIdx).toList();
         final got = batchedOut.toList().sublist(i * s * d, (i + 1) * s * d);
         _closeList(got, sampleOut);
       }
     });
 
-    test('backward: batched crossEntropy grads match summed per-sample',
-        () {
+    test('backward: batched crossEntropy grads match summed per-sample', () {
       const v = 4;
       const d = 3;
       const b = 2;
@@ -335,14 +322,12 @@ void main() {
       lin.weight.zeroGrad();
       emb.weight.zeroGrad();
       for (int i = 0; i < b; i++) {
-        final sliceIdx = Tensor.fromList(
-          [s],
-          idx.toList().sublist(i * s, (i + 1) * s),
-        );
-        final sliceTgt = Tensor.fromList(
-          [s],
-          tgt.toList().sublist(i * s, (i + 1) * s),
-        );
+        final sliceIdx = Tensor.fromList([
+          s,
+        ], idx.toList().sublist(i * s, (i + 1) * s));
+        final sliceTgt = Tensor.fromList([
+          s,
+        ], tgt.toList().sublist(i * s, (i + 1) * s));
         lin(emb(sliceIdx)).crossEntropy(sliceTgt).sum().backward();
       }
       final perWGrad = lin.weight.grad!.toList();
@@ -352,4 +337,164 @@ void main() {
       _closeList(batchEGrad, perEGrad);
     });
   });
+
+  group('matmul accepts 3D left operand', () {
+    test('[B,S,K] @ [K,N] -> [B,S,N] matches per-sample', () {
+      const b = 2;
+      const s = 3;
+      const k = 4;
+      const n = 5;
+      final a = Tensor.fromList([b, s, k], _rand(b * s * k, seed: 300));
+      final w = Tensor.fromList([k, n], _rand(k * n, seed: 301));
+      final out = a.matmul(w);
+      expect(out.shape, [b, s, n]);
+      for (int i = 0; i < b; i++) {
+        final row = a.toList().sublist(i * s * k, (i + 1) * s * k);
+        final sample = Tensor.fromList([s, k], row);
+        final ref = sample.matmul(w).toList();
+        final got = out.toList().sublist(i * s * n, (i + 1) * s * n);
+        _closeList(got, ref);
+      }
+    });
+  });
+
+  group('Tensor.splitRows', () {
+    test('roundtrips via concat(axis=0)', () {
+      final t = Tensor.fromList([6, 3], _rand(18, seed: 400));
+      final parts = TensorConcat.splitRows(t, 2);
+      expect(parts.length, 3);
+      for (final p in parts) {
+        expect(p.shape, [2, 3]);
+      }
+      final joined = TensorConcat.concat(parts, axis: 0);
+      _closeList(joined.toList(), t.toList());
+    });
+
+    test('rejects non-divisible chunk sizes', () {
+      final t = Tensor.fromList([5, 2], _rand(10));
+      expect(() => TensorConcat.splitRows(t, 2), throwsArgumentError);
+    });
+
+    test('autograd routes grads back to correct source rows', () {
+      final t = Tensor.fromList([4, 2], _rand(8, seed: 401),
+          requiresGrad: true);
+      final parts = TensorConcat.splitRows(t, 2);
+      // Give each chunk a distinct downstream scaling and check the
+      // source grad is the concatenation of those.
+      final loss = (parts[0] * 3.0).sum() + (parts[1] * 5.0).sum();
+      loss.backward();
+      expect(t.grad, isNotNull);
+      final g = t.grad!.toList();
+      // Rows 0..1 receive gradient 3.0, rows 2..3 receive 5.0.
+      _closeList(g, [3, 3, 3, 3, 5, 5, 5, 5]);
+    });
+  });
+
+  group('MultiHeadAttention accepts 3D input', () {
+    test('[B,S,D] -> [B,S,D] equals per-sample (no mask)', () {
+      const b = 2;
+      const s = 4;
+      const d = 8;
+      const heads = 2;
+      final mha = MultiHeadAttention(d, heads, seed: 500);
+      final x = Tensor.fromList([b, s, d], _rand(b * s * d, seed: 501));
+      final out = mha(x);
+      expect(out.shape, [b, s, d]);
+      for (int i = 0; i < b; i++) {
+        final row = x.toList().sublist(i * s * d, (i + 1) * s * d);
+        final sample = Tensor.fromList([s, d], row);
+        final ref = mha(sample).toList();
+        final got = out.toList().sublist(i * s * d, (i + 1) * s * d);
+        _closeList(got, ref);
+      }
+    });
+
+    test('shared causal mask applies per-batch', () {
+      const b = 2;
+      const s = 3;
+      const d = 4;
+      const heads = 2;
+      final mha = MultiHeadAttention(d, heads, seed: 510);
+      final x = Tensor.fromList([b, s, d], _rand(b * s * d, seed: 511));
+      final mask = causalMask(s);
+      final out = mha(x, mask: mask);
+      expect(out.shape, [b, s, d]);
+      for (int i = 0; i < b; i++) {
+        final row = x.toList().sublist(i * s * d, (i + 1) * s * d);
+        final sample = Tensor.fromList([s, d], row);
+        final ref = mha(sample, mask: mask).toList();
+        final got = out.toList().sublist(i * s * d, (i + 1) * s * d);
+        _closeList(got, ref);
+      }
+    });
+  });
+
+  group('GPT accepts batched [B, S] tokens', () {
+    test('[B,S] -> [B,S,V] equals per-sample forward', () {
+      final gpt = GPT(GPTConfig(
+        vocabSize: 8,
+        maxCtx: 8,
+        embedDim: 8,
+        numLayers: 2,
+        numHeads: 2,
+        seed: 600,
+      ));
+      gpt.eval(); // disable dropout for deterministic comparison
+      const b = 2;
+      const s = 5;
+      final tokens = Tensor.fromList(
+        [b, s],
+        [0, 1, 2, 3, 4, 5, 6, 7, 0, 1],
+      );
+      final logits = gpt(tokens);
+      expect(logits.shape, [b, s, 8]);
+
+      for (int i = 0; i < b; i++) {
+        final sliceTok = Tensor.fromList(
+          [s],
+          tokens.toList().sublist(i * s, (i + 1) * s),
+        );
+        final ref = gpt(sliceTok).toList();
+        final got = logits.toList().sublist(i * s * 8, (i + 1) * s * 8);
+        _closeList(got, ref);
+      }
+    });
+
+    test('batched training step reduces loss', () {
+      final gpt = GPT(GPTConfig(
+        vocabSize: 6,
+        maxCtx: 8,
+        embedDim: 8,
+        numLayers: 1,
+        numHeads: 2,
+        seed: 700,
+      ));
+      const b = 3;
+      const s = 4;
+      final rng = math.Random(0);
+      final flat = List<double>.generate(
+        b * s,
+        (_) => rng.nextInt(6).toDouble(),
+      );
+      final tokens = Tensor.fromList([b, s], flat.sublist(0, b * s));
+      // Targets = tokens shifted (arbitrary; we just need SOME target).
+      final targets = Tensor.fromList(
+        [b, s],
+        List<double>.generate(b * s, (i) => flat[(i + 1) % (b * s)]),
+      );
+
+      final opt = SGD(gpt.parameters(), lr: 0.1);
+      final l0 = gpt(tokens).crossEntropy(targets).mean().toList()[0];
+      for (int step = 0; step < 20; step++) {
+        opt.zeroGrad();
+        gpt(tokens).crossEntropy(targets).mean().backward();
+        opt.step();
+      }
+      final l1 = gpt(tokens).crossEntropy(targets).mean().toList()[0];
+      expect(l1, lessThan(l0),
+          reason: 'expected loss to decrease across 20 batched steps '
+              '(before=$l0, after=$l1)');
+    });
+  });
 }
+

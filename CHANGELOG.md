@@ -1,5 +1,41 @@
 ## Unreleased
 
+- Batched (3D) tensors — end-to-end. Attention, `GPT.forward`,
+  `TransformerLM.forward`, and the training demo now all accept a
+  `[batch, seq, dim]` (or `[batch, seq]` for token ids) tensor and
+  produce the same numerical result as running the same op per-sequence
+  and stacking.
+  - `Tensor.matmul` accepts a rank >= 2 left operand: `[..., K] @ [K, N]`
+    reshapes to `[prod(leading), K] @ [K, N]` and reshapes back to
+    `[..., N]`. The single 2D matmul kernel is still the only
+    implementation.
+  - `TensorConcat.splitRows(t, chunkSize)` — inverse of
+    `concat(axis: 0)`; splits `[R, C]` into `R/chunkSize` chunks of
+    `[chunkSize, C]`, with autograd that routes each chunk's gradient
+    back to the correct source rows.
+  - `nn.MultiHeadAttention` detects rank-3 input and dispatches to a
+    per-batch SDPA loop over `splitRows` chunks with a shared mask,
+    then concats heads along the last axis and reshapes back to
+    `[B, S, D]`. Batched + KV cache throws (cache is per-sequence).
+  - `nn.GPT.call` and `nn.TransformerLM.call` accept both `[N]` and
+    `[B, N]` tokens; `GPT._forward` throws if given a batch together
+    with `cache` or a nonzero `startPos`. Logits shape follows the
+    input rank: `[N, V]` or `[B, N, V]`.
+  - `bin/gpt_train.dart` rewritten to build real `[B, S]` batches
+    per optimizer step (default `batchSize=4`, `maxCtx=32`). The
+    gradient-accumulation micro-batch loop is gone. Trains to
+    `loss ~ 0.28` in ~6.5 s and produces recognizable text such as
+    "a time to kill and a time to heal. a time to break down and a
+    time to build".
+  - 8 new tests in `test/batched_test.dart`: 3D matmul equivalence,
+    `splitRows` roundtrip + rejection + autograd, batched MHA vs.
+    per-sample (with and without mask), batched `GPT([B,S])` equals
+    per-sample `GPT([S])`, and a batched training loop that reduces
+    loss. Also relaxed the "rejects non-1D tokens" tests in
+    `gpt_test.dart` and `transformer_lm_test.dart` to accept 2D
+    batched tokens and reject rank > 2. Suite: **232 tests, all
+    green.**
+
 - Batched (3D) tensors — foundation. A tensor with shape
   `[batch, seq, dim]` now flows through the row-wise ops and the
   affected `nn.Module`s and produces the same result as running the

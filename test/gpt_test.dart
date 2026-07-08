@@ -21,7 +21,7 @@ void main() {
       expect(logits.shape, [5, 12]);
     });
 
-    test('rejects non-1D tokens and seqLen > maxCtx', () {
+    test('rejects rank>2 tokens and seqLen > maxCtx', () {
       final m = GPT(
         GPTConfig(
           vocabSize: 8,
@@ -32,12 +32,19 @@ void main() {
           seed: 2,
         ),
       );
+      // 3D tokens: not a supported shape.
       expect(
-        () => m(Tensor.fromList([2, 2], [0, 1, 2, 3])),
+        () => m(Tensor.fromList([1, 2, 2], [0, 1, 2, 3])),
         throwsArgumentError,
       );
+      // 1D tokens exceeding maxCtx.
       expect(
         () => m(Tensor.fromList([5], [0, 1, 2, 3, 4])),
+        throwsArgumentError,
+      );
+      // 2D batched tokens exceeding maxCtx on the seq axis.
+      expect(
+        () => m(Tensor.fromList([2, 5], List<double>.filled(10, 0.0))),
         throwsArgumentError,
       );
     });

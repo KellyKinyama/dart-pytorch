@@ -140,4 +140,64 @@ extension TensorConcat on Tensor {
     }
     return out;
   }
+
+  /// Split a 2D `[R, C]` tensor into equal-size row chunks along
+  /// axis 0. `R` must be divisible by [chunkSize]; returns
+  /// `R / chunkSize` tensors of shape `[chunkSize, C]`.
+  ///
+  /// Backward: each chunk's gradient is placed at the corresponding
+  /// row offset in the source's gradient (the reverse of [concat] on
+  /// `axis = 0`).
+  static List<Tensor> splitRows(Tensor t, int chunkSize) {
+    if (t.shape.length != 2) {
+      throw ArgumentError('splitRows: 2D input required; got ${t.shape}');
+    }
+    if (chunkSize <= 0) {
+      throw ArgumentError('splitRows: chunkSize must be > 0');
+    }
+    final r = t.shape[0];
+    final c = t.shape[1];
+    if (r % chunkSize != 0) {
+      throw ArgumentError(
+        'splitRows: rows ($r) must be a multiple of chunkSize ($chunkSize)',
+      );
+    }
+    final n = r ~/ chunkSize;
+    final src = t.device == Device.CPU
+        ? t._cpuData!
+        : Float32List.fromList(t.toList());
+
+    final chunks = <Tensor>[];
+    for (int i = 0; i < n; i++) {
+      final buf = Float32List(chunkSize * c);
+      buf.setRange(
+        0,
+        chunkSize * c,
+        src.sublist(i * chunkSize * c, (i + 1) * chunkSize * c),
+      );
+      final chunk = t.device == Device.CPU
+          ? Tensor._cpu([chunkSize, c], buf)
+          : Tensor._gpu(
+              [chunkSize, c],
+              Tensor._uploadToGpu([chunkSize, c], buf),
+            );
+      if (t.requiresGrad) {
+        final offset = i * chunkSize;
+        chunk._setBackward([t], () {
+          final gO = chunk._grad!;
+          final gOData = gO.device == Device.CPU
+              ? gO._cpuData!
+              : Float32List.fromList(gO.toList());
+          final fullGrad = Float32List(r * c);
+          fullGrad.setRange(offset * c, (offset + chunkSize) * c, gOData);
+          final gT = t.device == Device.CPU
+              ? Tensor._cpu(t.shape, fullGrad)
+              : Tensor._gpu(t.shape, Tensor._uploadToGpu(t.shape, fullGrad));
+          t._accumulateGrad(gT);
+        });
+      }
+      chunks.add(chunk);
+    }
+    return chunks;
+  }
 }

@@ -11,6 +11,21 @@ part of 'tensor.dart';
 /// `[M, N]` on the same device as the inputs.
 extension TensorMatMul on Tensor {
   Tensor matmul(Tensor o) {
+    // Batched left operand: `[..., K] @ [K, N] -> [..., N]`. The right
+    // operand must be a plain 2D weight. Composed via reshape so the
+    // 2D kernel below is still the single implementation.
+    if (shape.length > 2 && o.shape.length == 2) {
+      final k = shape.last;
+      if (o.shape[0] != k) {
+        throw ArgumentError(
+          'matmul: inner dims mismatch — got $shape @ ${o.shape}',
+        );
+      }
+      final n = o.shape[1];
+      final rows = length ~/ k;
+      final outShape = [...shape.sublist(0, shape.length - 1), n];
+      return reshape([rows, k]).matmul(o).reshape(outShape);
+    }
     if (shape.length != 2 || o.shape.length != 2) {
       throw ArgumentError(
         'matmul requires 2D tensors; got $shape @ ${o.shape}',

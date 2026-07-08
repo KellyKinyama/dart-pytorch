@@ -87,7 +87,7 @@ void main() {
   });
 
   group('TransformerLM', () {
-    test('rejects non-1D tokens and out-of-range seqLen', () {
+    test('rejects rank>2 tokens and out-of-range seqLen', () {
       final lm = TransformerLM(
         vocabSize: 8,
         embedDim: 4,
@@ -97,11 +97,15 @@ void main() {
         seed: 5,
       );
       expect(
-        () => lm(Tensor.fromList([2, 2], [0, 1, 2, 3])),
+        () => lm(Tensor.fromList([1, 2, 2], [0, 1, 2, 3])),
         throwsArgumentError,
       );
       expect(
         () => lm(Tensor.fromList([5], [0, 1, 2, 3, 4])),
+        throwsArgumentError,
+      );
+      expect(
+        () => lm(Tensor.fromList([2, 5], List<double>.filled(10, 0.0))),
         throwsArgumentError,
       );
     });

@@ -57,19 +57,20 @@ class TransformerLM extends Module {
        ),
        head = Linear(embedDim, vocabSize, device: device, seed: seed + 900000);
 
-  /// Forward pass returning `[seqLen, vocabSize]` logits.
+  /// Forward pass returning logits.
   ///
-  /// `tokens` must be a 1D `[seqLen]` tensor of integer class indices
-  /// stored as float32 (same convention as `Embedding` / `crossEntropy`).
+  /// `tokens` is either 1D `[seqLen]` (output `[seqLen, vocabSize]`)
+  /// or 2D `[batch, seqLen]` (output `[batch, seqLen, vocabSize]`).
   /// A causal mask is applied inside the encoder so position `i` only
   /// attends to positions `<= i`.
   Tensor call(Tensor tokens) {
-    if (tokens.shape.length != 1) {
+    if (tokens.shape.length != 1 && tokens.shape.length != 2) {
       throw ArgumentError(
-        'TransformerLM: tokens must be 1D [seqLen]; got ${tokens.shape}',
+        'TransformerLM: tokens must be 1D [seqLen] or 2D [batch, seqLen]; '
+        'got ${tokens.shape}',
       );
     }
-    final n = tokens.shape[0];
+    final n = tokens.shape.last;
     if (n > maxLen) {
       throw ArgumentError('TransformerLM: seqLen $n exceeds maxLen $maxLen');
     }

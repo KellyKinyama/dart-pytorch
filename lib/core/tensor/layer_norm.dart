@@ -21,8 +21,10 @@ extension TensorLayerNorm on Tensor {
       final cols = shape.last;
       final rows = length ~/ cols;
       final original = List<int>.of(shape);
-      return reshape([rows, cols]).layerNorm(gamma, beta, eps: eps)
-          .reshape(original);
+      return reshape([
+        rows,
+        cols,
+      ]).layerNorm(gamma, beta, eps: eps).reshape(original);
     }
     if (shape.length != 2) {
       throw ArgumentError('layerNorm requires rank >= 2 x; got $shape');

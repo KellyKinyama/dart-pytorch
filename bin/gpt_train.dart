@@ -5,7 +5,7 @@
 ///   * a byte-level BPE tokenizer trained on that corpus,
 ///   * a small `GPT` model,
 ///   * `Adam` with `LinearWarmupCosineDecay`,
-///   * mini-batching via gradient accumulation,
+///   * real `[B, S]` batched forward + backward,
 ///   * checkpoint save + reload,
 ///   * `GPT.generate` from a seed prompt with the KV cache.
 ///
@@ -81,7 +81,7 @@ void main() {
   // ---------------- Optimizer + scheduler ----------------
   const totalSteps = 200;
   const warmupSteps = 20;
-  const microBatch = 4; // gradient-accumulate this many windows per opt step
+  const batchSize = 4; // real [B, S] batched forward per opt step
   final opt = Adam(gpt.parameters(), lr: 0.0);
   final sched = LinearWarmupCosineDecay(
     opt,
@@ -94,7 +94,7 @@ void main() {
     'optimizer         : Adam + LinearWarmupCosineDecay '
     '(warmup=$warmupSteps, total=$totalSteps, maxLr=3e-3, minLr=3e-4)',
   );
-  print('micro-batch size  : $microBatch (via gradient accumulation)\n');
+  print('batch size        : $batchSize (real [B, S] batched forward)\n');
 
   // ---------------- Training ----------------
   final rng = math.Random(0);
@@ -106,32 +106,31 @@ void main() {
   final sw = Stopwatch()..start();
 
   print('training ...');
+  final xBuf = List<double>.filled(batchSize * maxCtx, 0.0);
+  final yBuf = List<double>.filled(batchSize * maxCtx, 0.0);
   for (int step = 1; step <= totalSteps; step++) {
     opt.zeroGrad();
-    double lossAccum = 0.0;
 
-    for (int m = 0; m < microBatch; m++) {
+    // Build a [B, S] batch of random windows.
+    for (int b = 0; b < batchSize; b++) {
       final start = rng.nextInt(trainable);
-      final window = ids.sublist(start, start + maxCtx + 1);
-      final x = Tensor.fromList([
-        maxCtx,
-      ], window.sublist(0, maxCtx).map((i) => i.toDouble()).toList());
-      final y = Tensor.fromList([
-        maxCtx,
-      ], window.sublist(1).map((i) => i.toDouble()).toList());
-      // Scale by 1/microBatch so the accumulated grad equals the
-      // average micro-loss grad (matches a batched forward).
-      final loss = gpt(x).crossEntropy(y).mean() / microBatch;
-      loss.backward();
-      lossAccum += loss.toList()[0] * microBatch;
+      for (int t = 0; t < maxCtx; t++) {
+        xBuf[b * maxCtx + t] = ids[start + t].toDouble();
+        yBuf[b * maxCtx + t] = ids[start + t + 1].toDouble();
+      }
     }
+    final x = Tensor.fromList([batchSize, maxCtx], List<double>.from(xBuf));
+    final y = Tensor.fromList([batchSize, maxCtx], List<double>.from(yBuf));
+
+    final loss = gpt(x).crossEntropy(y).mean();
+    loss.backward();
+    final avg = loss.toList()[0];
 
     clipGradNorm(gpt.parameters(), 1.0);
     opt.step();
     sched.step();
 
     if (step == 1 || step % 20 == 0 || step == totalSteps) {
-      final avg = lossAccum / microBatch;
       print(
         '  step ${step.toString().padLeft(3)}  '
         'loss=${avg.toStringAsFixed(4)}  '

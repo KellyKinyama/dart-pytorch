@@ -106,15 +106,18 @@ class GPT extends Module {
               seed: config.seed + 900000,
             );
 
-  /// Forward pass. `tokens` is `[seqLen]`; returns logits `[seqLen, vocabSize]`.
-  /// A causal mask is applied inside the encoder.
+  /// Forward pass. `tokens` is either 1D `[seqLen]` (single sequence,
+  /// output `[seqLen, vocabSize]`) or 2D `[batch, seqLen]` (batched,
+  /// output `[batch, seqLen, vocabSize]`). A causal mask is applied
+  /// inside the encoder. KV caching is not used on this path.
   Tensor call(Tensor tokens) {
-    if (tokens.shape.length != 1) {
+    if (tokens.shape.length != 1 && tokens.shape.length != 2) {
       throw ArgumentError(
-        'GPT: tokens must be 1D [seqLen]; got ${tokens.shape}',
+        'GPT: tokens must be 1D [seqLen] or 2D [batch, seqLen]; '
+        'got ${tokens.shape}',
       );
     }
-    final n = tokens.shape[0];
+    final n = tokens.shape.last;
     if (n > config.maxCtx) {
       throw ArgumentError('GPT: seqLen $n exceeds maxCtx ${config.maxCtx}');
     }
@@ -125,18 +128,24 @@ class GPT extends Module {
   /// causal mask), by the initial prompt fill in [generate]
   /// (cache empty, causal mask), and by subsequent single-token steps
   /// in [generate] (cache non-empty, `startPos = cache.seqLen`, no mask).
+  ///
+  /// `tokens` may be 1D `[N]` (single sequence — output `[N, V]`) or
+  /// 2D `[B, N]` (batched — output `[B, N, V]`). Cache and non-zero
+  /// `startPos` require the 1D form.
   Tensor _forward(Tensor tokens, {required int startPos, EncoderCache? cache}) {
-    final n = tokens.shape[0];
-    var h = tokenEmb(tokens); // [N, D]
-    h = posEmb(h, startPos: startPos); // [N, D]
+    final isBatched = tokens.shape.length == 2;
+    if (isBatched && (cache != null || startPos != 0)) {
+      throw ArgumentError(
+        'GPT._forward: batched (2D) tokens do not support cache or startPos',
+      );
+    }
+    final n = tokens.shape.last;
+    var h = tokenEmb(tokens); // [N, D] or [B, N, D]
+    h = posEmb(h, startPos: startPos); // same shape
     h = embedDrop(h);
-    // Only need a causal mask when we're processing multiple new
-    // tokens simultaneously. Single-token steps (autoregressive
-    // append) attend only to past cached positions.
     final mask = n > 1 ? causalMask(n, device: h.device) : null;
-    h = encoder(h, mask: mask, cache: cache); // [N, D]
+    h = encoder(h, mask: mask, cache: cache);
     if (config.tieWeights) {
-      // logits = h @ W_e^T   -> shared weight, same graph node.
       return h.matmul(tokenEmb.weight.transpose());
     }
     return untiedHead!(h);

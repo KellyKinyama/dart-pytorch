@@ -78,7 +78,10 @@ class Linear extends Module {
       if (bias != null) {
         y = y + bias!;
       }
-      return y.reshape([...original.sublist(0, original.length - 1), outFeatures]);
+      return y.reshape([
+        ...original.sublist(0, original.length - 1),
+        outFeatures,
+      ]);
     }
     if (x.shape.length != 2) {
       throw ArgumentError(
