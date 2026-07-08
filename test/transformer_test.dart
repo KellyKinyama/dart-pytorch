@@ -51,9 +51,13 @@ void main() {
       expect(() => TensorConcat.concat([a, b]), throwsArgumentError);
     });
 
-    test('rejects axis != 1', () {
-      final a = Tensor.fromList([2, 2], [1, 2, 3, 4]);
-      expect(() => TensorConcat.concat([a], axis: 0), throwsArgumentError);
+    test('axis=0 stacks rows and axis=2+ still throws', () {
+      final a = Tensor.fromList([2, 3], [1, 2, 3, 4, 5, 6]);
+      final b = Tensor.fromList([1, 3], [7, 8, 9]);
+      final stacked = TensorConcat.concat([a, b], axis: 0);
+      expect(stacked.shape, [3, 3]);
+      expect(stacked.toList(), [1, 2, 3, 4, 5, 6, 7, 8, 9]);
+      expect(() => TensorConcat.concat([a], axis: 2), throwsArgumentError);
     });
 
     test('gradient slices upstream grad back into each input', () {

@@ -11,6 +11,7 @@ library;
 
 import '../tensor/tensor.dart';
 import 'dropout.dart';
+import 'kv_cache.dart';
 import 'layer_norm.dart';
 import 'linear.dart';
 import 'module.dart';
@@ -59,8 +60,8 @@ class TransformerBlock extends Module {
        ),
        dropout = Dropout(dropoutP);
 
-  Tensor call(Tensor x, {Tensor? mask}) {
-    final h = x + dropout(mha(ln1(x), mask: mask));
+  Tensor call(Tensor x, {Tensor? mask, MHACache? cache}) {
+    final h = x + dropout(mha(ln1(x), mask: mask, cache: cache));
     final ff = ffn2(ffn1(ln2(h)).relu());
     return h + dropout(ff);
   }

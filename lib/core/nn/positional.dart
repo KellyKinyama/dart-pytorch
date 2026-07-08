@@ -29,7 +29,11 @@ class SinusoidalPositionalEncoding extends Module {
 
   SinusoidalPositionalEncoding(this.embedDim);
 
-  Tensor call(Tensor x) {
+  /// Adds sinusoidal PE to `x`. `startPos` is the position of the
+  /// first row of `x` (used by autoregressive / cached inference so
+  /// that a single new token gets the encoding for its true position
+  /// rather than position 0).
+  Tensor call(Tensor x, {int startPos = 0}) {
     if (x.shape.length != 2 || x.shape[1] != embedDim) {
       throw ArgumentError(
         'SinusoidalPositionalEncoding: expected [*, $embedDim]; '
@@ -37,19 +41,20 @@ class SinusoidalPositionalEncoding extends Module {
       );
     }
     final n = x.shape[0];
-    final pe = _computePE(n, x.device);
+    final pe = _computePE(n, startPos, x.device);
     return x + pe;
   }
 
-  Tensor _computePE(int n, Device device) {
+  Tensor _computePE(int n, int startPos, Device device) {
     final data = Float32List(n * embedDim);
-    for (int pos = 0; pos < n; pos++) {
+    for (int row = 0; row < n; row++) {
+      final pos = row + startPos;
       for (int i = 0; i < embedDim; i++) {
         final pairIdx = i ~/ 2;
         // freq = 1 / 10000^(2i/d)
         final freq = math.pow(10000.0, -2.0 * pairIdx / embedDim);
         final angle = pos * freq;
-        data[pos * embedDim + i] = (i.isEven
+        data[row * embedDim + i] = (i.isEven
             ? math.sin(angle)
             : math.cos(angle));
       }
@@ -73,7 +78,7 @@ class LearnedPositionalEmbedding extends Module {
     int seed = 0,
   }) : table = Embedding(maxLen, embedDim, device: device, seed: seed);
 
-  Tensor call(Tensor x) {
+  Tensor call(Tensor x, {int startPos = 0}) {
     if (x.shape.length != 2 || x.shape[1] != embedDim) {
       throw ArgumentError(
         'LearnedPositionalEmbedding: expected [*, $embedDim]; '
@@ -81,14 +86,15 @@ class LearnedPositionalEmbedding extends Module {
       );
     }
     final n = x.shape[0];
-    if (n > maxLen) {
+    if (startPos + n > maxLen) {
       throw ArgumentError(
-        'LearnedPositionalEmbedding: seqLen $n exceeds maxLen $maxLen',
+        'LearnedPositionalEmbedding: startPos+seqLen ${startPos + n} '
+        'exceeds maxLen $maxLen',
       );
     }
     final positions = Tensor.fromList(
       [n],
-      List<double>.generate(n, (i) => i.toDouble()),
+      List<double>.generate(n, (i) => (i + startPos).toDouble()),
       device: x.device,
     );
     return x + table(positions);

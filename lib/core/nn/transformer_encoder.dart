@@ -7,6 +7,7 @@
 library;
 
 import '../tensor/tensor.dart';
+import 'kv_cache.dart';
 import 'layer_norm.dart';
 import 'module.dart';
 import 'transformer.dart';
@@ -43,10 +44,16 @@ class TransformerEncoder extends Module {
        ),
        finalNorm = finalNorm ? LayerNorm(embedDim) : null;
 
-  Tensor call(Tensor x, {Tensor? mask}) {
+  Tensor call(Tensor x, {Tensor? mask, EncoderCache? cache}) {
+    if (cache != null && cache.layers.length != blocks.length) {
+      throw ArgumentError(
+        'TransformerEncoder: cache has ${cache.layers.length} layers, '
+        'expected ${blocks.length}',
+      );
+    }
     var h = x;
-    for (final b in blocks) {
-      h = b(h, mask: mask);
+    for (int i = 0; i < blocks.length; i++) {
+      h = blocks[i](h, mask: mask, cache: cache?.layers[i]);
     }
     if (finalNorm != null) {
       h = finalNorm!(h);

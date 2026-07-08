@@ -10,6 +10,7 @@ library;
 
 import '../tensor/tensor.dart';
 import 'dropout.dart';
+import 'kv_cache.dart';
 import 'linear.dart';
 import 'module.dart';
 
@@ -79,12 +80,32 @@ class MultiHeadAttention extends Module {
 
   /// Forward pass. `x` shape `[N, embedDim]`. Optional additive `mask`
   /// of shape `[N, N]` (same-shape for all heads).
-  Tensor call(Tensor x, {Tensor? mask}) {
+  ///
+  /// If `cache` is provided (autoregressive fast path), per-head K/V
+  /// are appended to the cache and attention is computed against the
+  /// full cached history. Two combinations are valid:
+  ///   * empty cache + optional causal `mask` (prompt fill: `Q = K = V
+  ///     = [N, D]` — the mask is required for causality when `N > 1`);
+  ///   * non-empty cache + no `mask` (single-token append: `Q = [1, D]`
+  ///     attends to `K = V = [T+1, D]`, all cached positions are past
+  ///     context and therefore always attendable).
+  Tensor call(Tensor x, {Tensor? mask, MHACache? cache}) {
+    if (cache != null && mask != null && cache.seqLen > 0) {
+      throw ArgumentError(
+        'MultiHeadAttention: cannot pass mask when appending to a '
+        'non-empty cache (mask shape would be incompatible with '
+        'grown K/V)',
+      );
+    }
     final heads = <Tensor>[];
     for (int h = 0; h < numHeads; h++) {
       final q = wq[h](x);
-      final k = wk[h](x);
-      final v = wv[h](x);
+      var k = wk[h](x);
+      var v = wv[h](x);
+      if (cache != null) {
+        k = cache.appendK(h, k);
+        v = cache.appendV(h, v);
+      }
       heads.add(q.scaledDotProductAttention(k, v, mask: mask));
     }
     final concatted = TensorConcat.concat(heads, axis: 1);

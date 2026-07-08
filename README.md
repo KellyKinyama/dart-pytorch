@@ -14,8 +14,9 @@ backward CPU-only for now). A small `nn.Module` scaffolding exposes
 a pre-LN `TransformerBlock`, `TransformerEncoder` (stacked blocks with
 optional final LN), `TransformerLM` (token embed + positional encoding
 + causal encoder + linear head), `GPT` (weight-tied GPT-2 style causal
-LM with learned position embeddings, embedding dropout, and a
-`generate()` method with greedy / temperature / top-k sampling), and
+LM with learned position embeddings, embedding dropout, an
+`EncoderCache` KV-cache path for O(N) autoregressive `generate()`, and
+greedy / temperature / top-k sampling), and
 both `SinusoidalPositionalEncoding`
 / `LearnedPositionalEmbedding` as trainable / regularization layers
 with `train()` / `eval()` mode toggling; `SGD` / `Adam` optimizers
@@ -52,6 +53,7 @@ lib/
     masks.dart                   # causalMask(n) additive attention mask helper
     transformer_encoder.dart     # stacked TransformerBlocks + optional final LN
     transformer_lm.dart          # token embed + posEnc + causal encoder + head
+    kv_cache.dart                # MHACache + EncoderCache for GPT.generate fast path
     gpt.dart                     # GPT-2 style: tied weights, learned PE, generate()
   core/optim/
     optimizer.dart               # abstract Optimizer base (step, zeroGrad)

@@ -1,5 +1,44 @@
 ## Unreleased
 
+- KV-cache for autoregressive `GPT.generate()` — ~8× faster greedy
+  sampling on the demo, byte-identical output.
+  - New `MHACache` (per-head K/V, one per attention layer) and
+    `EncoderCache` (list of `MHACache`, one per transformer block) in
+    `lib/core/nn/kv_cache.dart`. Buffers are `null` until the first
+    `appendK/V`, then grown by `Tensor.concat(axis=0)`. Non-trainable
+    — cached tensors have no `requiresGrad`.
+  - `Tensor.concat` extended: now supports `axis=0` (rows) in addition
+    to `axis=1` (columns), with matching slice-back backward. The
+    previous "rejects axis != 1" test replaced by an `axis=0` stack
+    correctness test and an `axis>=2` still-throws check.
+  - `MultiHeadAttention.call(x, {mask, cache})` — cache-aware path.
+    Two valid combinations: empty cache + optional causal mask
+    (prompt fill, `Q=K=V=[N,D]`); non-empty cache + no mask
+    (single-token append, `Q=[1,D]`, `K=V=[T+1,D]`, causal by
+    construction). Mismatch throws.
+  - `TransformerBlock.call(x, {mask, cache: MHACache?})` and
+    `TransformerEncoder.call(x, {mask, cache: EncoderCache?})` thread
+    the cache through every layer.
+  - `SinusoidalPositionalEncoding.call(x, {startPos = 0})` and
+    `LearnedPositionalEmbedding.call(x, {startPos = 0})` — new
+    `startPos` argument so single-token cached steps get the encoding
+    for their true absolute position.
+  - `GPT.generate(..., {useCache = true})` — new default. Cache path:
+    initial prompt fill populates every layer's `MHACache`; each
+    subsequent step is a `[1]`-token forward at `startPos =
+    cache.seqLen`. `useCache: false` retains the old sliding-window
+    path (needed when prompt+generated exceeds `maxCtx`). Cache path
+    stops early when the cache fills to `maxCtx`; sliding-window mode
+    truncates and continues.
+  - `bin/gpt_demo.dart` — adds a side-by-side speed comparison of
+    cached vs uncached greedy sampling on the trained model.
+  - 11 new tests in `test/kv_cache_test.dart` (cache empty state,
+    append growth + `seqLen`, MHA prompt-fill parity with baseline
+    MHA, mask+non-empty-cache rejection) plus 4 in `test/gpt_test.dart`
+    (cached step == uncached last-row parity, `useCache=true` vs
+    `false` greedy parity, sampled parity with fixed RNG,
+    overfit-then-generate parity). Suite: **172 tests, all green.**
+
 - `GPT` — GPT-2 style causal language model, pure composition on top
   of `TransformerEncoder` (no new kernels).
   - `GPTConfig({vocabSize, maxCtx, embedDim, numLayers, numHeads,

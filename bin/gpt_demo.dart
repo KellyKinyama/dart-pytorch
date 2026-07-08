@@ -17,9 +17,13 @@ const _corpus = 'to be or not to be that is the question ';
 
 void main() {
   final chars = _corpus.split('').toSet().toList()..sort();
-  final ch2id = <String, int>{for (int i = 0; i < chars.length; i++) chars[i]: i};
+  final ch2id = <String, int>{
+    for (int i = 0; i < chars.length; i++) chars[i]: i,
+  };
   final id2ch = chars;
-  print('vocab (${chars.length}): ${chars.map((c) => c == ' ' ? '_' : c).join()}');
+  print(
+    'vocab (${chars.length}): ${chars.map((c) => c == ' ' ? '_' : c).join()}',
+  );
 
   final ids = _corpus.split('').map((c) => ch2id[c]!.toDouble()).toList();
   final input = ids.sublist(0, ids.length - 1);
@@ -27,20 +31,24 @@ void main() {
   final n = input.length;
   print('sequence length: $n');
 
-  final gpt = GPT(GPTConfig(
-    vocabSize: chars.length,
-    maxCtx: 64,
-    embedDim: 32,
-    numLayers: 2,
-    numHeads: 4,
-    dropoutP: 0.0,
-    tieWeights: true,
-    seed: 1,
-  ));
+  final gpt = GPT(
+    GPTConfig(
+      vocabSize: chars.length,
+      maxCtx: 64,
+      embedDim: 32,
+      numLayers: 2,
+      numHeads: 4,
+      dropoutP: 0.0,
+      tieWeights: true,
+      seed: 1,
+    ),
+  );
   final opt = Adam(gpt.parameters(), lr: 5e-3);
-  print('parameters: ${gpt.parameters().length} tensors, '
-      '${gpt.parameters().fold<int>(0, (a, p) => a + p.length)} scalars '
-      '(weight-tied)');
+  print(
+    'parameters: ${gpt.parameters().length} tensors, '
+    '${gpt.parameters().fold<int>(0, (a, p) => a + p.length)} scalars '
+    '(weight-tied)',
+  );
 
   final x = Tensor.fromList([n], input);
   final y = Tensor.fromList([n], target);
@@ -84,4 +92,20 @@ void main() {
     rng: math.Random(0),
   );
   print('T=1.0 top-k=3: "${decode(topk)}"');
+
+  // KV-cache speedup — same greedy output, measurably fewer FLOPs.
+  print('\n--- KV cache speed comparison ---');
+  final swNo = Stopwatch()..start();
+  final greedyNoCache =
+      gpt.generate(prompt, maxNewTokens: 30, temperature: 0.0, useCache: false);
+  swNo.stop();
+  final swYes = Stopwatch()..start();
+  final greedyCached =
+      gpt.generate(prompt, maxNewTokens: 30, temperature: 0.0, useCache: true);
+  swYes.stop();
+  print('no cache : ${swNo.elapsedMilliseconds} ms  '
+      '"${decode(greedyNoCache)}"');
+  print('with cache: ${swYes.elapsedMilliseconds} ms  '
+      '"${decode(greedyCached)}"');
+  print('match: ${greedyNoCache.toString() == greedyCached.toString()}');
 }

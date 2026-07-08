@@ -28,6 +28,7 @@ import 'dart:math' as math;
 import '../tensor/tensor.dart';
 import 'dropout.dart';
 import 'embedding.dart';
+import 'kv_cache.dart';
 import 'linear.dart';
 import 'masks.dart';
 import 'module.dart';
@@ -109,17 +110,31 @@ class GPT extends Module {
   /// A causal mask is applied inside the encoder.
   Tensor call(Tensor tokens) {
     if (tokens.shape.length != 1) {
-      throw ArgumentError('GPT: tokens must be 1D [seqLen]; got ${tokens.shape}');
+      throw ArgumentError(
+        'GPT: tokens must be 1D [seqLen]; got ${tokens.shape}',
+      );
     }
     final n = tokens.shape[0];
     if (n > config.maxCtx) {
       throw ArgumentError('GPT: seqLen $n exceeds maxCtx ${config.maxCtx}');
     }
+    return _forward(tokens, startPos: 0, cache: null);
+  }
+
+  /// Internal shared forward. Used by [call] (no cache, `startPos=0`,
+  /// causal mask), by the initial prompt fill in [generate]
+  /// (cache empty, causal mask), and by subsequent single-token steps
+  /// in [generate] (cache non-empty, `startPos = cache.seqLen`, no mask).
+  Tensor _forward(Tensor tokens, {required int startPos, EncoderCache? cache}) {
+    final n = tokens.shape[0];
     var h = tokenEmb(tokens); // [N, D]
-    h = posEmb(h); // [N, D]
+    h = posEmb(h, startPos: startPos); // [N, D]
     h = embedDrop(h);
-    final mask = causalMask(n, device: h.device);
-    h = encoder(h, mask: mask); // [N, D]
+    // Only need a causal mask when we're processing multiple new
+    // tokens simultaneously. Single-token steps (autoregressive
+    // append) attend only to past cached positions.
+    final mask = n > 1 ? causalMask(n, device: h.device) : null;
+    h = encoder(h, mask: mask, cache: cache); // [N, D]
     if (config.tieWeights) {
       // logits = h @ W_e^T   -> shared weight, same graph node.
       return h.matmul(tokenEmb.weight.transpose());
@@ -138,37 +153,108 @@ class GPT extends Module {
   /// * `topK` — if non-null and `> 0`, restricts sampling to the top-K
   ///   logits at each step (others get probability 0).
   /// * `rng` — optional seeded RNG for reproducible sampling.
+  /// * `useCache` — enable the KV-cache fast path (default `true`).
+  ///   Each new token becomes an O(N) rather than O(N^2) forward.
+  ///   When `false`, every step re-runs the full context — useful for
+  ///   parity testing and for prompts longer than `maxCtx` where the
+  ///   context needs to slide.
   List<double> generate(
     List<double> prompt, {
     required int maxNewTokens,
     double temperature = 1.0,
     int? topK,
     math.Random? rng,
+    bool useCache = true,
   }) {
     if (prompt.isEmpty) {
       throw ArgumentError('GPT.generate: prompt must be non-empty');
+    }
+    if (useCache && prompt.length > config.maxCtx) {
+      throw ArgumentError(
+        'GPT.generate(useCache: true): prompt length ${prompt.length} '
+        'exceeds maxCtx ${config.maxCtx}. Pass useCache: false to '
+        'enable sliding-window truncation.',
+      );
     }
     final r = rng ?? math.Random();
     final wasTraining = training;
     eval();
     try {
-      final out = List<double>.of(prompt);
-      for (int step = 0; step < maxNewTokens; step++) {
-        // Take at most maxCtx trailing tokens as the context window.
-        final start = out.length > config.maxCtx ? out.length - config.maxCtx : 0;
-        final ctxList = out.sublist(start);
-        final ctx = Tensor.fromList([ctxList.length], ctxList, device: config.device);
-        final logits = call(ctx).toList();
-        final v = config.vocabSize;
-        final lastBase = (ctxList.length - 1) * v;
-        final row = List<double>.generate(v, (i) => logits[lastBase + i]);
-        final next = _sampleFromLogits(row, temperature, topK, r);
-        out.add(next.toDouble());
-      }
-      return out;
+      return useCache
+          ? _generateCached(prompt, maxNewTokens, temperature, topK, r)
+          : _generateNoCache(prompt, maxNewTokens, temperature, topK, r);
     } finally {
       if (wasTraining) train();
     }
+  }
+
+  List<double> _generateCached(
+    List<double> prompt,
+    int maxNewTokens,
+    double temperature,
+    int? topK,
+    math.Random rng,
+  ) {
+    final v = config.vocabSize;
+    final cache = EncoderCache.empty(config.numLayers, config.numHeads);
+    final out = List<double>.of(prompt);
+
+    // Initial prompt fill — one big forward that populates the cache.
+    final promptCtx = Tensor.fromList(
+      [prompt.length],
+      prompt,
+      device: config.device,
+    );
+    var logits = _forward(promptCtx, startPos: 0, cache: cache).toList();
+    var lastBase = (prompt.length - 1) * v;
+    var row = List<double>.generate(v, (i) => logits[lastBase + i]);
+    var next = _sampleFromLogits(row, temperature, topK, rng);
+    out.add(next.toDouble());
+
+    // Autoregressive single-token steps.
+    for (int step = 1; step < maxNewTokens; step++) {
+      if (cache.seqLen >= config.maxCtx) break; // cache is full
+      final tokTensor = Tensor.fromList(
+        [1],
+        [next.toDouble()],
+        device: config.device,
+      );
+      logits = _forward(tokTensor, startPos: cache.seqLen, cache: cache).toList();
+      // [1, V] — the whole row is the "last" row.
+      row = List<double>.generate(v, (i) => logits[i]);
+      next = _sampleFromLogits(row, temperature, topK, rng);
+      out.add(next.toDouble());
+    }
+    return out;
+  }
+
+  List<double> _generateNoCache(
+    List<double> prompt,
+    int maxNewTokens,
+    double temperature,
+    int? topK,
+    math.Random rng,
+  ) {
+    final v = config.vocabSize;
+    final out = List<double>.of(prompt);
+    for (int step = 0; step < maxNewTokens; step++) {
+      // Take at most maxCtx trailing tokens as the context window.
+      final start = out.length > config.maxCtx
+          ? out.length - config.maxCtx
+          : 0;
+      final ctxList = out.sublist(start);
+      final ctx = Tensor.fromList(
+        [ctxList.length],
+        ctxList,
+        device: config.device,
+      );
+      final logits = call(ctx).toList();
+      final lastBase = (ctxList.length - 1) * v;
+      final row = List<double>.generate(v, (i) => logits[lastBase + i]);
+      final next = _sampleFromLogits(row, temperature, topK, rng);
+      out.add(next.toDouble());
+    }
+    return out;
   }
 
   int _sampleFromLogits(
@@ -209,7 +295,9 @@ class GPT extends Module {
     }
     final exps = List<double>.generate(
       v,
-      (i) => scaled[i] == double.negativeInfinity ? 0.0 : math.exp(scaled[i] - maxV),
+      (i) => scaled[i] == double.negativeInfinity
+          ? 0.0
+          : math.exp(scaled[i] - maxV),
     );
     var sum = 0.0;
     for (final e in exps) {
