@@ -1,5 +1,44 @@
 ## Unreleased
 
+- Mixture-of-Experts (MoE) feed-forward + tiny-Shakespeare corpus and
+  demos for every transformer / GPT variant currently in the library.
+  - `data/tiny_shakespeare.txt` — 1.1 MB char-level corpus (Karpathy's
+    tiny-Shakespeare, public domain), copied from the reference repo
+    for use in the demos.
+  - `lib/core/data/char_tokenizer.dart` — `CharTokenizer.fromText`
+    builds a sorted unique-char vocabulary; `encode` / `decode` /
+    JSON `save` / `load`. Exported from `dart_pytorch.dart`.
+  - `lib/core/nn/moe.dart` — `Expert` (`W1 -> ReLU -> W2`) and
+    `MoEFeedForward` implementing DeepSeek-V3-style top-K sparse
+    routing + always-on shared experts. Router (`gateW`) and experts
+    are fully differentiable. Discrete top-K is CPU-side and applied
+    as a `[T, E]` 0/1 mask into the softmaxed gate scores. Column
+    broadcast to `[T, embedDim]` uses precomputed one-hot selector
+    matmuls (autograd-correct). Aux-loss-free load balancing:
+    non-differentiable per-expert bias updated by `updateRoutingBias`
+    from running load counters. CPU-only, 2D input.
+  - `lib/core/nn/moe_transformer.dart` — `MoEBlock` (pre-LN
+    multi-head causal attention + MoE FFN) and `MoELanguageModel`
+    (decoder-only, API parity with `TransformerLM` /
+    `AFTLanguageModel`, plus `updateRoutingBias()` that fans out to
+    every block).
+  - Four Shakespeare demos, each trains a small model on 50 000 chars
+    for 500 steps (~15–30 s on CPU) and greedy + top-k samples from
+    a `"ROMEO:"` prompt:
+    - `bin/shakespeare_gpt.dart` — weight-tied `GPT` with KV-cache
+      accelerated sampling.
+    - `bin/shakespeare_transformer_lm.dart` — sinusoidal
+      `TransformerLM` baseline.
+    - `bin/shakespeare_aft.dart` — attention-free `AFTLanguageModel`.
+    - `bin/shakespeare_moe.dart` — `MoELanguageModel`, updates the
+      routing bias every 50 steps and prints per-block bias
+      distribution after training.
+    - Shared helpers (corpus loader, window batching, temperature /
+      top-k sampling, autoregressive loop) in
+      `bin/shakespeare_util.dart`.
+  - 16 new tests (11 MoE + 5 CharTokenizer). Suite: **269 tests, all
+    green.**
+
 - Attention-Free Transformer (AFT) — full variant, from Zhai et al.
   2021. Adds a low-level tensor op, an `nn` module, a decoder-only LM,
   tests, and a side-by-side demo vs. standard attention. Also
