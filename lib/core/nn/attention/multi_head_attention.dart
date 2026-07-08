@@ -8,11 +8,11 @@
 /// `[N, embedDim]` (single batch).
 library;
 
-import '../tensor/tensor.dart';
-import 'dropout.dart';
-import 'kv_cache.dart';
-import 'linear.dart';
-import 'module.dart';
+import '../../tensor/tensor.dart';
+import '../dropout.dart';
+import '../kv_cache.dart';
+import '../linear.dart';
+import '../module.dart';
 
 class MultiHeadAttention extends Module {
   final int embedDim;

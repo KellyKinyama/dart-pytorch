@@ -72,7 +72,8 @@ const int _tgt = _seq; // target = reversed source (same length)
 
 // ------------------ Model factory ------------------
 
-EncoderDecoderTransformer _newModel({int seed = 42}) => EncoderDecoderTransformer(
+EncoderDecoderTransformer _newModel({int seed = 42}) =>
+    EncoderDecoderTransformer(
       sourceVocabSize: _vocab,
       targetVocabSize: _vocab,
       embedDim: 32,
@@ -92,8 +93,14 @@ class _RunResult {
   final int totalMs;
   final double msPerStep;
   final String greedyDecode;
-  _RunResult(this.name, this.lossInit, this.lossFinal, this.totalMs,
-      this.msPerStep, this.greedyDecode);
+  _RunResult(
+    this.name,
+    this.lossInit,
+    this.lossFinal,
+    this.totalMs,
+    this.msPerStep,
+    this.greedyDecode,
+  );
 }
 
 _RunResult _runOne({
@@ -128,18 +135,16 @@ _RunResult _runOne({
 
   // Greedy decode: encode `probeSrc`, then autoregressively pick argmax.
   model.eval();
-  final srcT = Tensor.fromList(
-    [probeSrc.length],
-    probeSrc.map((i) => i.toDouble()).toList(),
-  );
+  final srcT = Tensor.fromList([
+    probeSrc.length,
+  ], probeSrc.map((i) => i.toDouble()).toList());
   final memory = model.encode(srcT);
   final produced = <int>[];
   for (int t = 0; t < _tgt; t++) {
     final prefix = [_bos, ...produced];
-    final tgtT = Tensor.fromList(
-      [prefix.length],
-      prefix.map((i) => i.toDouble()).toList(),
-    );
+    final tgtT = Tensor.fromList([
+      prefix.length,
+    ], prefix.map((i) => i.toDouble()).toList());
     final logits = model.decode(tgtT, memory).toList();
     // Last row of logits: prefix.length - 1 offset, width = _vocab.
     final off = (prefix.length - 1) * _vocab;
@@ -167,10 +172,10 @@ _RunResult _runOne({
 
 void main() {
   print('=== seq2seq optimizer speed benchmark ===');
+  print('task            : reverse-copy (vocab=$_vocab, seq=$_seq, tgt=$_tgt)');
   print(
-    'task            : reverse-copy (vocab=$_vocab, seq=$_seq, tgt=$_tgt)',
+    'model           : EncoderDecoderTransformer(embed=32, layers=2, heads=4)',
   );
-  print('model           : EncoderDecoderTransformer(embed=32, layers=2, heads=4)');
   const steps = 100;
   const batchSize = 16;
   print('training config : steps=$steps  batchSize=$batchSize\n');
@@ -183,9 +188,9 @@ void main() {
   print('probe expected  : ${probeExpected.join(',')}\n');
 
   final configs = <(String, Optimizer Function(List<Tensor>))>[
-    ('SGD lr=0.05',          (p) => SGD(p, lr: 0.05)),
+    ('SGD lr=0.05', (p) => SGD(p, lr: 0.05)),
     ('SGD+mom lr=0.05 m=.9', (p) => SGD(p, lr: 0.05, momentum: 0.9)),
-    ('Adam lr=1e-3',         (p) => Adam(p, lr: 1e-3)),
+    ('Adam lr=1e-3', (p) => Adam(p, lr: 1e-3)),
     ('AdamW lr=1e-3 wd=.01', (p) => Adam(p, lr: 1e-3, weightDecay: 0.01)),
   ];
 
@@ -198,7 +203,7 @@ void main() {
       steps: steps,
       batchSize: batchSize,
       modelSeed: 42, // same weights for every optimizer
-      dataSeed: 7,   // same batch schedule
+      dataSeed: 7, // same batch schedule
       probeSrc: probeSrc,
     );
     results.add(r);
@@ -236,10 +241,8 @@ void main() {
   }
   print('-' * 78);
 
-  final fastest =
-      results.reduce((a, b) => a.msPerStep <= b.msPerStep ? a : b);
-  final lowest =
-      results.reduce((a, b) => a.lossFinal <= b.lossFinal ? a : b);
+  final fastest = results.reduce((a, b) => a.msPerStep <= b.msPerStep ? a : b);
+  final lowest = results.reduce((a, b) => a.lossFinal <= b.lossFinal ? a : b);
   print(
     '\nfastest per step : ${fastest.name} '
     '(${fastest.msPerStep.toStringAsFixed(2)} ms)',

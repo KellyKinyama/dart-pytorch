@@ -20,8 +20,8 @@ import 'dropout.dart';
 import 'layer_norm.dart';
 import 'linear.dart';
 import 'module.dart';
-import 'multi_head_attention.dart';
-import 'multi_head_cross_attention.dart';
+import 'attention/multi_head_attention.dart';
+import 'attention/multi_head_cross_attention.dart';
 
 class TransformerDecoderBlock extends Module {
   final int embedDim;

@@ -15,7 +15,7 @@ import 'kv_cache.dart';
 import 'layer_norm.dart';
 import 'linear.dart';
 import 'module.dart';
-import 'multi_head_attention.dart';
+import 'attention/multi_head_attention.dart';
 
 class TransformerBlock extends Module {
   final int embedDim;

@@ -19,10 +19,10 @@
 /// not apply.
 library;
 
-import '../tensor/tensor.dart';
-import 'dropout.dart';
-import 'linear.dart';
-import 'module.dart';
+import '../../tensor/tensor.dart';
+import '../dropout.dart';
+import '../linear.dart';
+import '../module.dart';
 
 class MultiHeadCrossAttention extends Module {
   final int embedDim;

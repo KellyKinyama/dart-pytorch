@@ -1,5 +1,46 @@
 ## Unreleased
 
+- Attention-Free Transformer (AFT) — full variant, from Zhai et al.
+  2021. Adds a low-level tensor op, an `nn` module, a decoder-only LM,
+  tests, and a side-by-side demo vs. standard attention. Also
+  reorganises the attention primitives into their own `nn/attention/`
+  subfolder.
+  - `lib/core/nn/attention/` — new subfolder. `MultiHeadAttention` and
+    `MultiHeadCrossAttention` moved here; `AFTAttention` joins them.
+    Imports and exports updated (three internal `import` sites +
+    `lib/dart_pytorch.dart`).
+  - `Tensor.aftFull(q, k, v, w, {masked})` in
+    `lib/core/tensor/aft.dart` (new `part of 'tensor.dart'`). Pure
+    CPU, numerically-stable per-`d` softmax over `t'` of
+    `K[t', d] + W[t, t']`, weighted-summed with `V` and gated by
+    `sigmoid(Q)`. Fully analytical single-node backward for
+    `q`/`k`/`v`/`w`, verified against finite differences.
+  - `Tensor.sliceTopLeft(t, rows, cols)` helper op with autograd (the
+    grad scatters back to the top-left of the source, rest gets zero).
+    Used to reuse a single trainable `[maxSeqLen, maxSeqLen]` position
+    bias for shorter runtime sequences.
+  - `nn.AFTAttention(embedDim, maxSeqLen: N, masked: false)` — Linear
+    Q/K/V projections + learnable `[N, N]` position bias, wraps
+    `Tensor.aftFull`. 2D `[T, embedDim]` only, CPU-only.
+  - `nn.AFTBlock` — pre-LN block with `AFTAttention` self-attention +
+    FFN, matches the shape of the vanilla `TransformerBlock`.
+  - `nn.AFTLanguageModel` — decoder-only LM with token+positional
+    embeddings, a stack of `AFTBlock`s, `LayerNorm`, and a `Linear`
+    head. API parity with `TransformerLM` so they're drop-in
+    comparable.
+  - `bin/aft_demo.dart` — trains `AFTLanguageModel` and `TransformerLM`
+    (matched params) side-by-side on a mod-12 counting sequence; both
+    reach loss ~0.05 and produce the correct greedy continuation.
+    Reports total time, ms/step, and param counts.
+  - 11 new tests in `test/aft_test.dart`: reference-forward parity
+    (full and masked), shape-rejection, finite-difference gradient
+    check for Q/K/V/W, causal-mask sparsity of `W`'s gradient,
+    `sliceTopLeft` forward+backward round-trip, `AFTAttention`
+    shape+train, `AFTLanguageModel` forward+rejection+overfit. Suite:
+    **253 tests, all green.**
+
+## Prior Unreleased entries
+
 - Seq2seq decoder + encoder-decoder Transformer. Fills in the missing
   half of the classic "Attention Is All You Need" architecture — the
   existing `GPT` remains the decoder-only LM path; this milestone adds

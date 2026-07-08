@@ -31,6 +31,7 @@ part 'embedding.dart';
 part 'attention.dart';
 part 'dropout.dart';
 part 'concat.dart';
+part 'aft.dart';
 
 enum Device { CPU, GPU }
 
