@@ -170,6 +170,24 @@ class MoEFeedForward extends Module {
   /// `Gate.route_scale`. `1.0` (default) disables scaling.
   final double routeScale;
 
+  /// When true, each expert is only evaluated on the tokens actually
+  /// routed to it (gather → expert → scatter-back), matching real
+  /// sparse-MoE implementations. When false (default) every expert
+  /// runs on every token and the un-routed rows are masked out. The
+  /// dense path is easier to debug and slightly cheaper for tiny
+  /// `T`; the sparse path is asymptotically ~E/K× faster on expert
+  /// compute.
+  final bool sparseExecution;
+
+  /// `[E, 1]` one-hot column selectors, used to extract per-expert
+  /// weight columns from `[T, E]` masked scores via matmul (only
+  /// allocated when [sparseExecution] is true).
+  final List<Tensor>? _expertColOneHot;
+
+  /// `[1, embedDim]` all-ones used to broadcast a `[K_j, 1]`
+  /// per-token weight to `[K_j, embedDim]` (sparse path only).
+  final Tensor? _ones1D;
+
   /// When true, the K selected weights are divided by their per-token
   /// sum so each row of the routing weights sums to 1.
   final bool renormalizeTopK;
@@ -220,6 +238,7 @@ class MoEFeedForward extends Module {
     this.numExpertGroups = 1,
     int? topKGroups,
     this.routeScale = 1.0,
+    this.sparseExecution = false,
     bool? renormalizeTopK,
   }) : renormalizeTopK =
            renormalizeTopK ?? (gateFunction == GateFunction.sigmoid),
@@ -255,6 +274,12 @@ class MoEFeedForward extends Module {
            : null,
        _ones1E = (renormalizeTopK ?? (gateFunction == GateFunction.sigmoid))
            ? Tensor.fill([1, numRoutedExperts], 1.0, device: device)
+           : null,
+       _expertColOneHot = sparseExecution
+           ? _buildExpertColOneHot(numRoutedExperts, device)
+           : null,
+       _ones1D = sparseExecution
+           ? Tensor.fill([1, embedDim], 1.0, device: device)
            : null {
     if (topK <= 0 || topK > numRoutedExperts) {
       throw ArgumentError(
@@ -314,6 +339,21 @@ class MoEFeedForward extends Module {
       }
       list.add(
         Tensor.fromList([e, d], vals, requiresGrad: false, device: device),
+      );
+    }
+    return list;
+  }
+
+  /// Builds `[E, 1]` one-hot column vectors, one per expert. Used by
+  /// the sparse path to extract `masked[:, j]` as `[T, 1]` via
+  /// matmul.
+  static List<Tensor> _buildExpertColOneHot(int e, Device device) {
+    final list = <Tensor>[];
+    for (int j = 0; j < e; j++) {
+      final vals = List<double>.filled(e, 0.0);
+      vals[j] = 1.0;
+      list.add(
+        Tensor.fromList([e, 1], vals, requiresGrad: false, device: device),
       );
     }
     return list;
@@ -434,11 +474,57 @@ class MoEFeedForward extends Module {
     }
 
     Tensor? acc;
-    for (int j = 0; j < numRoutedExperts; j++) {
-      final gateCol = masked.matmul(_selectors[j]); // [T, embedDim]
-      final expertOut = routedExperts[j](x); // [T, embedDim]
-      final weighted = gateCol * expertOut;
-      acc = acc == null ? weighted : acc + weighted;
+    if (sparseExecution) {
+      // Collect per-expert routed-token indices from the mask.
+      final perExpertIdx = List<List<double>>.generate(
+        numRoutedExperts,
+        (_) => <double>[],
+      );
+      for (int i = 0; i < t; i++) {
+        for (int j = 0; j < e; j++) {
+          if (maskVals[i * e + j] != 0.0) {
+            perExpertIdx[j].add(i.toDouble());
+          }
+        }
+      }
+      for (int j = 0; j < numRoutedExperts; j++) {
+        final idxList = perExpertIdx[j];
+        if (idxList.isEmpty) continue; // no tokens routed to this expert
+        final kj = idxList.length;
+        final idxTensor = Tensor.fromList(
+          [kj],
+          idxList,
+          requiresGrad: false,
+          device: x.device,
+        );
+        // Gather routed tokens: [K_j, embedDim].
+        final xSubset = x.embedding(idxTensor);
+        // Extract per-expert weight column [T, 1] then gather to
+        // [K_j, 1], then broadcast to [K_j, embedDim] via matmul
+        // with the cached [1, embedDim] all-ones.
+        final weightCol = masked.matmul(_expertColOneHot![j]); // [T, 1]
+        final weightSubset = weightCol.embedding(idxTensor); // [K_j, 1]
+        final weightBcast = weightSubset.matmul(_ones1D!); // [K_j, embedDim]
+        // Run expert only on the routed subset.
+        final expertOut = routedExperts[j](xSubset); // [K_j, embedDim]
+        final weightedSubset = expertOut * weightBcast; // [K_j, embedDim]
+        // Scatter back into a full [T, embedDim].
+        final contribution = weightedSubset.scatterRowsAdd(idxTensor, t);
+        acc = acc == null ? contribution : acc + contribution;
+      }
+      if (acc == null) {
+        // Rare: no expert received any token (empty batch or all
+        // tokens dropped by grouped routing). Fall back to zeros so
+        // the shared-expert loop still contributes correctly.
+        acc = Tensor.fill([t, embedDim], 0.0, device: x.device);
+      }
+    } else {
+      for (int j = 0; j < numRoutedExperts; j++) {
+        final gateCol = masked.matmul(_selectors[j]); // [T, embedDim]
+        final expertOut = routedExperts[j](x); // [T, embedDim]
+        final weighted = gateCol * expertOut;
+        acc = acc == null ? weighted : acc + weighted;
+      }
     }
     for (final s in sharedExperts) {
       final o = s(x);

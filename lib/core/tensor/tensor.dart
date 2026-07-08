@@ -32,6 +32,7 @@ part 'attention.dart';
 part 'dropout.dart';
 part 'concat.dart';
 part 'aft.dart';
+part 'scatter.dart';
 
 enum Device { CPU, GPU }
 

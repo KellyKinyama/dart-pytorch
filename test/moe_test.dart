@@ -559,6 +559,127 @@ void main() {
         expect((yb[i] - scale * ya[i]).abs(), lessThan(1e-6));
       }
     });
+
+    test('sparse execution: forward matches dense forward (CPU)', () {
+      final dense = MoEFeedForward(
+        embedDim: 4,
+        numRoutedExperts: 4,
+        numSharedExperts: 1,
+        topK: 2,
+        expertHiddenDim: 8,
+        seed: 71,
+      );
+      final sparse = MoEFeedForward(
+        embedDim: 4,
+        numRoutedExperts: 4,
+        numSharedExperts: 1,
+        topK: 2,
+        expertHiddenDim: 8,
+        seed: 71,
+        sparseExecution: true,
+      );
+      final x = Tensor.fromList([
+        5,
+        4,
+      ], List<double>.generate(20, (i) => (i - 10) * 0.05));
+      final yD = dense(x).toList();
+      final yS = sparse(x).toList();
+      expect(yD.length, yS.length);
+      for (int i = 0; i < yD.length; i++) {
+        expect((yD[i] - yS[i]).abs(), lessThan(1e-5));
+      }
+    });
+
+    test('sparse execution: backward matches dense backward (CPU)', () {
+      final xD = Tensor.fromList([
+        4,
+        4,
+      ], List<double>.generate(16, (i) => (i - 8) * 0.05),
+          requiresGrad: true);
+      final xS = Tensor.fromList([
+        4,
+        4,
+      ], List<double>.generate(16, (i) => (i - 8) * 0.05),
+          requiresGrad: true);
+      final dense = MoEFeedForward(
+        embedDim: 4,
+        numRoutedExperts: 4,
+        numSharedExperts: 0,
+        topK: 2,
+        expertHiddenDim: 6,
+        seed: 83,
+      );
+      final sparse = MoEFeedForward(
+        embedDim: 4,
+        numRoutedExperts: 4,
+        numSharedExperts: 0,
+        topK: 2,
+        expertHiddenDim: 6,
+        seed: 83,
+        sparseExecution: true,
+      );
+      dense(xD).sum().backward();
+      sparse(xS).sum().backward();
+      final gD = xD.grad!.toList();
+      final gS = xS.grad!.toList();
+      for (int i = 0; i < gD.length; i++) {
+        expect((gD[i] - gS[i]).abs(), lessThan(1e-5));
+      }
+      // Gate grads must match too.
+      final ggD = dense.gateW.grad!.toList();
+      final ggS = sparse.gateW.grad!.toList();
+      for (int i = 0; i < ggD.length; i++) {
+        expect((ggD[i] - ggS[i]).abs(), lessThan(1e-5));
+      }
+    });
+
+    test('sparse execution: GPU parity with dense on GPU', () {
+      final xD = Tensor.fromList([
+        4,
+        4,
+      ], List<double>.generate(16, (i) => (i - 8) * 0.05),
+          requiresGrad: true, device: Device.GPU);
+      final xS = Tensor.fromList([
+        4,
+        4,
+      ], List<double>.generate(16, (i) => (i - 8) * 0.05),
+          requiresGrad: true, device: Device.GPU);
+      final dense = MoEFeedForward(
+        embedDim: 4,
+        numRoutedExperts: 4,
+        numSharedExperts: 0,
+        topK: 2,
+        expertHiddenDim: 6,
+        seed: 91,
+        device: Device.GPU,
+        activation: ExpertActivation.silu,
+      );
+      final sparse = MoEFeedForward(
+        embedDim: 4,
+        numRoutedExperts: 4,
+        numSharedExperts: 0,
+        topK: 2,
+        expertHiddenDim: 6,
+        seed: 91,
+        device: Device.GPU,
+        activation: ExpertActivation.silu,
+        sparseExecution: true,
+      );
+      final yD = dense(xD);
+      final yS = sparse(xS);
+      final yDList = yD.toList();
+      final ySList = yS.toList();
+      for (int i = 0; i < yDList.length; i++) {
+        expect((yDList[i] - ySList[i]).abs(), lessThan(1e-4));
+      }
+      yD.sum().backward();
+      yS.sum().backward();
+      final gD = xD.grad!.toList();
+      final gS = xS.grad!.toList();
+      for (int i = 0; i < gD.length; i++) {
+        expect((gD[i] - gS[i]).abs(), lessThan(1e-4));
+      }
+    });
   });
 
   group('MoELanguageModel', () {

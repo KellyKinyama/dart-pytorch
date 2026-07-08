@@ -1,5 +1,36 @@
 ## Unreleased
 
+- MoE: sparse expert execution — each expert now runs only on the
+  tokens actually routed to it, matching real MoE implementations
+  (DeepSeek-V3, Mixtral). Opt-in via `sparseExecution: true` on
+  `MoEFeedForward`, `MoEBlock`, and `MoELanguageModel`; the dense
+  path remains the default.
+  - New `TensorScatterRows` extension in
+    `lib/core/tensor/scatter.dart`: `subset.scatterRowsAdd(indices,
+    fullRows)` scatters a `[K, D]` subset into an otherwise-zero
+    `[T, D]` tensor at `indices` positions (atomicAdd on GPU;
+    repeated indices sum). Autograd gathers back via `embedding()`
+    so both sides are differentiable end-to-end.
+    * CPU implementation: direct row-copy + accumulate.
+    * GPU implementation: reuses the existing `embedding_backward`
+      kernel (a row-scatter-add) — no new CUDA needed.
+  - Sparse MoE forward path per expert `j`:
+    1. Collect indices of tokens where `mask[t, j] > 0` (CPU).
+    2. `xSubset = x.embedding(idx)` — `[K_j, embedDim]` gather.
+    3. Extract the `j`-th weight column via matmul with a cached
+       `[E, 1]` one-hot; gather to `[K_j, 1]`; broadcast to
+       `[K_j, embedDim]` via matmul with a cached `[1, embedDim]`
+       all-ones.
+    4. Run expert only on the subset.
+    5. `contribution = weightedSubset.scatterRowsAdd(idx, T)` back
+       to `[T, embedDim]`, accumulate across experts.
+  - Verified: sparse ↔ dense forward and backward parity to ~1e-5
+    on CPU and ~1e-4 on GPU. Same seed => bit-close outputs and
+    matching gradients on both `x` and `gateW`.
+  - +3 MoE tests + 3 tests for the new `scatterRowsAdd` op
+    (basic gather/scatter roundtrip, backward correctness, GPU vs
+    CPU parity). Full suite 299/299 green.
+
 - MoE: DeepSeek-V3 grouped routing + `routeScale`. Follows the
   two-stage selection in `inference/model.py::Gate`.
   - New `numExpertGroups` (default `1`, disabled) and `topKGroups`
@@ -29,11 +60,6 @@
     `grouped routing exactly matches ungrouped when topKGroups ==
     numExpertGroups`, `routeScale multiplies the routed
     contributions`). Full suite 293/293 green.
-  - Still deferred: sparse expert execution (only running each
-    expert on its routed tokens). Requires a new `index_select` /
-    `gather` primitive with backward on both CPU and GPU — a
-    self-contained tensor-op addition rather than an MoE-internal
-    change, so left for a dedicated commit.
 
 - MoE: SwiGLU expert body (matches DeepSeek-V3 and Mixtral).
   - New `enum ExpertVariant { mlp, swiGlu }`.
