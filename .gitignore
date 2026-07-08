@@ -1,0 +1,11 @@
+# https://dart.dev/guides/libraries/private-files
+# Created by `dart pub`
+.dart_tool/
+
+# Compiled CUDA kernel (rebuild with: nvcc --shared -Xcompiler -fPIC -o native/lib/libmat_mul.so lib/native/src/engine.cu)
+native/lib/*.so
+native/lib/*.dll
+native/lib/*.dylib
+
+# Dart pub lockfile — application repo, keep. If you convert this to a library, remove this line to ignore it instead.
+# pubspec.lock
