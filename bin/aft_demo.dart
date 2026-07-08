@@ -31,14 +31,12 @@ const int _seq = 16;
 ({Tensor x, Tensor y}) _makeSequence() {
   final tokens = List<int>.generate(_seq + 1, (i) => i % _vocab);
   return (
-    x: Tensor.fromList(
-      [_seq],
-      tokens.sublist(0, _seq).map((i) => i.toDouble()).toList(),
-    ),
-    y: Tensor.fromList(
-      [_seq],
-      tokens.sublist(1).map((i) => i.toDouble()).toList(),
-    ),
+    x: Tensor.fromList([
+      _seq,
+    ], tokens.sublist(0, _seq).map((i) => i.toDouble()).toList()),
+    y: Tensor.fromList([
+      _seq,
+    ], tokens.sublist(1).map((i) => i.toDouble()).toList()),
   );
 }
 
@@ -50,8 +48,15 @@ class _Result {
   final int totalMs;
   final double msPerStep;
   final String decode;
-  _Result(this.name, this.paramCount, this.lossInit, this.lossFinal,
-      this.totalMs, this.msPerStep, this.decode);
+  _Result(
+    this.name,
+    this.paramCount,
+    this.lossInit,
+    this.lossFinal,
+    this.totalMs,
+    this.msPerStep,
+    this.decode,
+  );
 }
 
 _Result _run(
@@ -83,10 +88,9 @@ _Result _run(
   // Greedy decode from `promptIds`.
   final buf = List<int>.from(promptIds);
   for (int i = 0; i < decodeSteps; i++) {
-    final ids = Tensor.fromList(
-      [buf.length],
-      buf.map((v) => v.toDouble()).toList(),
-    );
+    final ids = Tensor.fromList([
+      buf.length,
+    ], buf.map((v) => v.toDouble()).toList());
     final logits = forward(ids).toList();
     final off = (buf.length - 1) * _vocab;
     int best = 0;
@@ -117,8 +121,10 @@ void main() {
   const numLayers = 2;
   const steps = 100;
   const lr = 3e-3;
-  print('config   : embedDim=$embedDim, layers=$numLayers, steps=$steps, '
-      'lr=${lr.toStringAsExponential(0)}\n');
+  print(
+    'config   : embedDim=$embedDim, layers=$numLayers, steps=$steps, '
+    'lr=${lr.toStringAsExponential(0)}\n',
+  );
 
   final data = _makeSequence();
 
@@ -142,8 +148,10 @@ void main() {
   );
 
   final promptIds = [0, 1, 2, 3];
-  print('prompt   : ${promptIds.join(',')} '
-      '(expected continuation: 4,5,6,7,...)\n');
+  print(
+    'prompt   : ${promptIds.join(',')} '
+    '(expected continuation: 4,5,6,7,...)\n',
+  );
 
   final resAft = _run(
     'AFTLanguageModel',
@@ -156,10 +164,12 @@ void main() {
     promptIds: promptIds,
     decodeSteps: 8,
   );
-  print('AFT   done: loss ${resAft.lossInit.toStringAsFixed(3)} -> '
-      '${resAft.lossFinal.toStringAsFixed(3)}   '
-      '${resAft.totalMs} ms   '
-      '${resAft.msPerStep.toStringAsFixed(2)} ms/step');
+  print(
+    'AFT   done: loss ${resAft.lossInit.toStringAsFixed(3)} -> '
+    '${resAft.lossFinal.toStringAsFixed(3)}   '
+    '${resAft.totalMs} ms   '
+    '${resAft.msPerStep.toStringAsFixed(2)} ms/step',
+  );
 
   final resMha = _run(
     'TransformerLM(MHA)',
@@ -172,10 +182,12 @@ void main() {
     promptIds: promptIds,
     decodeSteps: 8,
   );
-  print('MHA   done: loss ${resMha.lossInit.toStringAsFixed(3)} -> '
-      '${resMha.lossFinal.toStringAsFixed(3)}   '
-      '${resMha.totalMs} ms   '
-      '${resMha.msPerStep.toStringAsFixed(2)} ms/step\n');
+  print(
+    'MHA   done: loss ${resMha.lossInit.toStringAsFixed(3)} -> '
+    '${resMha.lossFinal.toStringAsFixed(3)}   '
+    '${resMha.totalMs} ms   '
+    '${resMha.msPerStep.toStringAsFixed(2)} ms/step\n',
+  );
 
   // Summary.
   print('-' * 80);
@@ -203,10 +215,14 @@ void main() {
 
   final fast = resAft.msPerStep <= resMha.msPerStep ? resAft : resMha;
   final low = resAft.lossFinal <= resMha.lossFinal ? resAft : resMha;
-  print('\nfaster per step  : ${fast.name} '
-      '(${fast.msPerStep.toStringAsFixed(2)} ms/step)');
-  print('lower final loss : ${low.name} '
-      '(${low.lossFinal.toStringAsFixed(3)})');
+  print(
+    '\nfaster per step  : ${fast.name} '
+    '(${fast.msPerStep.toStringAsFixed(2)} ms/step)',
+  );
+  print(
+    'lower final loss : ${low.name} '
+    '(${low.lossFinal.toStringAsFixed(3)})',
+  );
   print(
     '\nnote: AFT here is a pure-Dart CPU op; standard attention uses the '
     'batched matmul path.',

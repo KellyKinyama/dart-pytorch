@@ -46,17 +46,17 @@ extension TensorAft on Tensor {
     }
     final t = q.shape[0];
     final d = q.shape[1];
-    if (k.shape[0] != t || k.shape[1] != d ||
-        v.shape[0] != t || v.shape[1] != d) {
+    if (k.shape[0] != t ||
+        k.shape[1] != d ||
+        v.shape[0] != t ||
+        v.shape[1] != d) {
       throw ArgumentError(
         'aftFull: q, k, v must share shape [T, D]; got q=${q.shape} '
         'k=${k.shape} v=${v.shape}',
       );
     }
     if (w.shape.length != 2 || w.shape[0] != t || w.shape[1] != t) {
-      throw ArgumentError(
-        'aftFull: w must be [T, T]=[$t, $t]; got ${w.shape}',
-      );
+      throw ArgumentError('aftFull: w must be [T, T]=[$t, $t]; got ${w.shape}');
     }
     if (q.device != Device.CPU ||
         k.device != Device.CPU ||
@@ -107,8 +107,7 @@ extension TensorAft on Tensor {
     }
 
     final out = Tensor._cpu([t, d], outData);
-    if (q.requiresGrad || k.requiresGrad || v.requiresGrad ||
-        w.requiresGrad) {
+    if (q.requiresGrad || k.requiresGrad || v.requiresGrad || w.requiresGrad) {
       out._setBackward([q, k, v, w], () {
         final gO = out._grad!._cpuData!;
         final gQ = Float32List(t * d);
@@ -172,9 +171,7 @@ extension TensorAft on Tensor {
   /// CPU-only.
   static Tensor sliceTopLeft(Tensor t, int rows, int cols) {
     if (t.shape.length != 2) {
-      throw ArgumentError(
-        'sliceTopLeft: expected 2D input; got ${t.shape}',
-      );
+      throw ArgumentError('sliceTopLeft: expected 2D input; got ${t.shape}');
     }
     if (t.device != Device.CPU) {
       throw ArgumentError('sliceTopLeft: CPU-only (got ${t.device})');

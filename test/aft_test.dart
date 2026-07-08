@@ -50,12 +50,19 @@ List<double> _referenceAft(
   return out;
 }
 
-void _closeList(List<double> a, List<double> b,
-    {double tol = _tol, String? name}) {
+void _closeList(
+  List<double> a,
+  List<double> b, {
+  double tol = _tol,
+  String? name,
+}) {
   expect(a.length, b.length);
   for (int i = 0; i < a.length; i++) {
-    expect(a[i], closeTo(b[i], tol),
-        reason: '${name ?? 'idx'} $i: got ${a[i]} vs ref ${b[i]}');
+    expect(
+      a[i],
+      closeTo(b[i], tol),
+      reason: '${name ?? 'idx'} $i: got ${a[i]} vs ref ${b[i]}',
+    );
   }
 }
 
@@ -111,10 +118,7 @@ void main() {
         Tensor.fromList([t, t], w),
         masked: true,
       );
-      _closeList(
-        out.toList(),
-        _referenceAft(q, k, v, w, t, d, masked: true),
-      );
+      _closeList(out.toList(), _referenceAft(q, k, v, w, t, d, masked: true));
     });
 
     test('rejects shape mismatches', () {
@@ -138,8 +142,12 @@ void main() {
       final v0 = _rand(t * d, seed: 22);
       final w0 = _rand(t * t, seed: 23);
 
-      double loss(List<double> q, List<double> k, List<double> v,
-          List<double> w) {
+      double loss(
+        List<double> q,
+        List<double> k,
+        List<double> v,
+        List<double> w,
+      ) {
         final out = _referenceAft(q, k, v, w, t, d);
         double s = 0.0;
         for (final o in out) {
@@ -180,25 +188,39 @@ void main() {
       _closeList(wT.grad!.toList(), gWNum, tol: _numGradTol, name: 'gW');
     });
 
-    test('masked backward: gradient rows above the diagonal in W are 0',
-        () {
+    test('masked backward: gradient rows above the diagonal in W are 0', () {
       const t = 4;
       const d = 2;
-      final qT = Tensor.fromList([t, d], _rand(t * d, seed: 30),
-          requiresGrad: true);
-      final kT = Tensor.fromList([t, d], _rand(t * d, seed: 31),
-          requiresGrad: true);
-      final vT = Tensor.fromList([t, d], _rand(t * d, seed: 32),
-          requiresGrad: true);
-      final wT = Tensor.fromList([t, t], _rand(t * t, seed: 33),
-          requiresGrad: true);
+      final qT = Tensor.fromList(
+        [t, d],
+        _rand(t * d, seed: 30),
+        requiresGrad: true,
+      );
+      final kT = Tensor.fromList(
+        [t, d],
+        _rand(t * d, seed: 31),
+        requiresGrad: true,
+      );
+      final vT = Tensor.fromList(
+        [t, d],
+        _rand(t * d, seed: 32),
+        requiresGrad: true,
+      );
+      final wT = Tensor.fromList(
+        [t, t],
+        _rand(t * t, seed: 33),
+        requiresGrad: true,
+      );
       final out = TensorAft.aftFull(qT, kT, vT, wT, masked: true);
       out.sum().backward();
       final gW = wT.grad!.toList();
       for (int i = 0; i < t; i++) {
         for (int j = i + 1; j < t; j++) {
-          expect(gW[i * t + j], 0.0,
-              reason: 'W[$i,$j] should have 0 grad under causal mask');
+          expect(
+            gW[i * t + j],
+            0.0,
+            reason: 'W[$i,$j] should have 0 grad under causal mask',
+          );
         }
       }
     });
@@ -312,8 +334,11 @@ void main() {
         opt.step();
       }
       final l1 = lm(x).crossEntropy(y).mean().toList()[0];
-      expect(l1, lessThan(0.1),
-          reason: 'expected loss to drop near zero (l0=$l0 l1=$l1)');
+      expect(
+        l1,
+        lessThan(0.1),
+        reason: 'expected loss to drop near zero (l0=$l0 l1=$l1)',
+      );
     });
   });
 }

@@ -40,13 +40,22 @@ class AFTAttention extends Module {
     bool bias = false,
     Device device = Device.CPU,
     int seed = 0,
-  })  : wq = Linear(embedDim, embedDim,
-            bias: bias, device: device, seed: seed),
-        wk = Linear(embedDim, embedDim,
-            bias: bias, device: device, seed: seed + 1000),
-        wv = Linear(embedDim, embedDim,
-            bias: bias, device: device, seed: seed + 2000),
-        posBias = _initPosBias(maxSeqLen, seed + 3000) {
+  }) : wq = Linear(embedDim, embedDim, bias: bias, device: device, seed: seed),
+       wk = Linear(
+         embedDim,
+         embedDim,
+         bias: bias,
+         device: device,
+         seed: seed + 1000,
+       ),
+       wv = Linear(
+         embedDim,
+         embedDim,
+         bias: bias,
+         device: device,
+         seed: seed + 2000,
+       ),
+       posBias = _initPosBias(maxSeqLen, seed + 3000) {
     if (device != Device.CPU) {
       throw ArgumentError(
         'AFTAttention: currently CPU-only (got device $device)',
@@ -90,11 +99,11 @@ class AFTAttention extends Module {
 
   @override
   List<Tensor> parameters() => [
-        ...wq.parameters(),
-        ...wk.parameters(),
-        ...wv.parameters(),
-        posBias,
-      ];
+    ...wq.parameters(),
+    ...wk.parameters(),
+    ...wv.parameters(),
+    posBias,
+  ];
 
   @override
   List<Module> submodules() => [wq, wk, wv];

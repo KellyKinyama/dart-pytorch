@@ -40,29 +40,29 @@ class AFTBlock extends Module {
     double dropoutP = 0.0,
     Device device = Device.CPU,
     int seed = 0,
-  })  : ffnDim = ffnDim ?? embedDim * 4,
-        ln1 = LayerNorm(embedDim),
-        ln2 = LayerNorm(embedDim),
-        attn = AFTAttention(
-          embedDim,
-          maxSeqLen: maxSeqLen,
-          masked: masked,
-          device: device,
-          seed: seed,
-        ),
-        ffn1 = Linear(
-          embedDim,
-          ffnDim ?? embedDim * 4,
-          device: device,
-          seed: seed + 4000,
-        ),
-        ffn2 = Linear(
-          ffnDim ?? embedDim * 4,
-          embedDim,
-          device: device,
-          seed: seed + 5000,
-        ),
-        dropout = Dropout(dropoutP);
+  }) : ffnDim = ffnDim ?? embedDim * 4,
+       ln1 = LayerNorm(embedDim),
+       ln2 = LayerNorm(embedDim),
+       attn = AFTAttention(
+         embedDim,
+         maxSeqLen: maxSeqLen,
+         masked: masked,
+         device: device,
+         seed: seed,
+       ),
+       ffn1 = Linear(
+         embedDim,
+         ffnDim ?? embedDim * 4,
+         device: device,
+         seed: seed + 4000,
+       ),
+       ffn2 = Linear(
+         ffnDim ?? embedDim * 4,
+         embedDim,
+         device: device,
+         seed: seed + 5000,
+       ),
+       dropout = Dropout(dropoutP);
 
   Tensor call(Tensor x) {
     final h = x + dropout(attn(ln1(x)));
@@ -72,12 +72,12 @@ class AFTBlock extends Module {
 
   @override
   List<Tensor> parameters() => [
-        ...ln1.parameters(),
-        ...ln2.parameters(),
-        ...attn.parameters(),
-        ...ffn1.parameters(),
-        ...ffn2.parameters(),
-      ];
+    ...ln1.parameters(),
+    ...ln2.parameters(),
+    ...attn.parameters(),
+    ...ffn1.parameters(),
+    ...ffn2.parameters(),
+  ];
 
   @override
   List<Module> submodules() => [ln1, ln2, attn, ffn1, ffn2, dropout];
@@ -106,24 +106,22 @@ class AFTLanguageModel extends Module {
     double dropoutP = 0.0,
     Device device = Device.CPU,
     int seed = 0,
-  })  : tokenEmb =
-            Embedding(vocabSize, embedDim, device: device, seed: seed),
-        posEnc = SinusoidalPositionalEncoding(embedDim),
-        blocks = List<AFTBlock>.generate(
-          numLayers,
-          (i) => AFTBlock(
-            embedDim,
-            maxSeqLen: maxLen,
-            masked: true,
-            ffnDim: ffnDim,
-            dropoutP: dropoutP,
-            device: device,
-            seed: seed + 100000 + i * 10000,
-          ),
-        ),
-        finalLn = LayerNorm(embedDim),
-        head = Linear(embedDim, vocabSize,
-            device: device, seed: seed + 900000);
+  }) : tokenEmb = Embedding(vocabSize, embedDim, device: device, seed: seed),
+       posEnc = SinusoidalPositionalEncoding(embedDim),
+       blocks = List<AFTBlock>.generate(
+         numLayers,
+         (i) => AFTBlock(
+           embedDim,
+           maxSeqLen: maxLen,
+           masked: true,
+           ffnDim: ffnDim,
+           dropoutP: dropoutP,
+           device: device,
+           seed: seed + 100000 + i * 10000,
+         ),
+       ),
+       finalLn = LayerNorm(embedDim),
+       head = Linear(embedDim, vocabSize, device: device, seed: seed + 900000);
 
   /// Forward pass. `tokens` is 1D `[seqLen]` — returns logits
   /// `[seqLen, vocabSize]`. No batched 2D path yet (AFT attention
@@ -136,9 +134,7 @@ class AFTLanguageModel extends Module {
     }
     final n = tokens.shape[0];
     if (n > maxLen) {
-      throw ArgumentError(
-        'AFTLanguageModel: seqLen $n exceeds maxLen $maxLen',
-      );
+      throw ArgumentError('AFTLanguageModel: seqLen $n exceeds maxLen $maxLen');
     }
     var x = tokenEmb(tokens);
     x = posEnc(x);
@@ -151,19 +147,13 @@ class AFTLanguageModel extends Module {
 
   @override
   List<Tensor> parameters() => [
-        ...tokenEmb.parameters(),
-        ...posEnc.parameters(),
-        for (final b in blocks) ...b.parameters(),
-        ...finalLn.parameters(),
-        ...head.parameters(),
-      ];
+    ...tokenEmb.parameters(),
+    ...posEnc.parameters(),
+    for (final b in blocks) ...b.parameters(),
+    ...finalLn.parameters(),
+    ...head.parameters(),
+  ];
 
   @override
-  List<Module> submodules() => [
-        tokenEmb,
-        posEnc,
-        ...blocks,
-        finalLn,
-        head,
-      ];
+  List<Module> submodules() => [tokenEmb, posEnc, ...blocks, finalLn, head];
 }
