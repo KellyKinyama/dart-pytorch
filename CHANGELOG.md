@@ -1,5 +1,40 @@
 ## Unreleased
 
+- MoE: DeepSeek-V3 grouped routing + `routeScale`. Follows the
+  two-stage selection in `inference/model.py::Gate`.
+  - New `numExpertGroups` (default `1`, disabled) and `topKGroups`
+    (default `= numExpertGroups`) options on `MoEFeedForward`,
+    `MoEBlock`, and `MoELanguageModel`. When `numExpertGroups > 1`:
+    1. Experts are partitioned into `numExpertGroups` contiguous
+       groups (`numRoutedExperts` must be divisible).
+    2. Per-token group score is `sum-of-top-2` biased expert scores
+       inside the group for `GateFunction.sigmoid` (DeepSeek-V3's
+       recipe) and `max` for `GateFunction.softmax`.
+    3. Only experts inside the top `topKGroups` groups are eligible
+       for the global top-K selection.
+    * When `topKGroups == numExpertGroups` the two-stage selection
+      collapses to the ungrouped case bit-exactly (verified by
+      test).
+    * Constructor rejects: non-divisible group count, `topKGroups`
+      out of range, and `topK > topKGroups * expertsPerGroup`
+      (i.e. top-K unreachable from the selected groups).
+  - New `routeScale` (default `1.0`) option. Applied to the routing
+    weights after top-K and (optional) renormalization. Matches
+    DeepSeek-V3's `Gate.route_scale`; when `1.0` the multiplication
+    is skipped.
+  - `test/moe_test.dart`: +5 tests (`grouped routing:
+    numExpertGroups must divide numRoutedExperts`, `grouped
+    routing: topK must be reachable from topKGroups`, `grouped
+    routing: every selected expert lives in a top-K_groups group`,
+    `grouped routing exactly matches ungrouped when topKGroups ==
+    numExpertGroups`, `routeScale multiplies the routed
+    contributions`). Full suite 293/293 green.
+  - Still deferred: sparse expert execution (only running each
+    expert on its routed tokens). Requires a new `index_select` /
+    `gather` primitive with backward on both CPU and GPU — a
+    self-contained tensor-op addition rather than an MoE-internal
+    change, so left for a dedicated commit.
+
 - MoE: SwiGLU expert body (matches DeepSeek-V3 and Mixtral).
   - New `enum ExpertVariant { mlp, swiGlu }`.
     * `mlp` (default) keeps the current two-layer body

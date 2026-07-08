@@ -71,9 +71,7 @@ enum GateFunction { softmax, sigmoid }
 
 /// Bias update rule for [MoEFeedForward.updateRoutingBias]. See
 /// aux-loss-free paper (arXiv:2408.15664) §4.3.
-enum BiasUpdateRule { sign, proportional }
-
-/// Activation used inside an [Expert]. `relu` and `silu`
+enum BiasUpdateRule { sign, proportional }/// Activation used inside an [Expert]. `relu` and `silu`
 /// (`x * sigmoid(x)`) both have fwd+bwd on CPU and GPU.
 enum ExpertActivation { relu, silu }
 
@@ -157,6 +155,21 @@ class MoEFeedForward extends Module {
   final GateFunction gateFunction;
   final BiasUpdateRule biasUpdateRule;
 
+  /// Number of expert groups for DeepSeek-V3-style grouped routing.
+  /// Must evenly divide [numRoutedExperts]. `1` disables grouping
+  /// (the default; the router simply picks top-K across all experts).
+  final int numExpertGroups;
+
+  /// When grouping is enabled ([numExpertGroups] > 1), the router
+  /// first picks this many top groups; then within those groups it
+  /// picks the top-K experts. Ignored when `numExpertGroups == 1`.
+  final int topKGroups;
+
+  /// Fixed scalar applied to the final routing weights after top-K
+  /// selection and (optional) renormalization. Matches DeepSeek-V3
+  /// `Gate.route_scale`. `1.0` (default) disables scaling.
+  final double routeScale;
+
   /// When true, the K selected weights are divided by their per-token
   /// sum so each row of the routing weights sums to 1.
   final bool renormalizeTopK;
@@ -204,9 +217,13 @@ class MoEFeedForward extends Module {
     this.expertVariant = ExpertVariant.mlp,
     this.gateFunction = GateFunction.softmax,
     this.biasUpdateRule = BiasUpdateRule.sign,
+    this.numExpertGroups = 1,
+    int? topKGroups,
+    this.routeScale = 1.0,
     bool? renormalizeTopK,
   }) : renormalizeTopK =
            renormalizeTopK ?? (gateFunction == GateFunction.sigmoid),
+       topKGroups = topKGroups ?? numExpertGroups,
        gateW = _initGate(embedDim, numRoutedExperts, seed, device),
        routedExperts = List<Expert>.generate(
          numRoutedExperts,
@@ -243,6 +260,32 @@ class MoEFeedForward extends Module {
       throw ArgumentError(
         'MoEFeedForward: topK ($topK) must be in [1, numRoutedExperts '
         '($numRoutedExperts)]',
+      );
+    }
+    if (numExpertGroups <= 0) {
+      throw ArgumentError(
+        'MoEFeedForward: numExpertGroups ($numExpertGroups) must be >= 1',
+      );
+    }
+    if (numRoutedExperts % numExpertGroups != 0) {
+      throw ArgumentError(
+        'MoEFeedForward: numRoutedExperts ($numRoutedExperts) must be '
+        'divisible by numExpertGroups ($numExpertGroups)',
+      );
+    }
+    if (this.topKGroups <= 0 || this.topKGroups > numExpertGroups) {
+      throw ArgumentError(
+        'MoEFeedForward: topKGroups (${this.topKGroups}) must be in '
+        '[1, numExpertGroups ($numExpertGroups)]',
+      );
+    }
+    // With grouping the top-K experts must be reachable from the
+    // top-K_groups groups.
+    final expertsPerGroup = numRoutedExperts ~/ numExpertGroups;
+    if (numExpertGroups > 1 && topK > this.topKGroups * expertsPerGroup) {
+      throw ArgumentError(
+        'MoEFeedForward: topK ($topK) exceeds topKGroups '
+        '(${this.topKGroups}) * expertsPerGroup ($expertsPerGroup)',
       );
     }
   }
@@ -294,13 +337,77 @@ class MoEFeedForward extends Module {
     // Discrete top-K with routing bias (CPU). Bias is added ONLY to
     // the sort key, never to the weights that combine expert outputs
     // — matches DeepSeek-V3 and the aux-loss-free paper.
+    //
+    // When grouped routing is enabled (numExpertGroups > 1) this
+    // becomes a two-stage selection matching DeepSeek-V3
+    // `inference/model.py`'s `Gate`:
+    //   1. Compute per-group scores. When gating with sigmoid the
+    //      paper sums the top-2 biased expert scores in the group;
+    //      when gating with softmax it uses the max. Pick the top
+    //      `topKGroups` groups.
+    //   2. Mask experts outside the selected groups, then pick the
+    //      top-K experts globally as usual.
     final scoresFlat = gateScores.toList();
     final maskVals = List<double>.filled(t * e, 0.0);
     final k = topK < e ? topK : e;
+    final biased = List<double>.filled(t * e, 0.0);
+    for (int i = 0; i < t; i++) {
+      for (int j = 0; j < e; j++) {
+        biased[i * e + j] = scoresFlat[i * e + j] + routingBias[j];
+      }
+    }
+    if (numExpertGroups > 1) {
+      final expertsPerGroup = e ~/ numExpertGroups;
+      // Zero out experts in non-selected groups by setting their
+      // biased score to -inf before the global top-K.
+      for (int i = 0; i < t; i++) {
+        // Group score = sigmoid ? sum-of-top-2 : max.
+        final groupScores = List<double>.filled(numExpertGroups, 0.0);
+        for (int g = 0; g < numExpertGroups; g++) {
+          final offset = i * e + g * expertsPerGroup;
+          if (gateFunction == GateFunction.sigmoid && expertsPerGroup >= 2) {
+            double a = -double.infinity;
+            double b = -double.infinity;
+            for (int m = 0; m < expertsPerGroup; m++) {
+              final v = biased[offset + m];
+              if (v > a) {
+                b = a;
+                a = v;
+              } else if (v > b) {
+                b = v;
+              }
+            }
+            groupScores[g] = a + b;
+          } else {
+            double best = -double.infinity;
+            for (int m = 0; m < expertsPerGroup; m++) {
+              final v = biased[offset + m];
+              if (v > best) best = v;
+            }
+            groupScores[g] = best;
+          }
+        }
+        // Top-K groups.
+        final gIdx = List<int>.generate(numExpertGroups, (g) => g)
+          ..sort((p, q) => groupScores[q].compareTo(groupScores[p]));
+        final keep = List<bool>.filled(numExpertGroups, false);
+        for (int r = 0; r < topKGroups; r++) {
+          keep[gIdx[r]] = true;
+        }
+        for (int g = 0; g < numExpertGroups; g++) {
+          if (!keep[g]) {
+            final offset = i * e + g * expertsPerGroup;
+            for (int m = 0; m < expertsPerGroup; m++) {
+              biased[offset + m] = -double.infinity;
+            }
+          }
+        }
+      }
+    }
     for (int i = 0; i < t; i++) {
       final indexed = List<MapEntry<int, double>>.generate(
         e,
-        (j) => MapEntry(j, scoresFlat[i * e + j] + routingBias[j]),
+        (j) => MapEntry(j, biased[i * e + j]),
       );
       indexed.sort((a, b) => b.value.compareTo(a.value));
       for (int r = 0; r < k; r++) {
@@ -320,6 +427,10 @@ class MoEFeedForward extends Module {
       final rowSum = masked.matmul(_onesE1!); // [T, 1]
       final rowSumBcast = rowSum.matmul(_ones1E!); // [T, E]
       masked = masked / (rowSumBcast + 1e-9);
+    }
+
+    if (routeScale != 1.0) {
+      masked = masked * routeScale;
     }
 
     Tensor? acc;

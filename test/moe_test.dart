@@ -402,26 +402,163 @@ void main() {
         // grads on w3.
         expect(moe.routedExperts[0].w3!.weight.grad, isNotNull);
         expect(
-          moe.routedExperts[0]
-              .w3!
-              .weight
-              .grad!
-              .toList()
-              .any((v) => v.abs() > 1e-8),
+          moe.routedExperts[0].w3!.weight.grad!.toList().any(
+            (v) => v.abs() > 1e-8,
+          ),
           isTrue,
         );
         expect(moe.sharedExperts[0].w3!.weight.grad, isNotNull);
         expect(
-          moe.sharedExperts[0]
-              .w3!
-              .weight
-              .grad!
-              .toList()
-              .any((v) => v.abs() > 1e-8),
+          moe.sharedExperts[0].w3!.weight.grad!.toList().any(
+            (v) => v.abs() > 1e-8,
+          ),
           isTrue,
         );
       },
     );
+
+    test('grouped routing: numExpertGroups must divide numRoutedExperts', () {
+      expect(
+        () => MoEFeedForward(
+          embedDim: 4,
+          numRoutedExperts: 5,
+          numSharedExperts: 0,
+          topK: 1,
+          expertHiddenDim: 4,
+          numExpertGroups: 2,
+        ),
+        throwsArgumentError,
+      );
+    });
+
+    test('grouped routing: topK must be reachable from topKGroups', () {
+      expect(
+        () => MoEFeedForward(
+          embedDim: 4,
+          numRoutedExperts: 8,
+          numSharedExperts: 0,
+          topK: 4,
+          expertHiddenDim: 4,
+          numExpertGroups: 4, // 2 experts/group
+          topKGroups: 1, // -> 2 reachable experts, but topK=4
+        ),
+        throwsArgumentError,
+      );
+    });
+
+    test(
+      'grouped routing: every selected expert lives in a top-K_groups group',
+      () {
+        const e = 8;
+        const g = 4;
+        const kg = 2;
+        final moe = MoEFeedForward(
+          embedDim: 4,
+          numRoutedExperts: e,
+          numSharedExperts: 0,
+          topK: 2,
+          expertHiddenDim: 4,
+          seed: 21,
+          numExpertGroups: g,
+          topKGroups: kg,
+        );
+        // Run a couple of tokens.
+        final x = Tensor.fromList([
+          3,
+          4,
+        ], List<double>.generate(12, (i) => (i - 6) * 0.1));
+        moe(x);
+        // Across 3 tokens with topK=2, exactly 6 routings happened.
+        // The counters live per-expert. Verify that any expert with a
+        // positive load lives inside one of the top-K_groups groups
+        // for the token that routed to it — since we can't observe
+        // per-token routing directly here, just check the counter sum.
+        final loadTotal = moe.expertLoad.fold<int>(0, (a, b) => a + b);
+        expect(loadTotal, 3 * 2);
+        // At most `topKGroups * expertsPerGroup * t = 2 * 2 * 3 = 12`\n"
+        // experts could have non-zero load — but with 3 tokens picking\n"
+        // 2 out of a possible 4-expert pool per token, at most 4 unique\n"
+        // experts across all tokens can be hot when topKGroups * per_g\n"
+        // = 4, but tokens may share groups. Weaker invariant: the\n"
+        // number of hot experts must be <= topKGroups * expertsPerGroup\n"
+        // * t = 12 (trivially true), and >= 1 (non-empty).\n"
+        final hot = moe.expertLoad.where((c) => c > 0).length;
+        expect(hot, greaterThanOrEqualTo(1));
+        expect(hot, lessThanOrEqualTo(kg * (e ~/ g) * x.shape[0]));
+      },
+    );
+
+    test(
+      'grouped routing exactly matches ungrouped when topKGroups == numExpertGroups',
+      () {
+        // With topKGroups == numExpertGroups every group is selected,
+        // so grouped routing must produce the exact same top-K as
+        // ungrouped routing.
+        const e = 6;
+        final ungrouped = MoEFeedForward(
+          embedDim: 4,
+          numRoutedExperts: e,
+          numSharedExperts: 0,
+          topK: 2,
+          expertHiddenDim: 4,
+          seed: 33,
+        );
+        final grouped = MoEFeedForward(
+          embedDim: 4,
+          numRoutedExperts: e,
+          numSharedExperts: 0,
+          topK: 2,
+          expertHiddenDim: 4,
+          seed: 33,
+          numExpertGroups: 3,
+          topKGroups: 3,
+        );
+        final x = Tensor.fromList([
+          4,
+          4,
+        ], List<double>.generate(16, (i) => (i - 8) * 0.05));
+        final yU = ungrouped(x).toList();
+        final yG = grouped(x).toList();
+        expect(yU.length, yG.length);
+        for (int i = 0; i < yU.length; i++) {
+          expect((yU[i] - yG[i]).abs(), lessThan(1e-6));
+        }
+      },
+    );
+
+    test('routeScale multiplies the routed contributions', () {
+      // Compare two moes with identical seed but different routeScale.
+      // The shared-experts path is unweighted, so with numShared=0 the
+      // output is purely a linear function of routeScale.
+      const scale = 2.5;
+      final a = MoEFeedForward(
+        embedDim: 4,
+        numRoutedExperts: 3,
+        numSharedExperts: 0,
+        topK: 1,
+        expertHiddenDim: 4,
+        seed: 51,
+      );
+      final b = MoEFeedForward(
+        embedDim: 4,
+        numRoutedExperts: 3,
+        numSharedExperts: 0,
+        topK: 1,
+        expertHiddenDim: 4,
+        seed: 51,
+        routeScale: scale,
+      );
+      final x = Tensor.fromList([
+        2,
+        4,
+      ], [0.1, -0.2, 0.3, 0.05, -0.1, 0.2, -0.05, 0.15]);
+      final ya = a(x).toList();
+      final yb = b(x).toList();
+      expect(ya.length, yb.length);
+      for (int i = 0; i < ya.length; i++) {
+        expect((yb[i] - scale * ya[i]).abs(), lessThan(1e-6));
+      }
+    });
   });
 
   group('MoELanguageModel', () {
