@@ -10,7 +10,8 @@
 ///
 /// Run from the repository root:
 ///
-///     dart run bin/shakespeare_moe.dart
+///     dart run bin/shakespeare_moe.dart         # CPU (ReLU experts)
+///     dart run bin/shakespeare_moe.dart --gpu   # GPU (SiLU experts)
 library;
 
 import 'dart:math' as math;
@@ -33,8 +34,13 @@ const int _biasUpdateEvery = 50;
 const double _lr = 3e-3;
 const int _sampleTokens = 200;
 
-void main() {
-  print('=== shakespeare_moe : MoE Transformer LM ===');
+void main(List<String> args) {
+  final useGpu = args.contains('--gpu');
+  final device = useGpu ? Device.GPU : Device.CPU;
+  final activation = useGpu ? ExpertActivation.silu : ExpertActivation.relu;
+  print(
+    '=== shakespeare_moe : MoE Transformer LM (${useGpu ? "GPU + SiLU" : "CPU + ReLU"}) ===',
+  );
   final text = loadCorpus(maxChars: _corpusChars);
   final tok = CharTokenizer.fromText(text);
   final ids = tok.encode(text);
@@ -53,6 +59,8 @@ void main() {
     topK: _topK,
     expertHiddenDim: _expertHiddenDim,
     biasUpdateRate: 0.01,
+    device: device,
+    activation: activation,
     seed: 1,
   );
   final params = lm.parameters();
@@ -72,7 +80,7 @@ void main() {
   double lastLoss = double.nan;
   for (int step = 1; step <= _trainSteps; step++) {
     opt.zeroGrad();
-    final (x, y) = getWindow(ids, _blockSize, rng);
+    final (x, y) = getWindow(ids, _blockSize, rng, device: device);
     final loss = lm(x).crossEntropy(y).mean();
     loss.backward();
     clipGradNorm(params, 1.0);
@@ -109,7 +117,7 @@ void main() {
   lm.eval();
 
   List<double> stepFn(List<double> ctx) {
-    final x = Tensor.fromList([ctx.length], ctx);
+    final x = Tensor.fromList([ctx.length], ctx, device: device);
     return lastRowLogits(lm(x), tok.vocabSize);
   }
 

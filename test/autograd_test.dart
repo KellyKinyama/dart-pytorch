@@ -293,4 +293,47 @@ void main() {
       expectClose(b.toList(), [5.0], tol: 0.3);
     });
   });
+
+  group('broadcast + / - backward preserves shared gradient handle', () {
+    // Regression: `+` and `-` used to pass out._grad to both operand
+    // reduction paths directly. When one path went through
+    // _reduceForBroadcast (which disposes its input), the other
+    // operand's aliased grad handle was invalidated — showing up as
+    // a null-check in the next matmul backward on GPU. The fix
+    // clones for the branch that reads g directly when both operands
+    // require grad.
+    for (final device in [Device.CPU, Device.GPU]) {
+      test('+ row-broadcast with both operands requires_grad ($device)', () {
+        final a = Tensor.fromList(
+          [4, 8],
+          List<double>.generate(32, (i) => (i % 5) * 0.1),
+          device: device,
+          requiresGrad: true,
+        );
+        final b = Tensor.fromList(
+          [1, 8],
+          List<double>.generate(8, (i) => (i % 3) * 0.2),
+          device: device,
+          requiresGrad: true,
+        );
+        final y = a + b;
+        // Force another op that reads the aliased grad after the
+        // reduction path runs — matmul backward exercises the same
+        // failure mode observed in Linear-with-bias.
+        final w = Tensor.fromList(
+          [8, 4],
+          List<double>.generate(32, (i) => (i % 7) * 0.05),
+          device: device,
+          requiresGrad: true,
+        );
+        final z = y.matmul(w);
+        z.sum().backward();
+        expect(a.grad, isNotNull);
+        expect(b.grad, isNotNull);
+        expect(w.grad, isNotNull);
+        expect(a.grad!.shape, [4, 8]);
+        expect(b.grad!.shape, [1, 8]);
+      });
+    }
+  });
 }

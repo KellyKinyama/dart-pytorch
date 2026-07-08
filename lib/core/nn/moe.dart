@@ -21,13 +21,16 @@
 ///   * The discrete top-K choice is made on CPU (Dart) and applied as
 ///     a `[T, E]` 0/1 mask multiplied into `gateScores`. The mask is a
 ///     non-differentiable straight-through stop; only the K selected
-///     scores per row contribute to the output.
+///     scores per row contribute to the output. When the module lives
+///     on GPU this incurs one small `[T, E]` device→host copy per
+///     forward — negligible for typical sequence lengths.
 ///   * Column-broadcasting of `masked_scores[:, e]` to `[T, embedDim]`
 ///     uses a precomputed one-hot selector matmul (`[T, E] @ [E, D]`)
 ///     — this keeps everything in existing tensor ops with correct
-///     autograd.
+///     autograd, and runs on the same device as the input.
 ///   * 2D input `[T, embedDim]` only. Higher-rank inputs should be
-///     reshaped by the caller.
+///     reshaped by the caller. Runs on CPU or GPU (matches the device
+///     passed to the constructor).
 library;
 
 import 'dart:math' as math;
@@ -36,10 +39,16 @@ import '../tensor/tensor.dart';
 import 'linear.dart';
 import 'module.dart';
 
-/// A single expert — a two-layer MLP `x -> relu(x @ W1.T) @ W2.T`.
+/// Activation used inside an [Expert]. `relu` runs its backward on CPU
+/// (matches classical MoE); `silu` (`x * sigmoid(x)`) has fwd+bwd on
+/// both CPU and GPU and is required if the module lives on GPU.
+enum ExpertActivation { relu, silu }
+
+/// A single expert — a two-layer MLP `x -> act(x @ W1.T) @ W2.T`.
 class Expert extends Module {
   final int dim;
   final int hiddenDim;
+  final ExpertActivation activation;
   final Linear w1;
   final Linear w2;
 
@@ -48,10 +57,18 @@ class Expert extends Module {
     this.hiddenDim, {
     Device device = Device.CPU,
     int seed = 0,
+    this.activation = ExpertActivation.relu,
   }) : w1 = Linear(dim, hiddenDim, device: device, seed: seed),
        w2 = Linear(hiddenDim, dim, device: device, seed: seed + 1);
 
-  Tensor call(Tensor x) => w2(w1(x).relu());
+  Tensor call(Tensor x) {
+    final h = w1(x);
+    final a = switch (activation) {
+      ExpertActivation.relu => h.relu(),
+      ExpertActivation.silu => h * h.sigmoid(),
+    };
+    return w2(a);
+  }
 
   @override
   List<Tensor> parameters() => [...w1.parameters(), ...w2.parameters()];
@@ -67,6 +84,7 @@ class MoEFeedForward extends Module {
   final int topK;
   final int expertHiddenDim;
   final double biasUpdateRate;
+  final ExpertActivation activation;
 
   /// Router weights `[embedDim, numRoutedExperts]`.
   final Tensor gateW;
@@ -99,6 +117,7 @@ class MoEFeedForward extends Module {
     this.biasUpdateRate = 0.001,
     Device device = Device.CPU,
     int seed = 0,
+    this.activation = ExpertActivation.relu,
   }) : gateW = _initGate(embedDim, numRoutedExperts, seed, device),
        routedExperts = List<Expert>.generate(
          numRoutedExperts,
@@ -107,6 +126,7 @@ class MoEFeedForward extends Module {
            expertHiddenDim,
            device: device,
            seed: seed + 1000 + i * 100,
+           activation: activation,
          ),
        ),
        sharedExperts = List<Expert>.generate(
@@ -116,6 +136,7 @@ class MoEFeedForward extends Module {
            expertHiddenDim,
            device: device,
            seed: seed + 500000 + i * 100,
+           activation: activation,
          ),
        ),
        routingBias = List<double>.filled(numRoutedExperts, 0.0),
@@ -127,8 +148,11 @@ class MoEFeedForward extends Module {
         '($numRoutedExperts)]',
       );
     }
-    if (device != Device.CPU) {
-      throw ArgumentError('MoEFeedForward: only Device.CPU is supported');
+    if (device == Device.GPU && activation == ExpertActivation.relu) {
+      throw ArgumentError(
+        'MoEFeedForward on Device.GPU requires ExpertActivation.silu — '
+        'relu.backward is CPU-only. Pass activation: ExpertActivation.silu.',
+      );
     }
   }
 
@@ -139,7 +163,12 @@ class MoEFeedForward extends Module {
       inDim * e,
       (_) => (rng.nextDouble() * 2 - 1) * bound,
     );
-    return Tensor.fromList([inDim, e], vals, requiresGrad: true, device: device);
+    return Tensor.fromList(
+      [inDim, e],
+      vals,
+      requiresGrad: true,
+      device: device,
+    );
   }
 
   static List<Tensor> _buildSelectors(int e, int d, Device device) {
@@ -184,7 +213,7 @@ class MoEFeedForward extends Module {
         _expertLoad[j]++;
       }
     }
-    final mask = Tensor.fromList([t, e], maskVals);
+    final mask = Tensor.fromList([t, e], maskVals, device: x.device);
     final masked = gateScores * mask; // [T, E]
 
     Tensor? acc;

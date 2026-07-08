@@ -45,8 +45,9 @@ class MoEBlock extends Module {
     double dropoutP = 0.0,
     Device device = Device.CPU,
     int seed = 0,
-  }) : ln1 = LayerNorm(embedDim),
-       ln2 = LayerNorm(embedDim),
+    ExpertActivation activation = ExpertActivation.relu,
+  }) : ln1 = LayerNorm(embedDim, device: device),
+       ln2 = LayerNorm(embedDim, device: device),
        attn = MultiHeadAttention(
          embedDim,
          numHeads,
@@ -63,6 +64,7 @@ class MoEBlock extends Module {
          biasUpdateRate: biasUpdateRate,
          device: device,
          seed: seed + 4000,
+         activation: activation,
        ),
        dropout = Dropout(dropoutP);
 
@@ -123,6 +125,7 @@ class MoELanguageModel extends Module {
     double dropoutP = 0.0,
     Device device = Device.CPU,
     int seed = 0,
+    ExpertActivation activation = ExpertActivation.relu,
   }) : expertHiddenDim = expertHiddenDim ?? embedDim * 4,
        tokenEmb = Embedding(vocabSize, embedDim, device: device, seed: seed),
        posEnc = SinusoidalPositionalEncoding(embedDim),
@@ -139,9 +142,10 @@ class MoELanguageModel extends Module {
            dropoutP: dropoutP,
            device: device,
            seed: seed + 100000 + i * 10000,
+           activation: activation,
          ),
        ),
-       finalLn = LayerNorm(embedDim),
+       finalLn = LayerNorm(embedDim, device: device),
        head = Linear(embedDim, vocabSize, device: device, seed: seed + 900000);
 
   Tensor call(Tensor tokens) {

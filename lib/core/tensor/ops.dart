@@ -44,11 +44,16 @@ extension TensorOps on Tensor {
       final b = o;
       out._setBackward([a, b], () {
         final g = out._grad!;
+        // _reduceForBroadcast may dispose its input; if both branches read g
+        // directly, clone so the second call still has a live tensor.
+        final needsClone = a.requiresGrad && b.requiresGrad;
         if (a.requiresGrad) {
-          a._accumulateGrad(Tensor._reduceForBroadcast(g, a.shape));
+          final ga = needsClone ? g.clone() : g;
+          a._accumulateGrad(Tensor._reduceForBroadcast(ga, a.shape));
         }
         if (b.requiresGrad) {
-          b._accumulateGrad(Tensor._reduceForBroadcast(g, b.shape));
+          final gb = needsClone ? g.clone() : g;
+          b._accumulateGrad(Tensor._reduceForBroadcast(gb, b.shape));
         }
       });
     }
@@ -76,7 +81,10 @@ extension TensorOps on Tensor {
       out._setBackward([a, b], () {
         final g = out._grad!;
         if (a.requiresGrad) {
-          a._accumulateGrad(Tensor._reduceForBroadcast(g, a.shape));
+          // b branch below builds a fresh tensor (g * -1.0), so only
+          // a's direct read of g needs a defensive clone when both do grad.
+          final ga = b.requiresGrad ? g.clone() : g;
+          a._accumulateGrad(Tensor._reduceForBroadcast(ga, a.shape));
         }
         if (b.requiresGrad) {
           b._accumulateGrad(Tensor._reduceForBroadcast(g * -1.0, b.shape));

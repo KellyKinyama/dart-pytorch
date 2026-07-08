@@ -44,7 +44,12 @@ String loadCorpus({int? maxChars}) {
 /// is 2D-only), we return **one** window at a time (`batch == 1`) as a
 /// 1D `[blockSize]` tensor pair. Multi-window batching is left to the
 /// caller.
-(Tensor, Tensor) getWindow(List<int> ids, int blockSize, math.Random rng) {
+(Tensor, Tensor) getWindow(
+  List<int> ids,
+  int blockSize,
+  math.Random rng, {
+  Device device = Device.CPU,
+}) {
   final maxStart = ids.length - blockSize - 1;
   if (maxStart <= 0) {
     throw ArgumentError(
@@ -57,7 +62,10 @@ String loadCorpus({int? maxChars}) {
     blockSize,
     (i) => ids[start + i + 1].toDouble(),
   );
-  return (Tensor.fromList([blockSize], x), Tensor.fromList([blockSize], y));
+  return (
+    Tensor.fromList([blockSize], x, device: device),
+    Tensor.fromList([blockSize], y, device: device),
+  );
 }
 
 /// Sample one token index from a raw logits row using temperature +
@@ -137,7 +145,12 @@ List<int> generateText(
     final row = logits.length == vocabSize
         ? logits
         : logits.sublist(logits.length - vocabSize);
-    final next = sampleFromLogits(row, temperature: temperature, topK: topK, rng: r);
+    final next = sampleFromLogits(
+      row,
+      temperature: temperature,
+      topK: topK,
+      rng: r,
+    );
     out.add(next);
   }
   return out;

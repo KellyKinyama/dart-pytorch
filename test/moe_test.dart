@@ -11,7 +11,10 @@ void main() {
   group('Expert', () {
     test('forward preserves [T, dim] shape', () {
       final e = Expert(4, 8, seed: 1);
-      final x = Tensor.fromList([3, 4], List<double>.generate(12, (i) => i * 0.1));
+      final x = Tensor.fromList([
+        3,
+        4,
+      ], List<double>.generate(12, (i) => i * 0.1));
       final y = e(x);
       expect(y.shape, [3, 4]);
     });
@@ -56,10 +59,10 @@ void main() {
         expertHiddenDim: 16,
         seed: 7,
       );
-      final x = Tensor.fromList(
-        [6, 8],
-        List<double>.generate(48, (i) => (i % 7) * 0.05),
-      );
+      final x = Tensor.fromList([
+        6,
+        8,
+      ], List<double>.generate(48, (i) => (i % 7) * 0.05));
       final y = moe(x);
       expect(y.shape, [6, 8]);
     });
@@ -76,10 +79,10 @@ void main() {
         expertHiddenDim: 8,
         seed: 3,
       );
-      final x = Tensor.fromList(
-        [t, 4],
-        List<double>.generate(t * 4, (i) => (i % 5) * 0.1),
-      );
+      final x = Tensor.fromList([
+        t,
+        4,
+      ], List<double>.generate(t * 4, (i) => (i % 5) * 0.1));
       moe(x);
       final total = moe.expertLoad.fold<int>(0, (a, b) => a + b);
       expect(total, t * k);
@@ -94,10 +97,10 @@ void main() {
         expertHiddenDim: 6,
         seed: 11,
       );
-      final x = Tensor.fromList(
-        [3, 4],
-        List<double>.generate(12, (i) => (i % 4) * 0.1 - 0.15),
-      );
+      final x = Tensor.fromList([
+        3,
+        4,
+      ], List<double>.generate(12, (i) => (i % 4) * 0.1 - 0.15));
       final y = moe(x);
       final loss = (y * y).sum() * 0.5;
       loss.backward();
@@ -144,10 +147,10 @@ void main() {
       // routes largely to a single expert by leaving gateW random and
       // just observe that updateRoutingBias moves biases in the right
       // direction.
-      final x = Tensor.fromList(
-        [8, 4],
-        List<double>.generate(32, (i) => (i % 3) * 0.1),
-      );
+      final x = Tensor.fromList([
+        8,
+        4,
+      ], List<double>.generate(32, (i) => (i % 3) * 0.1));
       moe(x);
       final loadBefore = moe.expertLoad;
       final maxIdx = _argmax(loadBefore);
@@ -160,10 +163,7 @@ void main() {
         greaterThanOrEqualTo(biasesBefore[minIdx]),
       );
       // Over-utilised expert bias must not have increased.
-      expect(
-        moe.routingBias[maxIdx],
-        lessThanOrEqualTo(biasesBefore[maxIdx]),
-      );
+      expect(moe.routingBias[maxIdx], lessThanOrEqualTo(biasesBefore[maxIdx]));
       // Counters reset.
       expect(moe.expertLoad, List<int>.filled(e, 0));
     });
@@ -183,10 +183,9 @@ void main() {
         expertHiddenDim: 16,
         seed: 1,
       );
-      final tokens = Tensor.fromList(
-        [7],
-        List<double>.generate(7, (i) => (i % 12).toDouble()),
-      );
+      final tokens = Tensor.fromList([
+        7,
+      ], List<double>.generate(7, (i) => (i % 12).toDouble()));
       final logits = lm(tokens);
       expect(logits.shape, [7, 12]);
     });
@@ -268,10 +267,9 @@ void main() {
         expertHiddenDim: 4,
         seed: 0,
       );
-      final tokens = Tensor.fromList(
-        [4],
-        List<double>.generate(4, (i) => i.toDouble()),
-      );
+      final tokens = Tensor.fromList([
+        4,
+      ], List<double>.generate(4, (i) => i.toDouble()));
       lm(tokens);
       // Every block should now have non-zero load counters.
       for (final b in lm.blocks) {
@@ -282,6 +280,116 @@ void main() {
       for (final b in lm.blocks) {
         expect(b.moe.expertLoad.every((c) => c == 0), isTrue);
       }
+    });
+  });
+
+  group('MoE on GPU (SiLU)', () {
+    test('Expert(SiLU) forward+backward on GPU produces grads', () {
+      final e = Expert(
+        16,
+        32,
+        device: Device.GPU,
+        seed: 0,
+        activation: ExpertActivation.silu,
+      );
+      final x = Tensor.fromList(
+        [8, 16],
+        List<double>.generate(128, (i) => ((i * 7) % 13) * 0.05 - 0.3),
+        device: Device.GPU,
+        requiresGrad: true,
+      );
+      final y = e(x);
+      expect(y.shape, [8, 16]);
+      expect(y.device, Device.GPU);
+      final loss = (y * y).sum() * 0.5;
+      loss.backward();
+      expect(e.w1.weight.grad, isNotNull);
+      expect(e.w2.weight.grad, isNotNull);
+      expect(x.grad, isNotNull);
+      expect(x.grad!.device, Device.GPU);
+    });
+
+    test('MoEFeedForward on GPU requires SiLU', () {
+      expect(
+        () => MoEFeedForward(
+          embedDim: 8,
+          numRoutedExperts: 2,
+          numSharedExperts: 0,
+          topK: 1,
+          expertHiddenDim: 8,
+          device: Device.GPU,
+        ),
+        throwsArgumentError,
+      );
+    });
+
+    test('MoEFeedForward GPU backward populates gate + expert grads', () {
+      final ffn = MoEFeedForward(
+        embedDim: 32,
+        numRoutedExperts: 4,
+        numSharedExperts: 1,
+        topK: 2,
+        expertHiddenDim: 64,
+        device: Device.GPU,
+        seed: 0,
+        activation: ExpertActivation.silu,
+      );
+      final x = Tensor.fromList(
+        [16, 32],
+        List<double>.generate(16 * 32, (i) => ((i * 7) % 13) * 0.05 - 0.3),
+        device: Device.GPU,
+        requiresGrad: true,
+      );
+      final y = ffn(x);
+      expect(y.shape, [16, 32]);
+      expect(y.device, Device.GPU);
+      final loss = (y * y).sum() * 0.5;
+      loss.backward();
+      expect(ffn.gateW.grad, isNotNull);
+      for (final e in ffn.routedExperts) {
+        expect(e.w1.weight.grad, isNotNull);
+      }
+    });
+
+    test('MoELanguageModel on GPU trains a tiny sequence (loss decreases)', () {
+      final lm = MoELanguageModel(
+        vocabSize: 32,
+        embedDim: 32,
+        numLayers: 2,
+        numHeads: 4,
+        maxLen: 16,
+        numRoutedExperts: 4,
+        numSharedExperts: 1,
+        topK: 2,
+        expertHiddenDim: 64,
+        device: Device.GPU,
+        seed: 0,
+        activation: ExpertActivation.silu,
+      );
+      final toks = Tensor.fromList(
+        [8],
+        List<double>.generate(8, (i) => (i * 3) % 32),
+        device: Device.GPU,
+      );
+      final targets = Tensor.fromList(
+        [8],
+        List<double>.generate(8, (i) => (i * 3 + 1) % 32),
+        device: Device.GPU,
+      );
+      final params = lm.parameters();
+      final opt = SGD(params, lr: 0.05);
+      double first = 0, last = 0;
+      for (int step = 0; step < 30; step++) {
+        opt.zeroGrad();
+        final logits = lm(toks);
+        final loss = logits.crossEntropy(targets).mean();
+        final v = loss.toList()[0];
+        if (step == 0) first = v;
+        if (step == 29) last = v;
+        loss.backward();
+        opt.step();
+      }
+      expect(last, lessThan(first));
     });
   });
 }

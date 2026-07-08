@@ -1,5 +1,43 @@
 ## Unreleased
 
+- MoE on GPU + `+`/`-` broadcast-backward aliasing fix.
+  - `MoEFeedForward` / `MoELanguageModel` now run end-to-end on
+    `Device.GPU`. New `ExpertActivation` enum on `Expert` selects
+    between `relu` (default, CPU-friendly) and `silu` (`x * sigmoid(x)`
+    — fwd+bwd on both CPU and GPU). `MoEFeedForward` on
+    `Device.GPU` requires `activation: ExpertActivation.silu` (throws
+    otherwise), because `relu`'s backward has no GPU kernel.
+  - Fixed a latent autograd bug in `Tensor.operator +` and
+    `Tensor.operator -`: when both operands required grad, the
+    shared `out._grad` reference was passed straight into two
+    `_reduceForBroadcast` calls; the row-broadcast branch disposes
+    its input, invalidating the other operand's aliased grad handle
+    (surfaced as a null-check crash in the next matmul backward on
+    GPU — hit by any GPU model using `Linear`-with-bias). Now clones
+    `g` for the branch that reads it directly when both operands
+    need gradients. Added a CPU + GPU regression test in
+    `test/autograd_test.dart`.
+  - `bin/shakespeare_moe.dart` accepts `--gpu`; on GPU it switches
+    the experts to SiLU automatically.
+  - `bin/shakespeare_util.dart::getWindow` gained an optional
+    `device:` parameter so the training loop can build its
+    `[T]` token tensors directly on the target device.
+  - Measured on the `(T=128, D=256, hidden=512, 4 layers, 8 heads)`
+    MoE-LM benchmark: **CPU 4665 ms/step → GPU 1795 ms/step (~2.6×
+    speedup)**. At the smaller demo config (T=32, D=64) launch
+    overhead dominates and CPU is still faster — GPU wins as soon as
+    the matmuls become non-trivial.
+  - **AFT on GPU is not enabled in this change.** The reference AFT
+    kernel (`aft_full_fwd` in `native/src/kernels/attention.cuh` in
+    the sibling `dart_cuda` repo) is not compiled into our
+    `libmat_mul.so`, and there is no `aft_full_bwd` kernel anywhere;
+    porting requires vendoring the CUDA source, writing the
+    analytical backward as a kernel, adding an nvcc build, C-ABI
+    wrappers, FFI bindings, and a device-dispatch in
+    `TensorAft.aftFull`. Left as follow-up.
+  - Suite: **275 tests, all green** (+6: 4 MoE-on-GPU, 2
+    `+`-broadcast-backward regression tests).
+
 - Mixture-of-Experts (MoE) feed-forward + tiny-Shakespeare corpus and
   demos for every transformer / GPT variant currently in the library.
   - `data/tiny_shakespeare.txt` — 1.1 MB char-level corpus (Karpathy's

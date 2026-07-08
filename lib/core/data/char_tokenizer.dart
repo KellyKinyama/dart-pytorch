@@ -72,11 +72,7 @@ class CharTokenizer {
   /// ```json
   /// { "version": 1, "kind": "char", "chars": [...] }
   /// ```
-  String toJson() => jsonEncode({
-    'version': 1,
-    'kind': 'char',
-    'chars': chars,
-  });
+  String toJson() => jsonEncode({'version': 1, 'kind': 'char', 'chars': chars});
 
   factory CharTokenizer.fromJson(String s) {
     final obj = jsonDecode(s) as Map<String, dynamic>;
