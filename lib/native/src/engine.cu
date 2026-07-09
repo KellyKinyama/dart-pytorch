@@ -26,8 +26,26 @@ extern "C"
 
         Tensor(int r, int c) : rows(r), cols(c), size(r * c)
         {
-            cudaMalloc(&data_gpu, size * sizeof(float));
-            cudaMalloc(&grad_gpu, size * sizeof(float));
+            data_gpu = nullptr;
+            grad_gpu = nullptr;
+            // Fail loud on OOM instead of silently returning a Tensor
+            // with garbage/null device pointers (previously subsequent
+            // kernels would read/write to unmapped memory, producing
+            // all-zero outputs and corrupting other tensors).
+            cudaError_t e1 = cudaMalloc(&data_gpu, size * sizeof(float));
+            cudaError_t e2 = cudaMalloc(&grad_gpu, size * sizeof(float));
+            if (e1 != cudaSuccess || e2 != cudaSuccess) {
+                fprintf(stderr,
+                        "[cuda] Tensor(%d,%d) alloc failed: data=%s grad=%s\n",
+                        r, c, cudaGetErrorString(e1), cudaGetErrorString(e2));
+                if (data_gpu) { cudaFree(data_gpu); data_gpu = nullptr; }
+                if (grad_gpu) { cudaFree(grad_gpu); grad_gpu = nullptr; }
+                // Zero out size so downstream ops that check for null
+                // pointers before launching kernels can detect this.
+                size = 0; rows = 0; cols = 0;
+                return;
+            }
+            cudaMemset(data_gpu, 0, size * sizeof(float));
             cudaMemset(grad_gpu, 0, size * sizeof(float));
         }
 

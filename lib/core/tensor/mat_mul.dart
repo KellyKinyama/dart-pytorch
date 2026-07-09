@@ -60,11 +60,15 @@ extension TensorMatMul on Tensor {
         final gOut = out._grad!;
         if (a.requiresGrad) {
           final bT = b.transpose();
-          a._accumulateGrad(gOut.matmul(bT));
+          final contrib = gOut.matmul(bT);
+          bT.dispose();
+          a._accumulateGrad(contrib);
         }
         if (b.requiresGrad) {
           final aT = a.transpose();
-          b._accumulateGrad(aT.matmul(gOut));
+          final contrib = aT.matmul(gOut);
+          aT.dispose();
+          b._accumulateGrad(contrib);
         }
       });
     }

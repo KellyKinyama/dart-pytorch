@@ -202,6 +202,12 @@ class CudaEngine {
   late DDestroy destroyTensor;
   late DCopy getTensorData;
 
+  /// Native finalizer that calls `destroy_tensor` on the attached
+  /// pointer when the owning Dart object is garbage-collected. Used
+  /// by `Tensor._gpu` to free intermediate GPU handles that the
+  /// autograd graph doesn't explicitly dispose.
+  late ffi.NativeFinalizer destroyTensorFinalizer;
+
   // Matmul
   late DOp2 matmulTensors;
 
@@ -270,6 +276,13 @@ class CudaEngine {
     createTensor = _lib.lookupFunction<CCreate, DCreate>('create_tensor');
     destroyTensor = _lib.lookupFunction<CDestroy, DDestroy>('destroy_tensor');
     getTensorData = _lib.lookupFunction<CCopy, DCopy>('get_tensor_data');
+
+    // Same underlying symbol as `destroyTensor`, exposed as a native
+    // function pointer so it can be attached as a NativeFinalizer.
+    final destroyPtr = _lib.lookup<ffi.NativeFunction<CDestroy>>(
+      'destroy_tensor',
+    );
+    destroyTensorFinalizer = ffi.NativeFinalizer(destroyPtr.cast());
 
     matmulTensors = _lib.lookupFunction<COp2, DOp2>('matmul_tensors');
 
