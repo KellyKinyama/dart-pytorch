@@ -26,12 +26,23 @@ double clipGradNorm(List<Tensor> parameters, double maxNorm) {
   }
   final total = math.sqrt(sumSq);
   if (total <= maxNorm || total == 0.0) return total;
+  // Guard against non-finite totals: previously an `inf` from an
+  // exploding gradient would silently yield `scale = 0`, zeroing
+  // every parameter's gradient without warning; a `NaN` would yield
+  // `scale = NaN`, poisoning every parameter with `NaN`. Both cases
+  // corrupted training with no indication of what went wrong. Now
+  // we short-circuit: caller sees the non-finite norm in the return
+  // value and can decide whether to skip the step.
+  if (!total.isFinite) return total;
 
   final scale = maxNorm / total;
   for (final p in parameters) {
     final g = p.grad;
     if (g == null) continue;
-    g.assign(g * scale);
+    final scaled = g * scale;
+    // g.assign() destroys the old handle; but `g * scale` also
+    // allocated a fresh handle that assign steals. No leak here.
+    g.assign(scaled);
   }
   return total;
 }

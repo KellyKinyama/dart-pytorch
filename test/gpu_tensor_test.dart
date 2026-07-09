@@ -152,9 +152,11 @@ void main() {
     test('add [192, 384] parity', () {
       final aData = _fake(192 * 384, 1);
       final bData = _fake(192 * 384, 2);
-      final cpu = Tensor.fromList([192, 384], aData) +
+      final cpu =
+          Tensor.fromList([192, 384], aData) +
           Tensor.fromList([192, 384], bData);
-      final gpu = Tensor.fromList([192, 384], aData, device: Device.GPU) +
+      final gpu =
+          Tensor.fromList([192, 384], aData, device: Device.GPU) +
           Tensor.fromList([192, 384], bData, device: Device.GPU);
       expectClose(gpu.toList(), cpu.toList());
     });
@@ -162,9 +164,11 @@ void main() {
     test('mul [192, 384] parity', () {
       final aData = _fake(192 * 384, 3);
       final bData = _fake(192 * 384, 4);
-      final cpu = Tensor.fromList([192, 384], aData) *
+      final cpu =
+          Tensor.fromList([192, 384], aData) *
           Tensor.fromList([192, 384], bData);
-      final gpu = Tensor.fromList([192, 384], aData, device: Device.GPU) *
+      final gpu =
+          Tensor.fromList([192, 384], aData, device: Device.GPU) *
           Tensor.fromList([192, 384], bData, device: Device.GPU);
       expectClose(gpu.toList(), cpu.toList());
     });
@@ -196,24 +200,20 @@ void main() {
     test('relu zeros negatives (CPU vs GPU parity)', () {
       final data = List<double>.generate(200, (i) => (i - 100) * 0.1);
       final cpu = Tensor.fromList([200], data).relu();
-      final gpu =
-          Tensor.fromList([200], data, device: Device.GPU).relu();
+      final gpu = Tensor.fromList([200], data, device: Device.GPU).relu();
       expectClose(gpu.toList(), cpu.toList());
     });
 
     test('sigmoid matches numerical reference (GPU)', () {
       final values = [-2.0, -0.5, 0.0, 0.5, 2.0];
-      final x = Tensor.fromList([1, values.length], values,
-          device: Device.GPU);
-      final expected =
-          values.map((v) => 1.0 / (1.0 + math.exp(-v))).toList();
+      final x = Tensor.fromList([1, values.length], values, device: Device.GPU);
+      final expected = values.map((v) => 1.0 / (1.0 + math.exp(-v))).toList();
       expectClose(x.sigmoid().toList(), expected);
     });
 
     test('tanh matches numerical reference (GPU)', () {
       final values = [-1.0, 0.0, 1.0];
-      final x = Tensor.fromList([1, values.length], values,
-          device: Device.GPU);
+      final x = Tensor.fromList([1, values.length], values, device: Device.GPU);
       final expected = values.map((v) {
         final ep = math.exp(v);
         final en = math.exp(-v);
@@ -223,23 +223,24 @@ void main() {
     });
 
     test('abs on GPU matches |x|', () {
-      final x = Tensor.fromList([1, 4], [-1.5, 0.0, 2.5, -4.0],
-          device: Device.GPU);
+      final x = Tensor.fromList(
+        [1, 4],
+        [-1.5, 0.0, 2.5, -4.0],
+        device: Device.GPU,
+      );
       expect(x.abs().toList(), closeToList([1.5, 0.0, 2.5, 4.0]));
     });
 
     test('pow(2) squares each element (CPU vs GPU parity)', () {
       final data = _fake(500, 6);
       final cpu = Tensor.fromList([500], data).pow(2.0);
-      final gpu =
-          Tensor.fromList([500], data, device: Device.GPU).pow(2.0);
+      final gpu = Tensor.fromList([500], data, device: Device.GPU).pow(2.0);
       expectClose(gpu.toList(), cpu.toList());
     });
 
     test('log on positive values (GPU)', () {
       final values = [1.0, math.e, math.e * math.e];
-      final x = Tensor.fromList([1, values.length], values,
-          device: Device.GPU);
+      final x = Tensor.fromList([1, values.length], values, device: Device.GPU);
       expectClose(x.log().toList(), [0.0, 1.0, 2.0]);
     });
   });
@@ -257,10 +258,12 @@ void main() {
     });
 
     test('2x3 @ 3x2 = 2x2 (GPU)', () {
-      final a = Tensor.fromList([2, 3], [1, 2, 3, 4, 5, 6],
-          device: Device.GPU);
-      final b = Tensor.fromList([3, 2], [7, 8, 9, 10, 11, 12],
-          device: Device.GPU);
+      final a = Tensor.fromList([2, 3], [1, 2, 3, 4, 5, 6], device: Device.GPU);
+      final b = Tensor.fromList(
+        [3, 2],
+        [7, 8, 9, 10, 11, 12],
+        device: Device.GPU,
+      );
       final c = a.matmul(b);
       expect(c.shape, equals([2, 2]));
       expect(c.toList(), closeToList([58, 64, 139, 154]));
@@ -276,10 +279,15 @@ void main() {
     test('attention-scale matmul parity: [192,64] @ [64,192]', () {
       final aData = _fake(192 * 64, 10);
       final bData = _fake(64 * 192, 11);
-      final cpu = Tensor.fromList([192, 64], aData)
-          .matmul(Tensor.fromList([64, 192], bData));
-      final gpu = Tensor.fromList([192, 64], aData, device: Device.GPU)
-          .matmul(Tensor.fromList([64, 192], bData, device: Device.GPU));
+      final cpu = Tensor.fromList([
+        192,
+        64,
+      ], aData).matmul(Tensor.fromList([64, 192], bData));
+      final gpu = Tensor.fromList(
+        [192, 64],
+        aData,
+        device: Device.GPU,
+      ).matmul(Tensor.fromList([64, 192], bData, device: Device.GPU));
       expectClose(gpu.toList(), cpu.toList(), tol: _tolBig);
     });
 
@@ -289,10 +297,15 @@ void main() {
     test('FFN-scale matmul parity: [192,384] @ [384,1536]', () {
       final aData = _fake(192 * 384, 20);
       final bData = _fake(384 * 1536, 21);
-      final cpu = Tensor.fromList([192, 384], aData)
-          .matmul(Tensor.fromList([384, 1536], bData));
-      final gpu = Tensor.fromList([192, 384], aData, device: Device.GPU)
-          .matmul(Tensor.fromList([384, 1536], bData, device: Device.GPU));
+      final cpu = Tensor.fromList([
+        192,
+        384,
+      ], aData).matmul(Tensor.fromList([384, 1536], bData));
+      final gpu = Tensor.fromList(
+        [192, 384],
+        aData,
+        device: Device.GPU,
+      ).matmul(Tensor.fromList([384, 1536], bData, device: Device.GPU));
       expectClose(gpu.toList(), cpu.toList(), tol: _tolBig);
     });
   });
@@ -302,8 +315,7 @@ void main() {
   // ---------------------------------------------------------------
   group('Tensor — reshape and transpose', () {
     test('reshape preserves data (GPU)', () {
-      final x = Tensor.fromList([2, 3], [1, 2, 3, 4, 5, 6],
-          device: Device.GPU);
+      final x = Tensor.fromList([2, 3], [1, 2, 3, 4, 5, 6], device: Device.GPU);
       final v = x.reshape([3, 2]);
       expect(v.shape, equals([3, 2]));
       expect(v.toList(), closeToList([1, 2, 3, 4, 5, 6]));
@@ -312,8 +324,11 @@ void main() {
     test('transpose swaps rows and columns (CPU vs GPU parity)', () {
       final data = _fake(64 * 192, 30);
       final cpu = Tensor.fromList([64, 192], data).transpose();
-      final gpu =
-          Tensor.fromList([64, 192], data, device: Device.GPU).transpose();
+      final gpu = Tensor.fromList(
+        [64, 192],
+        data,
+        device: Device.GPU,
+      ).transpose();
       expect(gpu.shape, equals([192, 64]));
       expectClose(gpu.toList(), cpu.toList());
     });
@@ -324,10 +339,18 @@ void main() {
   // ---------------------------------------------------------------
   group('Tensor — broadcast', () {
     test('add: [N, M] + [1, 1] scalar broadcast forward+backward (GPU)', () {
-      final a = Tensor.fromList([2, 2], [1, 2, 3, 4],
-          device: Device.GPU, requiresGrad: true);
-      final b =
-          Tensor.fromList([1, 1], [10], device: Device.GPU, requiresGrad: true);
+      final a = Tensor.fromList(
+        [2, 2],
+        [1, 2, 3, 4],
+        device: Device.GPU,
+        requiresGrad: true,
+      );
+      final b = Tensor.fromList(
+        [1, 1],
+        [10],
+        device: Device.GPU,
+        requiresGrad: true,
+      );
       final c = a + b;
       c.sum().backward();
       expect(c.toList(), closeToList([11, 12, 13, 14]));
@@ -336,10 +359,18 @@ void main() {
     });
 
     test('mul: [N, M] * [1, 1] scalar broadcast (GPU)', () {
-      final a = Tensor.fromList([2, 2], [1, 2, 3, 4],
-          device: Device.GPU, requiresGrad: true);
-      final b =
-          Tensor.fromList([1, 1], [3], device: Device.GPU, requiresGrad: true);
+      final a = Tensor.fromList(
+        [2, 2],
+        [1, 2, 3, 4],
+        device: Device.GPU,
+        requiresGrad: true,
+      );
+      final b = Tensor.fromList(
+        [1, 1],
+        [3],
+        device: Device.GPU,
+        requiresGrad: true,
+      );
       final c = a * b;
       c.sum().backward();
       expect(c.toList(), closeToList([3, 6, 9, 12]));
@@ -358,8 +389,12 @@ void main() {
         device: Device.GPU,
         requiresGrad: true,
       );
-      final b = Tensor.fromList([1, 4], [10, 20, 30, 40],
-          device: Device.GPU, requiresGrad: true);
+      final b = Tensor.fromList(
+        [1, 4],
+        [10, 20, 30, 40],
+        device: Device.GPU,
+        requiresGrad: true,
+      );
       final c = a + b;
       c.sum().backward();
       expect(
@@ -380,22 +415,34 @@ void main() {
   // ---------------------------------------------------------------
   group('Tensor — autograd basics', () {
     test('sum.backward yields ones gradient (GPU)', () {
-      final x = Tensor.fromList([2, 2], [1, 2, 3, 4],
-          device: Device.GPU, requiresGrad: true);
+      final x = Tensor.fromList(
+        [2, 2],
+        [1, 2, 3, 4],
+        device: Device.GPU,
+        requiresGrad: true,
+      );
       x.sum().backward();
       expect(x.grad!.toList(), closeToList([1.0, 1.0, 1.0, 1.0]));
     });
 
     test('mean.backward yields 1/N gradient (GPU)', () {
-      final x = Tensor.fromList([1, 4], [1, 2, 3, 4],
-          device: Device.GPU, requiresGrad: true);
+      final x = Tensor.fromList(
+        [1, 4],
+        [1, 2, 3, 4],
+        device: Device.GPU,
+        requiresGrad: true,
+      );
       x.mean().backward();
       expect(x.grad!.toList(), closeToList([0.25, 0.25, 0.25, 0.25]));
     });
 
     test('zeroGrad clears gradients (GPU)', () {
-      final x = Tensor.fromList([1, 2], [3.0, 4.0],
-          device: Device.GPU, requiresGrad: true);
+      final x = Tensor.fromList(
+        [1, 2],
+        [3.0, 4.0],
+        device: Device.GPU,
+        requiresGrad: true,
+      );
       x.sum().backward();
       expect(x.grad!.toList(), closeToList([1.0, 1.0]));
       // dart-pytorch's `zeroGrad` sets `_grad = null` (in contrast to
@@ -423,24 +470,35 @@ void main() {
       final bCpu = Tensor.fromList([384, 1536], bData, requiresGrad: true);
       aCpu.matmul(bCpu).sum().backward();
 
-      final aGpu = Tensor.fromList([192, 384], aData,
-          device: Device.GPU, requiresGrad: true);
-      final bGpu = Tensor.fromList([384, 1536], bData,
-          device: Device.GPU, requiresGrad: true);
+      final aGpu = Tensor.fromList(
+        [192, 384],
+        aData,
+        device: Device.GPU,
+        requiresGrad: true,
+      );
+      final bGpu = Tensor.fromList(
+        [384, 1536],
+        bData,
+        device: Device.GPU,
+        requiresGrad: true,
+      );
       aGpu.matmul(bGpu).sum().backward();
 
       expectClose(aGpu.grad!.toList(), aCpu.grad!.toList(), tol: _tolBig);
       expectClose(bGpu.grad!.toList(), bCpu.grad!.toList(), tol: _tolBig);
     });
 
-    test('elementwise chain backward parity: (x*x + x).sum() at [192,384]',
-        () {
+    test('elementwise chain backward parity: (x*x + x).sum() at [192,384]', () {
       final data = _fake(192 * 384, 50);
       final xCpu = Tensor.fromList([192, 384], data, requiresGrad: true);
       (xCpu * xCpu + xCpu).sum().backward();
 
-      final xGpu = Tensor.fromList([192, 384], data,
-          device: Device.GPU, requiresGrad: true);
+      final xGpu = Tensor.fromList(
+        [192, 384],
+        data,
+        device: Device.GPU,
+        requiresGrad: true,
+      );
       (xGpu * xGpu + xGpu).sum().backward();
 
       expectClose(xGpu.grad!.toList(), xCpu.grad!.toList(), tol: _tolBig);
@@ -451,8 +509,12 @@ void main() {
       final xCpu = Tensor.fromList([192, 384], data, requiresGrad: true);
       (xCpu.sigmoid() * xCpu).sum().backward();
 
-      final xGpu = Tensor.fromList([192, 384], data,
-          device: Device.GPU, requiresGrad: true);
+      final xGpu = Tensor.fromList(
+        [192, 384],
+        data,
+        device: Device.GPU,
+        requiresGrad: true,
+      );
       (xGpu.sigmoid() * xGpu).sum().backward();
 
       expectClose(xGpu.grad!.toList(), xCpu.grad!.toList(), tol: _tolBig);
@@ -463,8 +525,12 @@ void main() {
       final xCpu = Tensor.fromList([192, 384], data, requiresGrad: true);
       xCpu.relu().sum().backward();
 
-      final xGpu = Tensor.fromList([192, 384], data,
-          device: Device.GPU, requiresGrad: true);
+      final xGpu = Tensor.fromList(
+        [192, 384],
+        data,
+        device: Device.GPU,
+        requiresGrad: true,
+      );
       xGpu.relu().sum().backward();
 
       expectClose(xGpu.grad!.toList(), xCpu.grad!.toList(), tol: _tolBig);
@@ -487,10 +553,18 @@ void main() {
 
       final aCpu = Tensor.fromList([64, 384], aData, requiresGrad: true);
       final bCpu = Tensor.fromList([384, 1536], bData, requiresGrad: true);
-      final aGpu = Tensor.fromList([64, 384], aData,
-          device: Device.GPU, requiresGrad: true);
-      final bGpu = Tensor.fromList([384, 1536], bData,
-          device: Device.GPU, requiresGrad: true);
+      final aGpu = Tensor.fromList(
+        [64, 384],
+        aData,
+        device: Device.GPU,
+        requiresGrad: true,
+      );
+      final bGpu = Tensor.fromList(
+        [384, 1536],
+        bData,
+        device: Device.GPU,
+        requiresGrad: true,
+      );
 
       for (int step = 0; step < 10; step++) {
         aCpu.zeroGrad();
@@ -504,16 +578,8 @@ void main() {
         (aCpu.matmul(bCpu) * scale).sum().backward();
         (aGpu.matmul(bGpu) * scale).sum().backward();
 
-        expectClose(
-          aGpu.grad!.toList(),
-          aCpu.grad!.toList(),
-          tol: _tolBig,
-        );
-        expectClose(
-          bGpu.grad!.toList(),
-          bCpu.grad!.toList(),
-          tol: _tolBig,
-        );
+        expectClose(aGpu.grad!.toList(), aCpu.grad!.toList(), tol: _tolBig);
+        expectClose(bGpu.grad!.toList(), bCpu.grad!.toList(), tol: _tolBig);
       }
     });
   });
