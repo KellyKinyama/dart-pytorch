@@ -86,8 +86,8 @@ List<double> _makeImage(int label, math.Random rng) {
       int off = patchIdx * _patchPixels;
       for (int r = 0; r < _patchSize; r++) {
         for (int c = 0; c < _patchSize; c++) {
-          out[off++] = img[(pr * _patchSize + r) * _imageSize
-              + (pc * _patchSize + c)];
+          out[off++] =
+              img[(pr * _patchSize + r) * _imageSize + (pc * _patchSize + c)];
         }
       }
       patchIdx++;
@@ -122,9 +122,11 @@ int _argmaxRow(List<double> logits) {
 void main(List<String> args) {
   final device = args.contains('--gpu') ? Device.GPU : Device.CPU;
   print('=== vit_demo : ViT pattern classifier (${device.name}) ===');
-  print('image ${_imageSize}x$_imageSize, patch $_patchSize, '
-      'embed=$_embedDim, layers=$_numLayers, heads=$_numHeads, '
-      'classes=$_numClasses');
+  print(
+    'image ${_imageSize}x$_imageSize, patch $_patchSize, '
+    'embed=$_embedDim, layers=$_numLayers, heads=$_numHeads, '
+    'classes=$_numClasses',
+  );
 
   final clf = ViTClassifier(
     imageSize: _imageSize,
@@ -166,9 +168,11 @@ void main(List<String> args) {
     if (step == 1 || step % _logEvery == 0 || step == _trainSteps) {
       final lossVal = loss.toList()[0];
       final ms = sw.elapsedMilliseconds / step;
-      print('  step ${step.toString().padLeft(4)}  '
-          'loss=${lossVal.toStringAsFixed(4)}  '
-          '(${ms.toStringAsFixed(1)} ms/step)');
+      print(
+        '  step ${step.toString().padLeft(4)}  '
+        'loss=${lossVal.toStringAsFixed(4)}  '
+        '(${ms.toStringAsFixed(1)} ms/step)',
+      );
     }
   }
   sw.stop();
@@ -183,8 +187,10 @@ void main(List<String> args) {
     }
     return correct / _trainSamples;
   });
-  print('\ntrain accuracy: ${(trainAcc * 100).toStringAsFixed(1)}% '
-      '($_trainSamples samples)');
+  print(
+    '\ntrain accuracy: ${(trainAcc * 100).toStringAsFixed(1)}% '
+    '($_trainSamples samples)',
+  );
 
   // A few held-out samples with predictions.
   print('\neval samples (fresh noise, unseen):');
@@ -198,11 +204,15 @@ void main(List<String> args) {
       final pred = _argmaxRow(logits);
       if (pred == label) evalCorrect++;
       final tag = pred == label ? 'ok ' : 'MISS';
-      print('  [$tag] true=$label pred=$pred  '
-          'logits=[${logits.map((v) => v.toStringAsFixed(2)).join(', ')}]');
+      print(
+        '  [$tag] true=$label pred=$pred  '
+        'logits=[${logits.map((v) => v.toStringAsFixed(2)).join(', ')}]',
+      );
     }
   });
-  print('\neval accuracy: '
-      '${(evalCorrect / _evalSamples * 100).toStringAsFixed(1)}% '
-      '($evalCorrect/$_evalSamples)');
+  print(
+    '\neval accuracy: '
+    '${(evalCorrect / _evalSamples * 100).toStringAsFixed(1)}% '
+    '($evalCorrect/$_evalSamples)',
+  );
 }
