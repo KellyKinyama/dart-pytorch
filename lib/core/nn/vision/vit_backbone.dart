@@ -56,8 +56,10 @@ class ViTBackbone extends Module {
     double dropoutP = 0.0,
     Device device = Device.CPU,
     int seed = 0,
-  }) : assert(imageSize % patchSize == 0,
-            'imageSize must be divisible by patchSize'),
+  }) : assert(
+         imageSize % patchSize == 0,
+         'imageSize must be divisible by patchSize',
+       ),
        numPatches = (imageSize ~/ patchSize) * (imageSize ~/ patchSize),
        patchProjection = Linear(
          patchSize * patchSize * numChannels,
@@ -73,10 +75,7 @@ class ViTBackbone extends Module {
          seed: seed + 2,
        ),
        posEmbeddings = _initSmallGaussian(
-         [
-           (imageSize ~/ patchSize) * (imageSize ~/ patchSize) + 1,
-           embedDim,
-         ],
+         [(imageSize ~/ patchSize) * (imageSize ~/ patchSize) + 1, embedDim],
          scale: 0.02,
          device: device,
          seed: seed + 3,
@@ -141,11 +140,11 @@ class ViTBackbone extends Module {
 
   @override
   List<Tensor> parameters() => [
-        ...patchProjection.parameters(),
-        clsToken,
-        posEmbeddings,
-        ...encoder.parameters(),
-      ];
+    ...patchProjection.parameters(),
+    clsToken,
+    posEmbeddings,
+    ...encoder.parameters(),
+  ];
 
   @override
   List<Module> submodules() => [patchProjection, encoder];

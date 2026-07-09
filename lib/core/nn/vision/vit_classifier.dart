@@ -32,24 +32,24 @@ class ViTClassifier extends Module {
     double dropoutP = 0.0,
     Device device = Device.CPU,
     int seed = 0,
-  })  : backbone = ViTBackbone(
-          imageSize: imageSize,
-          patchSize: patchSize,
-          numChannels: numChannels,
-          embedDim: embedDim,
-          numLayers: numLayers,
-          numHeads: numHeads,
-          dropoutP: dropoutP,
-          device: device,
-          seed: seed,
-        ),
-        head = Linear(
-          embedDim,
-          numClasses,
-          bias: true,
-          device: device,
-          seed: seed + 999999,
-        );
+  }) : backbone = ViTBackbone(
+         imageSize: imageSize,
+         patchSize: patchSize,
+         numChannels: numChannels,
+         embedDim: embedDim,
+         numLayers: numLayers,
+         numHeads: numHeads,
+         dropoutP: dropoutP,
+         device: device,
+         seed: seed,
+       ),
+       head = Linear(
+         embedDim,
+         numClasses,
+         bias: true,
+         device: device,
+         seed: seed + 999999,
+       );
 
   /// `patchifiedImage` — `[numPatches, patchSize * patchSize *
   /// numChannels]`. Returns class logits `[1, numClasses]`.
@@ -60,10 +60,7 @@ class ViTClassifier extends Module {
   }
 
   @override
-  List<Tensor> parameters() => [
-        ...backbone.parameters(),
-        ...head.parameters(),
-      ];
+  List<Tensor> parameters() => [...backbone.parameters(), ...head.parameters()];
 
   @override
   List<Module> submodules() => [backbone, head];

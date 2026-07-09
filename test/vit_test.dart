@@ -13,8 +13,12 @@ import 'dart:math' as math;
 import 'package:dart_pytorch/dart_pytorch.dart';
 import 'package:test/test.dart';
 
-Tensor _randomImage(int numPatches, int patchPixels,
-    {required Device device, int seed = 0}) {
+Tensor _randomImage(
+  int numPatches,
+  int patchPixels, {
+  required Device device,
+  int seed = 0,
+}) {
   final rng = math.Random(seed);
   final vals = List<double>.generate(
     numPatches * patchPixels,
@@ -65,8 +69,12 @@ void main() {
         device: Device.GPU,
         seed: 1,
       );
-      final x = _randomImage(numPatches, patchPixels, device: Device.GPU,
-          seed: 42);
+      final x = _randomImage(
+        numPatches,
+        patchPixels,
+        device: Device.GPU,
+        seed: 42,
+      );
       final y = vit(x);
       expect(y.shape, equals([numPatches + 1, embedDim]));
       for (final v in y.toList()) {
@@ -92,8 +100,11 @@ void main() {
       final yList = y.toList();
       final clsList = cls.toList();
       for (int j = 0; j < embedDim; j++) {
-        expect((yList[j] - clsList[j]).abs() < 1e-6, isTrue,
-            reason: 'col $j: encoded=${yList[j]} vs cls=${clsList[j]}');
+        expect(
+          (yList[j] - clsList[j]).abs() < 1e-6,
+          isTrue,
+          reason: 'col $j: encoded=${yList[j]} vs cls=${clsList[j]}',
+        );
       }
     });
   });
@@ -129,8 +140,11 @@ void main() {
 
       final logitsAfter = clf(x);
       final lossAfter = logitsAfter.crossEntropy(target).mean().toList()[0];
-      expect(lossAfter < lossBefore, isTrue,
-          reason: 'loss did not decrease: $lossBefore -> $lossAfter');
+      expect(
+        lossAfter < lossBefore,
+        isTrue,
+        reason: 'loss did not decrease: $lossBefore -> $lossAfter',
+      );
     });
 
     test('GPU forward produces [1, numClasses] logits', () {
@@ -178,8 +192,11 @@ void main() {
         expect(v.isFinite, isTrue);
         sumSq += v * v;
       }
-      expect((sumSq - 1.0).abs() < 1e-4, isTrue,
-          reason: 'expected unit L2 norm, got sqrt(sumSq)=${math.sqrt(sumSq)}');
+      expect(
+        (sumSq - 1.0).abs() < 1e-4,
+        isTrue,
+        reason: 'expected unit L2 norm, got sqrt(sumSq)=${math.sqrt(sumSq)}',
+      );
     });
 
     test('cosineSimilarity of a vector with itself is ~1', () {
@@ -199,8 +216,11 @@ void main() {
       final e1 = face(x);
       final e2 = face(x);
       final sim = ViTFaceEmbedding.cosineSimilarity(e1, e2).toList()[0];
-      expect((sim - 1.0).abs() < 1e-4, isTrue,
-          reason: 'self-similarity should be 1, got $sim');
+      expect(
+        (sim - 1.0).abs() < 1e-4,
+        isTrue,
+        reason: 'self-similarity should be 1, got $sim',
+      );
     });
 
     test('GPU output has correct shape and finite values', () {

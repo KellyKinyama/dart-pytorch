@@ -36,26 +36,26 @@ class ViTFaceEmbedding extends Module {
     this.eps = 1e-10,
     Device device = Device.CPU,
     int seed = 0,
-  })  : backbone = ViTBackbone(
-          imageSize: imageSize,
-          patchSize: patchSize,
-          numChannels: numChannels,
-          embedDim: embedDim,
-          numLayers: numLayers,
-          numHeads: numHeads,
-          dropoutP: dropoutP,
-          device: device,
-          seed: seed,
-        ),
-        projection = embedDim == outputDim
-            ? null
-            : Linear(
-                embedDim,
-                outputDim,
-                bias: false,
-                device: device,
-                seed: seed + 888888,
-              );
+  }) : backbone = ViTBackbone(
+         imageSize: imageSize,
+         patchSize: patchSize,
+         numChannels: numChannels,
+         embedDim: embedDim,
+         numLayers: numLayers,
+         numHeads: numHeads,
+         dropoutP: dropoutP,
+         device: device,
+         seed: seed,
+       ),
+       projection = embedDim == outputDim
+           ? null
+           : Linear(
+               embedDim,
+               outputDim,
+               bias: false,
+               device: device,
+               seed: seed + 888888,
+             );
 
   /// `patchifiedImage` — `[numPatches, patchSize * patchSize *
   /// numChannels]`. Returns an L2-normalized `[1, outputDim]` vector.
@@ -76,8 +76,10 @@ class ViTFaceEmbedding extends Module {
   /// Cosine similarity between two `[1, outputDim]` L2-normalized
   /// embeddings, reduced to a single scalar.
   static Tensor cosineSimilarity(Tensor a, Tensor b) {
-    if (a.shape.length != 2 || b.shape.length != 2 ||
-        a.shape[0] != 1 || b.shape[0] != 1 ||
+    if (a.shape.length != 2 ||
+        b.shape.length != 2 ||
+        a.shape[0] != 1 ||
+        b.shape[0] != 1 ||
         a.shape[1] != b.shape[1]) {
       throw ArgumentError(
         'cosineSimilarity: expected two [1, D] tensors; '
@@ -89,13 +91,10 @@ class ViTFaceEmbedding extends Module {
 
   @override
   List<Tensor> parameters() => [
-        ...backbone.parameters(),
-        if (projection != null) ...projection!.parameters(),
-      ];
+    ...backbone.parameters(),
+    if (projection != null) ...projection!.parameters(),
+  ];
 
   @override
-  List<Module> submodules() => [
-        backbone,
-        if (projection != null) projection!,
-      ];
+  List<Module> submodules() => [backbone, if (projection != null) projection!];
 }
