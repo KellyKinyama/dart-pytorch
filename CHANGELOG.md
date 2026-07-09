@@ -1,27 +1,5 @@
 ## Unreleased
 
-- Larger tiny-Shakespeare demos where a 6 GB GPU can win over CPU:
-  - `bin/shakespeare_gpt_big.dart` — GPT, 6L x 384d x 6h,
-    block=192, ~11 M params (~44 MB fp32; ~132 MB with Adam).
-  - `bin/shakespeare_aft_big.dart` — AFT-Full, 6L x 384d,
-    block=512 (attention-free, O(T*D) per layer), ~11 M params.
-  - `bin/shakespeare_moe_big.dart` — MoE with sparse execution,
-    SwiGLU experts, sigmoid gate + top-K renorm, sign-based bias
-    balancer. 4L x 256d x 4h, 8 routed + 1 shared expert, top-K=2,
-    expertHidden=1024, block=128, ~20 M params (~80 MB fp32;
-    ~240 MB with Adam).
-  - All three default to GPU, accept `--cpu` and `--steps N`
-    overrides, and follow two GPU-friendly habits that the small
-    demos don't bother with:
-    1. Only read `loss.toList()[0]` at the print interval, not
-       every step (avoids D2H sync per step).
-    2. Skip `clipGradNorm` — its per-parameter `g.toList()` reads
-       drain host<->device throughput; Adam is scale-invariant so
-       it's not required at these sizes.
-  - The small `shakespeare_gpt.dart`, `shakespeare_aft.dart`,
-    `shakespeare_moe.dart`, and `shakespeare_transformer_lm.dart`
-    demos are unchanged.
-
 - MoE: sparse expert execution — each expert now runs only on the
   tokens actually routed to it, matching real MoE implementations
   (DeepSeek-V3, Mixtral). Opt-in via `sparseExecution: true` on
