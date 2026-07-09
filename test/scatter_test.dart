@@ -8,10 +8,11 @@ void main() {
   group('scatterRowsAdd', () {
     test('CPU: basic gather/scatter roundtrip', () {
       // full[0..4], take rows [3, 1, 3] -> subset [3, D], scatter back.
-      final full = Tensor.fromList([
-        4,
-        2,
-      ], [10.0, 11, 20, 21, 30, 31, 40, 41], requiresGrad: true);
+      final full = Tensor.fromList(
+        [4, 2],
+        [10.0, 11, 20, 21, 30, 31, 40, 41],
+        requiresGrad: true,
+      );
       final indices = Tensor.fromList([3], [3.0, 1.0, 3.0]);
       final subset = full.embedding(indices); // [3, 2]
       expect(subset.toList(), [40, 41, 20, 21, 40, 41]);
@@ -23,10 +24,11 @@ void main() {
     });
 
     test('CPU: scatterRowsAdd backward gathers grad at indices', () {
-      final subset = Tensor.fromList([
-        2,
-        3,
-      ], [1.0, 2, 3, 4, 5, 6], requiresGrad: true);
+      final subset = Tensor.fromList(
+        [2, 3],
+        [1.0, 2, 3, 4, 5, 6],
+        requiresGrad: true,
+      );
       final indices = Tensor.fromList([2], [2.0, 0.0]);
       final scattered = subset.scatterRowsAdd(indices, 3); // [3, 3]
       // Sum-loss so upstream grad = ones([3, 3]).
@@ -36,18 +38,23 @@ void main() {
     });
 
     test('GPU: gather/scatter roundtrip parity vs CPU', () {
-      final fullCpu = Tensor.fromList([
-        5,
-        4,
-      ], List<double>.generate(20, (i) => i.toDouble()), requiresGrad: true);
-      final fullGpu = Tensor.fromList([
-        5,
-        4,
-      ], List<double>.generate(20, (i) => i.toDouble()),
-          requiresGrad: true, device: Device.GPU);
+      final fullCpu = Tensor.fromList(
+        [5, 4],
+        List<double>.generate(20, (i) => i.toDouble()),
+        requiresGrad: true,
+      );
+      final fullGpu = Tensor.fromList(
+        [5, 4],
+        List<double>.generate(20, (i) => i.toDouble()),
+        requiresGrad: true,
+        device: Device.GPU,
+      );
       final idxCpu = Tensor.fromList([4], [1.0, 3.0, 0.0, 3.0]);
-      final idxGpu = Tensor.fromList([4], [1.0, 3.0, 0.0, 3.0],
-          device: Device.GPU);
+      final idxGpu = Tensor.fromList(
+        [4],
+        [1.0, 3.0, 0.0, 3.0],
+        device: Device.GPU,
+      );
       final subsetCpu = fullCpu.embedding(idxCpu);
       final subsetGpu = fullGpu.embedding(idxGpu);
       final sc = subsetCpu.scatterRowsAdd(idxCpu, 5);

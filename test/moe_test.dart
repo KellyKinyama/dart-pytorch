@@ -548,10 +548,10 @@ void main() {
         seed: 51,
         routeScale: scale,
       );
-      final x = Tensor.fromList([
-        2,
-        4,
-      ], [0.1, -0.2, 0.3, 0.05, -0.1, 0.2, -0.05, 0.15]);
+      final x = Tensor.fromList(
+        [2, 4],
+        [0.1, -0.2, 0.3, 0.05, -0.1, 0.2, -0.05, 0.15],
+      );
       final ya = a(x).toList();
       final yb = b(x).toList();
       expect(ya.length, yb.length);
@@ -591,16 +591,16 @@ void main() {
     });
 
     test('sparse execution: backward matches dense backward (CPU)', () {
-      final xD = Tensor.fromList([
-        4,
-        4,
-      ], List<double>.generate(16, (i) => (i - 8) * 0.05),
-          requiresGrad: true);
-      final xS = Tensor.fromList([
-        4,
-        4,
-      ], List<double>.generate(16, (i) => (i - 8) * 0.05),
-          requiresGrad: true);
+      final xD = Tensor.fromList(
+        [4, 4],
+        List<double>.generate(16, (i) => (i - 8) * 0.05),
+        requiresGrad: true,
+      );
+      final xS = Tensor.fromList(
+        [4, 4],
+        List<double>.generate(16, (i) => (i - 8) * 0.05),
+        requiresGrad: true,
+      );
       final dense = MoEFeedForward(
         embedDim: 4,
         numRoutedExperts: 4,
@@ -634,16 +634,18 @@ void main() {
     });
 
     test('sparse execution: GPU parity with dense on GPU', () {
-      final xD = Tensor.fromList([
-        4,
-        4,
-      ], List<double>.generate(16, (i) => (i - 8) * 0.05),
-          requiresGrad: true, device: Device.GPU);
-      final xS = Tensor.fromList([
-        4,
-        4,
-      ], List<double>.generate(16, (i) => (i - 8) * 0.05),
-          requiresGrad: true, device: Device.GPU);
+      final xD = Tensor.fromList(
+        [4, 4],
+        List<double>.generate(16, (i) => (i - 8) * 0.05),
+        requiresGrad: true,
+        device: Device.GPU,
+      );
+      final xS = Tensor.fromList(
+        [4, 4],
+        List<double>.generate(16, (i) => (i - 8) * 0.05),
+        requiresGrad: true,
+        device: Device.GPU,
+      );
       final dense = MoEFeedForward(
         embedDim: 4,
         numRoutedExperts: 4,

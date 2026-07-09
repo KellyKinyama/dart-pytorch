@@ -24,7 +24,7 @@ const int _blockSize = 32;
 const int _embedDim = 64;
 const int _numLayers = 2;
 const int _numHeads = 4;
-const int _trainSteps = 500;
+const int _trainSteps = 5000;
 const double _lr = 3e-3;
 
 void main() {

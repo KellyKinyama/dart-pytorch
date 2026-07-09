@@ -71,7 +71,9 @@ enum GateFunction { softmax, sigmoid }
 
 /// Bias update rule for [MoEFeedForward.updateRoutingBias]. See
 /// aux-loss-free paper (arXiv:2408.15664) §4.3.
-enum BiasUpdateRule { sign, proportional }/// Activation used inside an [Expert]. `relu` and `silu`
+enum BiasUpdateRule { sign, proportional }
+
+/// Activation used inside an [Expert]. `relu` and `silu`
 /// (`x * sigmoid(x)`) both have fwd+bwd on CPU and GPU.
 enum ExpertActivation { relu, silu }
 
