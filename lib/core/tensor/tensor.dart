@@ -330,11 +330,28 @@ class Tensor implements ffi.Finalizable {
 
   /// Wire `fn` as this tensor's backward closure, remember its parents,
   /// and mark this node as requiring grad. Called by every op that
-  /// participates in autograd.
+  /// participates in autograd. Skipped entirely inside a [noGrad] scope.
   void _setBackward(List<Tensor> children, void Function() fn) {
+    if (_noGradDepth > 0) return;
     _children = children;
     _backward = fn;
     requiresGrad = true;
+  }
+
+  static int _noGradDepth = 0;
+
+  /// Run [body] with autograd disabled: every op skips backward wiring
+  /// so no graph is built and no intermediates are retained for a
+  /// future backward call. Use this around inference / generation loops
+  /// where you would otherwise accumulate an unbounded graph and
+  /// exhaust GPU memory.
+  static T noGrad<T>(T Function() body) {
+    _noGradDepth++;
+    try {
+      return body();
+    } finally {
+      _noGradDepth--;
+    }
   }
 
   /// Add `contribution` into this tensor's gradient. Takes ownership of

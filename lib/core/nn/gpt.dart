@@ -189,9 +189,9 @@ class GPT extends Module {
     final wasTraining = training;
     eval();
     try {
-      return useCache
+      return Tensor.noGrad(() => useCache
           ? _generateCached(prompt, maxNewTokens, temperature, topK, r)
-          : _generateNoCache(prompt, maxNewTokens, temperature, topK, r);
+          : _generateNoCache(prompt, maxNewTokens, temperature, topK, r));
     } finally {
       if (wasTraining) train();
     }
