@@ -44,16 +44,15 @@ extension TensorOps on Tensor {
       final b = o;
       out._setBackward([a, b], () {
         final g = out._grad!;
-        // _reduceForBroadcast may dispose its input; if both branches read g
-        // directly, clone so the second call still has a live tensor.
-        final needsClone = a.requiresGrad && b.requiresGrad;
+        // Always clone before handing to _accumulateGrad: (a) both branches
+        // may need g; (b) _reduceForBroadcast can pass its input through
+        // unchanged, aliasing out._grad into the child's _grad, which
+        // freeGraph would later dispose out from under us.
         if (a.requiresGrad) {
-          final ga = needsClone ? g.clone() : g;
-          a._accumulateGrad(Tensor._reduceForBroadcast(ga, a.shape));
+          a._accumulateGrad(Tensor._reduceForBroadcast(g.clone(), a.shape));
         }
         if (b.requiresGrad) {
-          final gb = needsClone ? g.clone() : g;
-          b._accumulateGrad(Tensor._reduceForBroadcast(gb, b.shape));
+          b._accumulateGrad(Tensor._reduceForBroadcast(g.clone(), b.shape));
         }
       });
     }
@@ -81,10 +80,10 @@ extension TensorOps on Tensor {
       out._setBackward([a, b], () {
         final g = out._grad!;
         if (a.requiresGrad) {
-          // b branch below builds a fresh tensor (g * -1.0), so only
-          // a's direct read of g needs a defensive clone when both do grad.
-          final ga = b.requiresGrad ? g.clone() : g;
-          a._accumulateGrad(Tensor._reduceForBroadcast(ga, a.shape));
+          // Clone: _reduceForBroadcast can pass g through unchanged,
+          // which would alias out._grad into a._grad and get disposed
+          // when freeGraph releases out.
+          a._accumulateGrad(Tensor._reduceForBroadcast(g.clone(), a.shape));
         }
         if (b.requiresGrad) {
           b._accumulateGrad(Tensor._reduceForBroadcast(g * -1.0, b.shape));

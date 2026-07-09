@@ -36,7 +36,12 @@ part 'scatter.dart';
 
 enum Device { CPU, GPU }
 
-class Tensor {
+/// Debug hook fired after each backward closure. If non-null, called
+/// with (stepIndex, tensor) after `tensor._backward()` runs. Use to
+/// bisect which closure corrupted state.
+void Function(int, Tensor)? debugBackwardHook;
+
+class Tensor implements ffi.Finalizable {
   final List<int> shape;
   final int length;
   Device device;
@@ -50,6 +55,10 @@ class Tensor {
   Tensor? _grad;
   void Function()? _backward;
   List<Tensor> _children = const [];
+
+  /// Debug-only accessor: shapes of this tensor's autograd children.
+  List<List<int>> get debugChildShapes =>
+      _children.map((c) => c.shape).toList();
 
   /// Accumulated gradient for this tensor, or `null` before backward or
   /// after [zeroGrad].
@@ -75,7 +84,19 @@ class Tensor {
     this.requiresGrad = false,
   }) : length = shape.reduce((a, b) => a * b),
        device = Device.GPU,
-       _handle = handle;
+       _handle = handle {
+    // Register a native finalizer so autograd-graph intermediates and
+    // other implicitly-owned GPU tensors get their handle freed when
+    // the Dart object is GC'd. Without this, a training loop leaks
+    // ~O(200) handles per step and exhausts VRAM within ~30 steps at
+    // mid-model sizes, silently corrupting future allocations.
+    engine.destroyTensorFinalizer.attach(
+      this,
+      handle,
+      detach: this,
+      externalSize: length * 4,
+    );
+  }
 
   /// Construct from a flat host list. Device defaults to CPU below
   /// [autoDeviceThreshold] elements, GPU above. Pass `requiresGrad:
@@ -205,9 +226,21 @@ class Tensor {
     if (device == Device.CPU) {
       _cpuData!.setAll(0, source._cpuData!);
     } else {
+      // Detach both finalizers to prevent a double-free once the
+      // handles change owners.
+      engine.destroyTensorFinalizer.detach(this);
+      engine.destroyTensorFinalizer.detach(source);
       engine.destroyTensor(_handle!);
       _handle = source._handle;
       source._handle = null;
+      // Re-attach so the newly adopted handle is freed if `this` is
+      // itself GC'd without an explicit `dispose()`.
+      engine.destroyTensorFinalizer.attach(
+        this,
+        _handle!,
+        detach: this,
+        externalSize: length * 4,
+      );
     }
   }
 
@@ -217,6 +250,8 @@ class Tensor {
     _grad?.dispose();
     _grad = null;
     if (device == Device.GPU && _handle != null) {
+      // Detach the finalizer so it doesn't run later on a freed pointer.
+      engine.destroyTensorFinalizer.detach(this);
       engine.destroyTensor(_handle!);
       _handle = null;
     }
@@ -227,7 +262,19 @@ class Tensor {
   /// Trigger reverse-mode differentiation from this tensor. Typically
   /// called on a scalar loss. The root gradient is initialized to ones
   /// if not already set.
-  void backward() {
+  ///
+  /// When `freeGraph` is true (the default), every non-root
+  /// intermediate node's data + grad are disposed as soon as its
+  /// backward closure runs. This is essential for GPU training loops
+  /// \u2014 without it, autograd-graph intermediates leak GPU memory
+  /// (~200 handles per step at mid-model sizes) and VRAM is exhausted
+  /// within a few dozen steps. Leaf tensors (parameters, inputs) are
+  /// never freed. The root itself (`this`) also survives so callers
+  /// can read the loss value after backward returns.
+  ///
+  /// Pass `freeGraph: false` for higher-order gradients or to inspect
+  /// intermediate `.grad` values after backward.
+  void backward({bool freeGraph = true}) {
     if (!requiresGrad) {
       throw StateError(
         'backward() called on a tensor with requiresGrad = false',
@@ -248,7 +295,30 @@ class Tensor {
 
     visit(this);
     for (int i = ordered.length - 1; i >= 0; i--) {
-      ordered[i]._backward?.call();
+      final t = ordered[i];
+      t._backward?.call();
+      final hook = debugBackwardHook;
+      if (hook != null) hook(ordered.length - 1 - i, t);
+
+      if (freeGraph &&
+          !identical(t, this) &&
+          t._backward != null &&
+          t.device == Device.GPU) {
+        // Non-root, non-leaf GPU intermediate \u2014 safe to release.
+        t._grad?.dispose();
+        t._grad = null;
+        if (t._handle != null) t.dispose();
+        t._children = const [];
+        t._backward = null;
+      }
+    }
+
+    // Release root's backward machinery once the graph walk is done.
+    // Its data (`_handle` / `_cpuData`) stays alive so the caller can
+    // still read the loss value.
+    if (freeGraph) {
+      _children = const [];
+      _backward = null;
     }
   }
 

@@ -352,7 +352,7 @@ void main() {
         requiresGrad: true,
       );
       final c = a + b;
-      c.sum().backward();
+      c.sum().backward(freeGraph: false);
       expect(c.toList(), closeToList([11, 12, 13, 14]));
       expect(a.grad!.toList(), closeToList([1, 1, 1, 1]));
       expect(b.grad!.toList(), closeToList([4]));
@@ -372,7 +372,7 @@ void main() {
         requiresGrad: true,
       );
       final c = a * b;
-      c.sum().backward();
+      c.sum().backward(freeGraph: false);
       expect(c.toList(), closeToList([3, 6, 9, 12]));
       expect(a.grad!.toList(), closeToList([3, 3, 3, 3]));
       expect(b.grad!.toList(), closeToList([10]));
@@ -396,7 +396,7 @@ void main() {
         requiresGrad: true,
       );
       final c = a + b;
-      c.sum().backward();
+      c.sum().backward(freeGraph: false);
       expect(
         c.toList(),
         closeToList([
