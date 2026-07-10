@@ -7,5 +7,8 @@ native/lib/*.so
 native/lib/*.dll
 native/lib/*.dylib
 
+# Face gallery written by bin/train_face_folder.dart (regenerated each run).
+faces_gallery/
+
 # Dart pub lockfile — application repo, keep. If you convert this to a library, remove this line to ignore it instead.
 # pubspec.lock

@@ -120,10 +120,7 @@ double _evalValLoss(TransformerLM lm, TextTokenDataset val, Device device) {
 
 /// Stack a batch of `LmSample` into `[B, blockSize]` input and target
 /// tensors. Uses `.toList()` on inputs (they don't require grad).
-(Tensor input, Tensor target) _stackBatch(
-  List<LmSample> batch,
-  Device device,
-) {
+(Tensor input, Tensor target) _stackBatch(List<LmSample> batch, Device device) {
   final b = batch.length;
   final n = batch[0].input.length;
   final xs = List<double>.filled(b * n, 0);
@@ -195,12 +192,16 @@ void main(List<String> args) {
 
     // 4. Baseline val loss.
     final baselineVal = _evalValLoss(lm, val, device);
-    print('\nBEFORE  val CE = ${baselineVal.toStringAsFixed(4)}  '
-        '(uniform ≈ ${math.log(tok.vocabSize).toStringAsFixed(4)})');
+    print(
+      '\nBEFORE  val CE = ${baselineVal.toStringAsFixed(4)}  '
+      '(uniform ≈ ${math.log(tok.vocabSize).toStringAsFixed(4)})',
+    );
 
     // 5. Train.
-    print('\ntraining $_epochs epochs × $_stepsPerEpoch steps '
-        '(batch=$_batchSize, blockSize=$_blockSize, lr=$_lr)...');
+    print(
+      '\ntraining $_epochs epochs × $_stepsPerEpoch steps '
+      '(batch=$_batchSize, blockSize=$_blockSize, lr=$_lr)...',
+    );
     final sw = Stopwatch()..start();
     for (int epoch = 1; epoch <= _epochs; epoch++) {
       final loader = DataLoader<LmSample>(
@@ -227,10 +228,12 @@ void main(List<String> args) {
       final valLoss = _evalValLoss(lm, val, device);
       lm.train();
       final ms = sw.elapsedMilliseconds;
-      print('  epoch $epoch  '
-          'train=${trainAvg.toStringAsFixed(4)}  '
-          'val=${valLoss.toStringAsFixed(4)}  '
-          '(${(ms / epoch).toStringAsFixed(0)} ms/epoch cumulative)');
+      print(
+        '  epoch $epoch  '
+        'train=${trainAvg.toStringAsFixed(4)}  '
+        'val=${valLoss.toStringAsFixed(4)}  '
+        '(${(ms / epoch).toStringAsFixed(0)} ms/epoch cumulative)',
+      );
     }
     sw.stop();
 

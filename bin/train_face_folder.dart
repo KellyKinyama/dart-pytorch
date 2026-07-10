@@ -3,14 +3,17 @@
 /// End-to-end training pipeline using the new data loaders instead of
 /// synthetic in-memory tensors. Concretely:
 ///
-///  1. Programmatically writes a small "identity gallery" to a temp
-///     directory (`/tmp/dp_faces_...`) with 4 identities × 8 PNG
+///  1. Programmatically writes a small "identity gallery" to a
+///     stable directory (`./faces_gallery/` by default, relative to
+///     the current working directory) with 4 identities × 8 PNG
 ///     images each. Every identity has a distinctive base visual
 ///     pattern (vertical / horizontal stripes, diagonals, and a
 ///     concentric-circle "logo") plus per-sample jitter (random
 ///     phase, hue rotation, Gaussian pixel noise). The result: a
 ///     folder that decodes and behaves exactly like a real face
-///     dataset from disk.
+///     dataset from disk — and you can open the PNGs in any image
+///     viewer to inspect the samples. Pass `--tmp` to write to a
+///     `/tmp/dp_faces_...` directory that is deleted on exit.
 ///
 ///  2. Loads it with [ImageFolderDataset], deterministically split
 ///     into train / val at 25 %.
@@ -30,8 +33,9 @@
 ///
 /// Run:
 ///
-///     dart run bin/train_face_folder.dart          # CPU
-///     dart run bin/train_face_folder.dart --gpu    # GPU
+///     dart run bin/train_face_folder.dart               # CPU, ./faces_gallery/
+///     dart run bin/train_face_folder.dart --gpu         # GPU
+///     dart run bin/train_face_folder.dart --tmp         # ephemeral /tmp dir
 library;
 
 import 'dart:io';
@@ -117,10 +121,23 @@ img.Image _drawIdentity(int id, int k, {int size = 32}) {
   return img_;
 }
 
-/// Materialize the identity gallery on disk. Returns the root dir
-/// (caller must delete when done).
-Directory _buildFaceGallery() {
-  final root = Directory.systemTemp.createTempSync('dp_faces_');
+/// Materialize the identity gallery on disk. When [ephemeral] is
+/// true, uses a fresh `/tmp/dp_faces_...` directory that the caller
+/// is expected to delete. Otherwise uses the stable
+/// `./faces_gallery/` directory (cleaned and re-created each run)
+/// so the PNGs remain on disk after the script exits and can be
+/// opened in any image viewer.
+Directory _buildFaceGallery({required bool ephemeral}) {
+  final Directory root;
+  if (ephemeral) {
+    root = Directory.systemTemp.createTempSync('dp_faces_');
+  } else {
+    root = Directory('faces_gallery');
+    if (root.existsSync()) {
+      root.deleteSync(recursive: true);
+    }
+    root.createSync(recursive: true);
+  }
   for (int id = 0; id < _numIdentities; id++) {
     final dir = Directory('${root.path}/id_$id')..createSync();
     for (int k = 0; k < _samplesPerIdentity; k++) {
@@ -190,12 +207,14 @@ double _cosine(Tensor a, Tensor b) {
 
 void main(List<String> args) {
   final device = args.contains('--gpu') ? Device.GPU : Device.CPU;
+  final ephemeral = args.contains('--tmp');
   print('=== train_face_folder (${device.name}) ===');
 
   // 1. Build synthetic-but-real face gallery on disk.
-  final root = _buildFaceGallery();
+  final root = _buildFaceGallery(ephemeral: ephemeral);
   try {
-    print('gallery: ${root.path}');
+    print('gallery: ${root.absolute.path}'
+        '${ephemeral ? '  (--tmp, deleted on exit)' : '  (kept — open in image viewer)'}');
     print('  $_numIdentities identities × $_samplesPerIdentity PNG samples');
 
     // 2. Load with ImageFolderDataset (real disk decode).
@@ -232,15 +251,18 @@ void main(List<String> args) {
 
     // 4. Baseline val separation.
     final before = _evalSeparation(model, val);
-    print('\nBEFORE  same-avg=${before.sameAvg.toStringAsFixed(4)} '
-        '(${before.sameN} pairs)  '
-        'diff-avg=${before.diffAvg.toStringAsFixed(4)} '
-        '(${before.diffN} pairs)  '
-        'gap=${(before.sameAvg - before.diffAvg).toStringAsFixed(4)}');
+    print(
+      '\nBEFORE  same-avg=${before.sameAvg.toStringAsFixed(4)} '
+      '(${before.sameN} pairs)  '
+      'diff-avg=${before.diffAvg.toStringAsFixed(4)} '
+      '(${before.diffN} pairs)  '
+      'gap=${(before.sameAvg - before.diffAvg).toStringAsFixed(4)}',
+    );
 
     // 5. Train with triplet loss over triplets sampled from disk.
     print(
-        '\ntraining $_steps steps (lr=$_lr, margin=$_margin, triplet loss)...');
+      '\ntraining $_steps steps (lr=$_lr, margin=$_margin, triplet loss)...',
+    );
     final sw = Stopwatch()..start();
     int trainedSteps = 0;
     double lossSum = 0;
@@ -270,11 +292,13 @@ void main(List<String> args) {
       if (step == 1 || step % _logEvery == 0 || step == _steps) {
         final ms = sw.elapsedMilliseconds / step;
         final avg = trainedSteps == 0 ? 0.0 : lossSum / trainedSteps;
-        print('  step ${step.toString().padLeft(4)}  '
-            'triplet=${lossVal.toStringAsFixed(6)}  '
-            'trained=${trainedSteps.toString().padLeft(3)}/$step  '
-            'avg=${avg.toStringAsFixed(4)}  '
-            '(${ms.toStringAsFixed(1)} ms/step)');
+        print(
+          '  step ${step.toString().padLeft(4)}  '
+          'triplet=${lossVal.toStringAsFixed(6)}  '
+          'trained=${trainedSteps.toString().padLeft(3)}/$step  '
+          'avg=${avg.toStringAsFixed(4)}  '
+          '(${ms.toStringAsFixed(1)} ms/step)',
+        );
       }
     }
     sw.stop();
@@ -282,20 +306,28 @@ void main(List<String> args) {
     // 6. Final val separation.
     model.eval();
     final after = _evalSeparation(model, val);
-    print('\nAFTER   same-avg=${after.sameAvg.toStringAsFixed(4)}  '
-        'diff-avg=${after.diffAvg.toStringAsFixed(4)}  '
-        'gap=${(after.sameAvg - after.diffAvg).toStringAsFixed(4)}');
+    print(
+      '\nAFTER   same-avg=${after.sameAvg.toStringAsFixed(4)}  '
+      'diff-avg=${after.diffAvg.toStringAsFixed(4)}  '
+      'gap=${(after.sameAvg - after.diffAvg).toStringAsFixed(4)}',
+    );
 
     final delta =
         (after.sameAvg - after.diffAvg) - (before.sameAvg - before.diffAvg);
-    print('\nseparation gap change: '
-        '${delta >= 0 ? '+' : ''}${delta.toStringAsFixed(4)}');
+    print(
+      '\nseparation gap change: '
+      '${delta >= 0 ? '+' : ''}${delta.toStringAsFixed(4)}',
+    );
     if (delta > 0.05) {
       print('✅ val identities are more separated after training.');
     } else {
       print('⚠️  training did not clearly improve separation on val.');
     }
   } finally {
-    root.deleteSync(recursive: true);
+    if (ephemeral) {
+      root.deleteSync(recursive: true);
+    } else {
+      print('\ngallery preserved at: ${root.absolute.path}');
+    }
   }
 }
