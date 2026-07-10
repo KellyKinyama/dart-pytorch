@@ -402,9 +402,7 @@ Directory _buildRealGallery({
     final classDir = Directory('${root.path}/${entry.key}')..createSync();
     for (int k = 0; k < entry.value.length; k++) {
       final src = entry.value[k];
-      final ext = src.path
-          .substring(src.path.lastIndexOf('.'))
-          .toLowerCase();
+      final ext = src.path.substring(src.path.lastIndexOf('.')).toLowerCase();
       final dst = File('${classDir.path}/sample_$k$ext');
       dst.writeAsBytesSync(src.readAsBytesSync());
     }
@@ -502,11 +500,7 @@ double _cosine(Tensor a, Tensor b) {
 /// pairs. Well-suited to the synthetic cartoon gallery, where the
 /// initial embedding already separates classes and the margin can
 /// push it further.
-void _runTriplet(
-  ImageFolderDataset ds,
-  ImageFolderDataset val,
-  Device device,
-) {
+void _runTriplet(ImageFolderDataset ds, ImageFolderDataset val, Device device) {
   final model = ViTFaceEmbedding(
     imageSize: _imageSize,
     patchSize: _patchSize,
@@ -533,9 +527,7 @@ void _runTriplet(
     'gap=${(before.sameAvg - before.diffAvg).toStringAsFixed(4)}',
   );
 
-  print(
-    '\ntraining $_steps steps (lr=$_lr, margin=$_margin, triplet loss)...',
-  );
+  print('\ntraining $_steps steps (lr=$_lr, margin=$_margin, triplet loss)...');
   final sw = Stopwatch()..start();
   int trainedSteps = 0;
   double lossSum = 0;
@@ -710,9 +702,7 @@ void main(List<String> args) {
       'gallery: ${root.absolute.path}'
       '${ephemeral ? '  (--tmp, deleted on exit)' : '  (kept — open in image viewer)'}',
     );
-    print(
-      '  source:  ${synthetic ? 'synthetic cartoons' : _realFacesSource}',
-    );
+    print('  source:  ${synthetic ? 'synthetic cartoons' : _realFacesSource}');
     print('  $numClasses identities × $_samplesPerIdentity samples');
 
     // 2. Load with ImageFolderDataset (real disk decode).
