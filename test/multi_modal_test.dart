@@ -350,4 +350,184 @@ void main() {
       for (final v in y.toList()) expect(v.isFinite, isTrue);
     });
   });
+
+  group('MultiModalGenerator', () {
+    const jointDim = 24;
+    const targetVocab = 20;
+    const maxTgt = 16;
+
+    MultiModalGenerator buildAllFour({Device device = Device.CPU}) {
+      return MultiModalGenerator(
+        image: ViTBackbone(
+          imageSize: 8,
+          patchSize: 4,
+          numChannels: 3,
+          embedDim: jointDim,
+          numLayers: 1,
+          numHeads: 4,
+          device: device,
+          seed: 1,
+        ),
+        audio: AudioTransformer(
+          featureDim: 12,
+          maxSeqLen: 10,
+          embedDim: jointDim,
+          numLayers: 1,
+          numHeads: 4,
+          device: device,
+          seed: 2,
+        ),
+        video: VideoTransformer(
+          frameFeatureDim: 16,
+          maxFrames: 6,
+          embedDim: jointDim,
+          numLayers: 1,
+          numHeads: 4,
+          device: device,
+          seed: 3,
+        ),
+        text: TextTransformer(
+          vocabSize: targetVocab,
+          maxSeqLen: 10,
+          embedDim: jointDim,
+          numLayers: 1,
+          numHeads: 4,
+          device: device,
+          seed: 4,
+        ),
+        targetVocabSize: targetVocab,
+        maxTargetLen: maxTgt,
+        jointEmbedDim: jointDim,
+        decoderLayers: 1,
+        decoderHeads: 4,
+        fusionLayers: 1,
+        fusionHeads: 4,
+        device: device,
+        seed: 5,
+      );
+    }
+
+    test('forward with all four modalities produces [seqTgt, vocab]', () {
+      final gen = buildAllFour();
+      final image = _rand2D(4, 4 * 4 * 3, device: Device.CPU, seed: 10);
+      final audio = _rand2D(5, 12, device: Device.CPU, seed: 11);
+      final video = _rand2D(3, 16, device: Device.CPU, seed: 12);
+      final promptText = _tokens([1, 2, 3], device: Device.CPU);
+      final tgt = _tokens([1, 4, 5, 6, 7], device: Device.CPU);
+      final logits = gen(
+        imagePatches: image,
+        audioFeatures: audio,
+        videoFrames: video,
+        textIn: promptText,
+        targetTokens: tgt,
+      );
+      expect(logits.shape, equals([5, targetVocab]));
+      for (final v in logits.toList()) expect(v.isFinite, isTrue);
+    });
+
+    test('single-modality (image-only) forward works', () {
+      final gen = MultiModalGenerator(
+        image: ViTBackbone(
+          imageSize: 8,
+          patchSize: 4,
+          numChannels: 3,
+          embedDim: jointDim,
+          numLayers: 1,
+          numHeads: 4,
+          seed: 1,
+        ),
+        targetVocabSize: targetVocab,
+        maxTargetLen: maxTgt,
+        jointEmbedDim: jointDim,
+        decoderLayers: 1,
+        decoderHeads: 4,
+        fusionLayers: 1,
+        fusionHeads: 4,
+        seed: 5,
+      );
+      final image = _rand2D(4, 4 * 4 * 3, device: Device.CPU, seed: 10);
+      final tgt = _tokens([1, 2, 3], device: Device.CPU);
+      final logits = gen(imagePatches: image, targetTokens: tgt);
+      expect(logits.shape, equals([3, targetVocab]));
+    });
+
+    test('missing-encoder / missing-input mismatch throws', () {
+      final gen = buildAllFour();
+      final tgt = _tokens([1, 2], device: Device.CPU);
+      expect(
+        () => gen(
+          audioFeatures: _rand2D(3, 12, device: Device.CPU, seed: 0),
+          videoFrames: _rand2D(2, 16, device: Device.CPU, seed: 0),
+          textIn: _tokens([1], device: Device.CPU),
+          targetTokens: tgt,
+        ),
+        throwsArgumentError, // image encoder present, image input null
+      );
+    });
+
+    test('one Adam step reduces cross-entropy loss', () {
+      final gen = buildAllFour();
+      final params = gen.parameters();
+      final opt = Adam(params, lr: 1e-2);
+
+      final image = _rand2D(4, 4 * 4 * 3, device: Device.CPU, seed: 50);
+      final audio = _rand2D(4, 12, device: Device.CPU, seed: 51);
+      final video = _rand2D(3, 16, device: Device.CPU, seed: 52);
+      final promptText = _tokens([1, 2], device: Device.CPU);
+      final decIn = _tokens([1, 4, 5, 6], device: Device.CPU);
+      final decTgt = _tokens([4, 5, 6, 7], device: Device.CPU);
+
+      double lossOf() {
+        return Tensor.noGrad(() {
+          final logits = gen(
+            imagePatches: image,
+            audioFeatures: audio,
+            videoFrames: video,
+            textIn: promptText,
+            targetTokens: decIn,
+          );
+          return logits.crossEntropy(decTgt).mean().toList()[0];
+        });
+      }
+
+      final before = lossOf();
+      for (int i = 0; i < 5; i++) {
+        opt.zeroGrad();
+        final logits = gen(
+          imagePatches: image,
+          audioFeatures: audio,
+          videoFrames: video,
+          textIn: promptText,
+          targetTokens: decIn,
+        );
+        final loss = logits.crossEntropy(decTgt).mean();
+        loss.backward();
+        opt.step();
+      }
+      final after = lossOf();
+      expect(after < before, isTrue,
+          reason: 'expected loss to decrease; before=$before after=$after');
+    });
+
+    test('greedy generate returns prompt.length + <=maxNewTokens ids', () {
+      final gen = buildAllFour();
+      final image = _rand2D(4, 4 * 4 * 3, device: Device.CPU, seed: 70);
+      final audio = _rand2D(3, 12, device: Device.CPU, seed: 71);
+      final video = _rand2D(2, 16, device: Device.CPU, seed: 72);
+      final promptText = _tokens([1], device: Device.CPU);
+      final out = gen.generate(
+        imagePatches: image,
+        audioFeatures: audio,
+        videoFrames: video,
+        textIn: promptText,
+        prompt: [1],
+        maxNewTokens: 5,
+      );
+      expect(out.length, lessThanOrEqualTo(1 + 5));
+      expect(out.length, greaterThanOrEqualTo(1));
+      for (final id in out) {
+        expect(id, inInclusiveRange(0, targetVocab - 1));
+      }
+    });
+  });
 }
