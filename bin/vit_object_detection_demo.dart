@@ -84,11 +84,7 @@ void main(List<String> args) {
   );
   final gtBoxes = Tensor.fromList(
     [_numQueries, 4],
-    [
-      0.10, 0.10, 0.20, 0.20,
-      0.50, 0.50, 0.30, 0.30,
-      0.00, 0.00, 0.00, 0.00,
-    ],
+    [0.10, 0.10, 0.20, 0.20, 0.50, 0.50, 0.30, 0.30, 0.00, 0.00, 0.00, 0.00],
     device: device,
   );
 
@@ -131,7 +127,10 @@ void main(List<String> args) {
     final logits = preds['logits']!.toList();
     print('\nfinal predictions:');
     for (int q = 0; q < _numQueries; q++) {
-      final row = logits.sublist(q * (_numClasses + 1), (q + 1) * (_numClasses + 1));
+      final row = logits.sublist(
+        q * (_numClasses + 1),
+        (q + 1) * (_numClasses + 1),
+      );
       final pred = _argmax(row);
       final gt = q < _numQueries ? gtClasses.toList()[q].toInt() : _numClasses;
       final b = boxes.sublist(q * 4, q * 4 + 4);

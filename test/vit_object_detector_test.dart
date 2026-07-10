@@ -10,9 +10,9 @@ const int _numPatches = 16;
 const int _patchPixels = _patchSize * _patchSize * _numChannels;
 
 List<double> _randomPatches(math.Random rng) => List<double>.generate(
-      _numPatches * _patchPixels,
-      (_) => rng.nextDouble() * 2 - 1,
-    );
+  _numPatches * _patchPixels,
+  (_) => rng.nextDouble() * 2 - 1,
+);
 
 void main() {
   group('ViTObjectDetector', () {
@@ -29,10 +29,10 @@ void main() {
         seed: 0,
       );
       final rng = math.Random(0);
-      final x = Tensor.fromList(
-        [_numPatches, _patchPixels],
-        _randomPatches(rng),
-      );
+      final x = Tensor.fromList([
+        _numPatches,
+        _patchPixels,
+      ], _randomPatches(rng));
       final out = det(x);
       expect(out['logits']!.shape, [3, 6]);
       expect(out['boxes']!.shape, [3, 4]);
@@ -60,10 +60,10 @@ void main() {
       final opt = Adam(params, lr: 3e-3);
 
       final rng = math.Random(2);
-      final x = Tensor.fromList(
-        [_numPatches, _patchPixels],
-        _randomPatches(rng),
-      );
+      final x = Tensor.fromList([
+        _numPatches,
+        _patchPixels,
+      ], _randomPatches(rng));
       final gtClasses = Tensor.fromList([3], [1.0, 2.0, 5.0]);
       final gtBoxes = Tensor.fromList(
         [3, 4],

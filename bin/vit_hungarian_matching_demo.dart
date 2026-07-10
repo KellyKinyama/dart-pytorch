@@ -118,9 +118,7 @@ void _printDetections(
     }
     final label = classes[i] == _numClasses ? 'BG   ' : 'ID:${classes[i]} ';
     final maskTag = mask[i] > 0.5 ? '*' : ' ';
-    print(
-      '  #$i$maskTag | $label | $p | $t | ${err.toStringAsFixed(4)}',
-    );
+    print('  #$i$maskTag | $label | $p | $t | ${err.toStringAsFixed(4)}');
   }
 }
 
@@ -166,8 +164,10 @@ void main(List<String> args) {
     _Gt([0.50, 0.50, 0.30, 0.30], 2),
   ];
 
-  print('training $_epochs epochs (lr=$_lr, '
-      'classW=$_classWeight, boxW=$_boxWeight)...');
+  print(
+    'training $_epochs epochs (lr=$_lr, '
+    'classW=$_classWeight, boxW=$_boxWeight)...',
+  );
   final sw = Stopwatch()..start();
 
   for (int epoch = 0; epoch <= _epochs; epoch++) {
@@ -182,7 +182,10 @@ void main(List<String> args) {
     final assign = HungarianAlgorithm(costMatrix).getAssignment();
 
     // 2) Build masked, aligned targets.
-    final alignedClasses = List<double>.filled(_numQueries, _numClasses.toDouble());
+    final alignedClasses = List<double>.filled(
+      _numQueries,
+      _numClasses.toDouble(),
+    );
     final alignedBoxes = List<double>.filled(_numQueries * 4, 0.0);
     final boxMaskRaw = List<double>.filled(_numQueries * 4, 0.0);
     for (int q = 0; q < _numQueries; q++) {
@@ -194,6 +197,16 @@ void main(List<String> args) {
           boxMaskRaw[q * 4 + k] = 1.0;
         }
       }
+    }
+
+    // Precompute the sign of (pred - gt) on the host. This lets us
+    // implement L1 = diff * sign entirely with autograd-friendly
+    // primitives (elementwise mul), avoiding abs's GPU backward gap.
+    // sign is a stop-gradient constant.
+    final signRaw = List<double>.filled(_numQueries * 4, 0.0);
+    for (int i = 0; i < signRaw.length; i++) {
+      final d = predBoxValues[i] - alignedBoxes[i];
+      signRaw[i] = d >= 0 ? 1.0 : -1.0;
     }
 
     final gtClasses = Tensor.fromList(
@@ -211,11 +224,17 @@ void main(List<String> args) {
       boxMaskRaw,
       device: device,
     );
+    final signTensor = Tensor.fromList(
+      [_numQueries, 4],
+      signRaw,
+      device: device,
+    );
 
-    // 3) Masked + weighted loss.
+    // 3) Masked + weighted loss. |diff| = diff * sign(diff).
     final classLoss = logits.crossEntropy(gtClasses).mean();
-    final rawDiff = (boxes - gtBoxes).abs();
-    final maskedDiff = rawDiff * boxMask;
+    final diff = boxes - gtBoxes;
+    final absDiff = diff * signTensor;
+    final maskedDiff = absDiff * boxMask;
     final boxLoss = maskedDiff.mean();
     final totalLoss = (classLoss * _classWeight) + (boxLoss * _boxWeight);
 
@@ -244,11 +263,15 @@ void main(List<String> args) {
     print('\nfinal per-query class predictions:');
     for (int q = 0; q < _numQueries; q++) {
       final row = logits.sublist(
-          q * (_numClasses + 1), (q + 1) * (_numClasses + 1));
+        q * (_numClasses + 1),
+        (q + 1) * (_numClasses + 1),
+      );
       final pred = _argmax(row);
       final tag = pred == _numClasses ? 'BG' : 'c$pred';
-      print('  q$q -> $tag  '
-          '(logits=[${row.map((v) => v.toStringAsFixed(2)).join(', ')}])');
+      print(
+        '  q$q -> $tag  '
+        '(logits=[${row.map((v) => v.toStringAsFixed(2)).join(', ')}])',
+      );
     }
   });
 
