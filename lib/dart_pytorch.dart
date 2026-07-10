@@ -38,6 +38,7 @@ export 'core/nn/modalities/text_transformer.dart';
 export 'core/nn/modalities/multi_modal_classifier.dart';
 export 'core/nn/modalities/multi_modal_encoder.dart';
 export 'core/nn/modalities/multi_modal_generator.dart';
+export 'core/nn/modalities/multi_modal_lm.dart';
 export 'core/nn/serialize.dart';
 export 'core/optim/optimizer.dart';
 export 'core/optim/sgd.dart';

@@ -505,8 +505,11 @@ void main() {
         opt.step();
       }
       final after = lossOf();
-      expect(after < before, isTrue,
-          reason: 'expected loss to decrease; before=$before after=$after');
+      expect(
+        after < before,
+        isTrue,
+        reason: 'expected loss to decrease; before=$before after=$after',
+      );
     });
 
     test('greedy generate returns prompt.length + <=maxNewTokens ids', () {
@@ -527,6 +530,145 @@ void main() {
       expect(out.length, greaterThanOrEqualTo(1));
       for (final id in out) {
         expect(id, inInclusiveRange(0, targetVocab - 1));
+      }
+    });
+  });
+
+  group('MultiModalLM (decoder-only)', () {
+    const vocab = 20;
+    const embed = 24;
+    const maxTotal = 40;
+
+    MultiModalLM buildAllFour({Device device = Device.CPU}) {
+      return MultiModalLM(
+        imagePatchPixels: 4 * 4 * 3,
+        audioFeatureDim: 12,
+        videoFrameFeatureDim: 16,
+        useTextPrompt: true,
+        vocabSize: vocab,
+        embedDim: embed,
+        maxTotalSeqLen: maxTotal,
+        numLayers: 1,
+        numHeads: 4,
+        device: device,
+        seed: 5,
+      );
+    }
+
+    test('forward with all four modalities produces [targetLen, vocab]', () {
+      final lm = buildAllFour();
+      final image = _rand2D(4, 4 * 4 * 3, device: Device.CPU, seed: 10);
+      final audio = _rand2D(5, 12, device: Device.CPU, seed: 11);
+      final video = _rand2D(3, 16, device: Device.CPU, seed: 12);
+      final promptText = _tokens([1, 2, 3], device: Device.CPU);
+      final tgt = _tokens([1, 4, 5, 6, 7], device: Device.CPU);
+      final logits = lm(
+        imagePatches: image,
+        audioFeatures: audio,
+        videoFrames: video,
+        textPrompt: promptText,
+        targetInputTokens: tgt,
+      );
+      expect(logits.shape, equals([5, vocab]));
+      for (final v in logits.toList()) expect(v.isFinite, isTrue);
+    });
+
+    test('single-modality (image-only) forward works', () {
+      final lm = MultiModalLM(
+        imagePatchPixels: 4 * 4 * 3,
+        useTextPrompt: false,
+        vocabSize: vocab,
+        embedDim: embed,
+        maxTotalSeqLen: maxTotal,
+        numLayers: 1,
+        numHeads: 4,
+        seed: 5,
+      );
+      final image = _rand2D(4, 4 * 4 * 3, device: Device.CPU, seed: 10);
+      final tgt = _tokens([1, 2, 3], device: Device.CPU);
+      final logits = lm(imagePatches: image, targetInputTokens: tgt);
+      expect(logits.shape, equals([3, vocab]));
+    });
+
+    test('missing-projection / missing-input mismatch throws', () {
+      final lm = buildAllFour();
+      final tgt = _tokens([1, 2], device: Device.CPU);
+      expect(
+        () => lm(
+          audioFeatures: _rand2D(3, 12, device: Device.CPU, seed: 0),
+          videoFrames: _rand2D(2, 16, device: Device.CPU, seed: 0),
+          textPrompt: _tokens([1], device: Device.CPU),
+          targetInputTokens: tgt,
+        ),
+        throwsArgumentError, // image projection present, image input null
+      );
+    });
+
+    test('one Adam step reduces cross-entropy loss', () {
+      final lm = buildAllFour();
+      final params = lm.parameters();
+      final opt = Adam(params, lr: 1e-2);
+
+      final image = _rand2D(4, 4 * 4 * 3, device: Device.CPU, seed: 50);
+      final audio = _rand2D(4, 12, device: Device.CPU, seed: 51);
+      final video = _rand2D(3, 16, device: Device.CPU, seed: 52);
+      final promptText = _tokens([1, 2], device: Device.CPU);
+      final decIn = _tokens([1, 4, 5, 6], device: Device.CPU);
+      final decTgt = _tokens([4, 5, 6, 7], device: Device.CPU);
+
+      double lossOf() {
+        return Tensor.noGrad(() {
+          final logits = lm(
+            imagePatches: image,
+            audioFeatures: audio,
+            videoFrames: video,
+            textPrompt: promptText,
+            targetInputTokens: decIn,
+          );
+          return logits.crossEntropy(decTgt).mean().toList()[0];
+        });
+      }
+
+      final before = lossOf();
+      for (int i = 0; i < 5; i++) {
+        opt.zeroGrad();
+        final logits = lm(
+          imagePatches: image,
+          audioFeatures: audio,
+          videoFrames: video,
+          textPrompt: promptText,
+          targetInputTokens: decIn,
+        );
+        final loss = logits.crossEntropy(decTgt).mean();
+        loss.backward();
+        opt.step();
+      }
+      final after = lossOf();
+      expect(
+        after < before,
+        isTrue,
+        reason: 'expected loss to decrease; before=$before after=$after',
+      );
+    });
+
+    test('greedy generate returns prompt.length + <=maxNewTokens ids', () {
+      final lm = buildAllFour();
+      final image = _rand2D(4, 4 * 4 * 3, device: Device.CPU, seed: 70);
+      final audio = _rand2D(3, 12, device: Device.CPU, seed: 71);
+      final video = _rand2D(2, 16, device: Device.CPU, seed: 72);
+      final promptText = _tokens([1], device: Device.CPU);
+      final out = lm.generate(
+        imagePatches: image,
+        audioFeatures: audio,
+        videoFrames: video,
+        textPrompt: promptText,
+        prompt: [1],
+        maxNewTokens: 5,
+      );
+      expect(out.length, lessThanOrEqualTo(1 + 5));
+      expect(out.length, greaterThanOrEqualTo(1));
+      for (final id in out) {
+        expect(id, inInclusiveRange(0, vocab - 1));
       }
     });
   });

@@ -1,5 +1,14 @@
-/// Multi-modal transformer demo: image + audio + video + text prompt
-/// → text output (like a tiny Gemini). Uses [MultiModalGenerator].
+/// Multi-modal *decoder-only* transformer demo: image + audio + video
+/// + text prompt → text output (like a tiny Gemini / Fuyu). Uses
+/// [MultiModalLM] — a single causal self-attention stack over the
+/// concatenated stream
+///
+///   `[image_toks ‖ audio_toks ‖ video_toks ‖ prompt_toks ‖ target_toks]`
+///
+/// rather than the classic encoder-decoder split. Generation is
+/// autoregressive: at each step the current partial target is
+/// concatenated back into the modality context and the last-row
+/// logits produce the next token.
 ///
 /// Setup:
 ///
@@ -100,7 +109,6 @@ String _tokensToString(List<int> tokens) {
 // -------------------------------------------------------------------
 // Model hyperparameters
 // -------------------------------------------------------------------
-const int _imageSize = 8;
 const int _patchSize = 4;
 const int _numChannels = 3;
 const int _numPatches = 4;
@@ -115,15 +123,13 @@ const int _videoFeat = 12;
 const int _promptLen = 2; // [BOS, ASK]
 const int _promptAsk = _charBase; // reuse 'a' (letter index 0) as the ASK token
 
-const int _jointDim = 32;
-const int _decoderLayers = 2;
-const int _decoderHeads = 4;
-const int _fusionLayers = 1;
-const int _fusionHeads = 4;
-const int _encoderLayers = 1;
-const int _encoderHeads = 4;
+const int _embedDim = 32;
+const int _numLayers = 3;
+const int _numHeads = 4;
 
-const int _maxTargetLen = 8;
+// image 4 patches + audio 6 frames + video 4 frames + prompt 2 tokens
+// + target up to 5 tokens = 21 → round up.
+const int _maxTotalSeqLen = 32;
 const int _steps = 500;
 const int _logEvery = 50;
 const double _lr = 3e-3;
@@ -213,7 +219,10 @@ _Sample _mkSample(
   final tgtTokens = _nameToTokens(_classNames[c]); // length 5
   final decIn = Tensor.fromList(
     [tgtTokens.length - 1],
-    tgtTokens.sublist(0, tgtTokens.length - 1).map((i) => i.toDouble()).toList(),
+    tgtTokens
+        .sublist(0, tgtTokens.length - 1)
+        .map((i) => i.toDouble())
+        .toList(),
     device: device,
   );
   final decTgt = Tensor.fromList(
@@ -237,7 +246,7 @@ _Sample _mkSample(
 // Eval — greedy generate for each class and check exact match.
 // -------------------------------------------------------------------
 ({int correct, int total, List<String> preds}) _evalGenerate(
-  MultiModalGenerator gen,
+  MultiModalLM lm,
   Device device,
   math.Random rng, {
   int samplesPerClass = 4,
@@ -249,11 +258,11 @@ _Sample _mkSample(
     String? firstPred;
     for (int rep = 0; rep < samplesPerClass; rep++) {
       final s = _mkSample(c, rng, device: device);
-      final out = gen.generate(
+      final out = lm.generate(
         imagePatches: s.imagePatches,
         audioFeatures: s.audioFeatures,
         videoFrames: s.videoFrames,
-        textIn: s.textPrompt,
+        textPrompt: s.textPrompt,
         prompt: [_bos],
         maxNewTokens: _nameLen + 1, // 3 chars + EOS
         eosId: _eos,
@@ -281,72 +290,39 @@ _Sample _mkSample(
 void main(List<String> args) {
   final device = args.contains('--gpu') ? Device.GPU : Device.CPU;
   print('=== train_multimodal_demo (${device.name}) ===');
+  print('arch:      decoder-only causal transformer over');
+  print('           [image ‖ audio ‖ video ‖ prompt ‖ target] tokens.');
   print('task:      given (image + audio + video + text-prompt), output');
   print('           the 3-letter class name.');
   print('classes:   $_classNames');
   print('vocab:     $_vocabSize (PAD, BOS, EOS + 26 letters)');
   print(
-    'jointDim=$_jointDim  decoderLayers=$_decoderLayers  '
-    'fusionLayers=$_fusionLayers',
+    'embedDim=$_embedDim  numLayers=$_numLayers  '
+    'maxTotalSeqLen=$_maxTotalSeqLen',
   );
 
   // 1. Build model.
-  final gen = MultiModalGenerator(
-    image: ViTBackbone(
-      imageSize: _imageSize,
-      patchSize: _patchSize,
-      numChannels: _numChannels,
-      embedDim: _jointDim,
-      numLayers: _encoderLayers,
-      numHeads: _encoderHeads,
-      device: device,
-      seed: 1,
-    ),
-    audio: AudioTransformer(
-      featureDim: _audioFeat,
-      maxSeqLen: _audioSeq,
-      embedDim: _jointDim,
-      numLayers: _encoderLayers,
-      numHeads: _encoderHeads,
-      device: device,
-      seed: 2,
-    ),
-    video: VideoTransformer(
-      frameFeatureDim: _videoFeat,
-      maxFrames: _videoFrames,
-      embedDim: _jointDim,
-      numLayers: _encoderLayers,
-      numHeads: _encoderHeads,
-      device: device,
-      seed: 3,
-    ),
-    text: TextTransformer(
-      vocabSize: _vocabSize,
-      maxSeqLen: _promptLen,
-      embedDim: _jointDim,
-      numLayers: _encoderLayers,
-      numHeads: _encoderHeads,
-      device: device,
-      seed: 4,
-    ),
-    targetVocabSize: _vocabSize,
-    maxTargetLen: _maxTargetLen,
-    jointEmbedDim: _jointDim,
-    decoderLayers: _decoderLayers,
-    decoderHeads: _decoderHeads,
-    fusionLayers: _fusionLayers,
-    fusionHeads: _fusionHeads,
+  final lm = MultiModalLM(
+    imagePatchPixels: _patchPixels,
+    audioFeatureDim: _audioFeat,
+    videoFrameFeatureDim: _videoFeat,
+    useTextPrompt: true,
+    vocabSize: _vocabSize,
+    embedDim: _embedDim,
+    maxTotalSeqLen: _maxTotalSeqLen,
+    numLayers: _numLayers,
+    numHeads: _numHeads,
     device: device,
-    seed: 5,
+    seed: 0,
   );
-  final params = gen.parameters();
+  final params = lm.parameters();
   print('params:    ${paramScalarCount(params)} scalars');
 
   final opt = Adam(params, lr: _lr);
   final rng = math.Random(0);
 
   // 2. Baseline eval — untrained model.
-  final before = _evalGenerate(gen, device, math.Random(100));
+  final before = _evalGenerate(lm, device, math.Random(100));
   print(
     '\nBEFORE  exact-name accuracy = '
     '${(before.correct / before.total * 100).toStringAsFixed(1)}% '
@@ -365,12 +341,12 @@ void main(List<String> args) {
     opt.zeroGrad();
     final c = rng.nextInt(_numClasses);
     final s = _mkSample(c, rng, device: device);
-    final logits = gen(
+    final logits = lm(
       imagePatches: s.imagePatches,
       audioFeatures: s.audioFeatures,
       videoFrames: s.videoFrames,
-      textIn: s.textPrompt,
-      targetTokens: s.decIn,
+      textPrompt: s.textPrompt,
+      targetInputTokens: s.decIn,
     );
     final loss = logits.crossEntropy(s.decTgt).mean();
     loss.backward();
@@ -394,8 +370,8 @@ void main(List<String> args) {
   sw.stop();
 
   // 4. Final eval — greedy generation on fresh noise draws.
-  gen.eval();
-  final after = _evalGenerate(gen, device, math.Random(200));
+  lm.eval();
+  final after = _evalGenerate(lm, device, math.Random(200));
   print(
     '\nAFTER   exact-name accuracy = '
     '${(after.correct / after.total * 100).toStringAsFixed(1)}% '
