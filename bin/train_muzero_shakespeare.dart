@@ -154,9 +154,11 @@ int _argmax(List<double> row) {
     final obs = _obsTensor(valIds, start, device);
 
     // Val next-char CE at s^0.
-    final tgt = Tensor.fromList([1], [
-      valIds[start + _obsLen].toDouble(),
-    ], device: device);
+    final tgt = Tensor.fromList(
+      [1],
+      [valIds[start + _obsLen].toDouble()],
+      device: device,
+    );
     final init = model.initialInference(obs);
     lossSum += init.policy.crossEntropy(tgt).toList()[0];
 
@@ -327,20 +329,14 @@ void main(List<String> args) {
 
       // s^0 : value + policy only (no reward at position 0).
       var loss = _mse(u.values[0], valueTargets[0], device);
-      loss =
-          loss +
-          _ce(u.policies[0], trainIds[start + _obsLen], device);
+      loss = loss + _ce(u.policies[0], trainIds[start + _obsLen], device);
       // s^{k+1} : reward for the just-taken action + value + policy.
       for (int k = 0; k < _unrollK; k++) {
         loss = loss + _mse(u.rewards[k], 1.0, device);
         loss = loss + _mse(u.values[k + 1], valueTargets[k + 1], device);
         loss =
             loss +
-            _ce(
-              u.policies[k + 1],
-              trainIds[start + _obsLen + k + 1],
-              device,
-            );
+            _ce(u.policies[k + 1], trainIds[start + _obsLen + k + 1], device);
       }
       batchLoss = batchLoss == null ? loss : batchLoss + loss;
     }
@@ -362,13 +358,7 @@ void main(List<String> args) {
     }
     if (step % _evalEvery == 0 && step != _steps) {
       model.eval();
-      final e = _evalMuZero(
-        model,
-        valIds,
-        device,
-        math.Random(100),
-        n: 64,
-      );
+      final e = _evalMuZero(model, valIds, device, math.Random(100), n: 64);
       print(
         '            val CE=${e.valCE.toStringAsFixed(4)}  '
         're-encode-acc=${(e.reEncodeAcc * 100).toStringAsFixed(1)}%  '
