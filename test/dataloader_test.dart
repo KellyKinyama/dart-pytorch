@@ -29,8 +29,7 @@ Directory _buildImageFolder({
           ..g = g
           ..b = b;
       }
-      File('${dir.path}/img_$k.png')
-          .writeAsBytesSync(img.encodePng(image));
+      File('${dir.path}/img_$k.png').writeAsBytesSync(img.encodePng(image));
     }
   }
   return root;
@@ -70,18 +69,24 @@ void main() {
 
     test('DataLoader shuffle is deterministic given a seed', () {
       final ds = ListDataset<int>(List<int>.generate(10, (i) => i));
-      final a = DataLoader(ds, batchSize: 4, shuffle: true, seed: 42)
-          .batches()
-          .expand((b) => b)
-          .toList();
-      final b = DataLoader(ds, batchSize: 4, shuffle: true, seed: 42)
-          .batches()
-          .expand((batch) => batch)
-          .toList();
-      final c = DataLoader(ds, batchSize: 4, shuffle: true, seed: 99)
-          .batches()
-          .expand((batch) => batch)
-          .toList();
+      final a = DataLoader(
+        ds,
+        batchSize: 4,
+        shuffle: true,
+        seed: 42,
+      ).batches().expand((b) => b).toList();
+      final b = DataLoader(
+        ds,
+        batchSize: 4,
+        shuffle: true,
+        seed: 42,
+      ).batches().expand((batch) => batch).toList();
+      final c = DataLoader(
+        ds,
+        batchSize: 4,
+        shuffle: true,
+        seed: 99,
+      ).batches().expand((batch) => batch).toList();
       expect(a, equals(b), reason: 'same seed → same order');
       expect(a, isNot(equals(c)), reason: 'different seed → different order');
       expect(a.toSet(), equals(Set.of(List<int>.generate(10, (i) => i))));
@@ -174,11 +179,7 @@ void main() {
     test('sliding-window (input, target) pairs with a CharTokenizer', () {
       const text = 'hello world!';
       final tok = CharTokenizer.fromText(text);
-      final ds = TextTokenDataset.fromText(
-        text,
-        tokenizer: tok,
-        blockSize: 4,
-      );
+      final ds = TextTokenDataset.fromText(text, tokenizer: tok, blockSize: 4);
       // length = numTokens - blockSize.
       expect(ds.length, tok.encode(text).length - 4);
 
@@ -188,10 +189,14 @@ void main() {
 
       // target is input shifted by one.
       final ids = tok.encode(text);
-      expect(s.input.toList().map((v) => v.toInt()).toList(),
-          equals(ids.sublist(0, 4)));
-      expect(s.target.toList().map((v) => v.toInt()).toList(),
-          equals(ids.sublist(1, 5)));
+      expect(
+        s.input.toList().map((v) => v.toInt()).toList(),
+        equals(ids.sublist(0, 4)),
+      );
+      expect(
+        s.target.toList().map((v) => v.toInt()).toList(),
+        equals(ids.sublist(1, 5)),
+      );
     });
 
     test('fromTokens accepts a pre-tokenized id list', () {
@@ -200,10 +205,14 @@ void main() {
         blockSize: 3,
       );
       expect(ds.length, 17);
-      expect(ds[0].input.toList().map((v) => v.toInt()).toList(),
-          equals([0, 1, 2]));
-      expect(ds[0].target.toList().map((v) => v.toInt()).toList(),
-          equals([1, 2, 3]));
+      expect(
+        ds[0].input.toList().map((v) => v.toInt()).toList(),
+        equals([0, 1, 2]),
+      );
+      expect(
+        ds[0].target.toList().map((v) => v.toInt()).toList(),
+        equals([1, 2, 3]),
+      );
     });
 
     test('rejects blockSize >= numTokens', () {
@@ -222,10 +231,7 @@ void main() {
         '4.0, 5.0, 6.0, 1',
         '7.0, 8.0, 9.0, 0',
       ];
-      final ds = CsvDataset.fromLines(
-        lines,
-        labelColumn: 3,
-      );
+      final ds = CsvDataset.fromLines(lines, labelColumn: 3);
       expect(ds.length, 3);
       expect(ds.numFeatures, 3);
       expect(ds.headers, equals(['x', 'y', 'z', 'label']));
@@ -236,12 +242,7 @@ void main() {
     });
 
     test('classMap maps categorical labels to ints', () {
-      final lines = [
-        'a,b,species',
-        '1,2,cat',
-        '3,4,dog',
-        '5,6,cat',
-      ];
+      final lines = ['a,b,species', '1,2,cat', '3,4,dog', '5,6,cat'];
       final ds = CsvDataset.fromLines(
         lines,
         labelColumn: 2,

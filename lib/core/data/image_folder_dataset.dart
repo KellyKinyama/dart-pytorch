@@ -99,8 +99,8 @@ class ImageFolderDataset extends Dataset<FaceSample> {
     this.device = Device.CPU,
     int seed = 7,
     bool val = false,
-  })  : _rng = math.Random(seed),
-        _isVal = val {
+  }) : _rng = math.Random(seed),
+       _isVal = val {
     if (imageSize % patchSize != 0) {
       throw ArgumentError(
         'imageSize ($imageSize) must be divisible by patchSize ($patchSize)',
@@ -121,17 +121,10 @@ class ImageFolderDataset extends Dataset<FaceSample> {
 
     for (final dir in classDirs) {
       final name = dir.path.split(Platform.pathSeparator).last;
-      final files = dir
-          .listSync()
-          .whereType<File>()
-          .where((f) {
-            final p = f.path.toLowerCase();
-            return p.endsWith('.jpg') ||
-                p.endsWith('.jpeg') ||
-                p.endsWith('.png');
-          })
-          .toList()
-        ..sort((a, b) => a.path.compareTo(b.path));
+      final files = dir.listSync().whereType<File>().where((f) {
+        final p = f.path.toLowerCase();
+        return p.endsWith('.jpg') || p.endsWith('.jpeg') || p.endsWith('.png');
+      }).toList()..sort((a, b) => a.path.compareTo(b.path));
       if (files.isEmpty) continue;
       final cap = files.length > maxPerClass ? maxPerClass : files.length;
       mutableClasses.add(name);
@@ -212,10 +205,10 @@ class ImageFolderDataset extends Dataset<FaceSample> {
   }
 
   Tensor _asTensor(Float32List flat) => Tensor.fromList(
-        [numPatches, patchPixels],
-        List<double>.from(flat),
-        device: device,
-      );
+    [numPatches, patchPixels],
+    List<double>.from(flat),
+    device: device,
+  );
 
   // -------------------------------------------------------------------
   // Dataset<FaceSample> interface
@@ -234,20 +227,17 @@ class ImageFolderDataset extends Dataset<FaceSample> {
   /// underlying files (no re-decoding). Cheap.
   ImageFolderDataset valSplit() {
     if (_isVal) return this;
-    final v = ImageFolderDataset._shared(
-      this,
-      isVal: true,
-    );
+    final v = ImageFolderDataset._shared(this, isVal: true);
     return v;
   }
 
   ImageFolderDataset._shared(ImageFolderDataset other, {required bool isVal})
-      : rootPath = other.rootPath,
-        imageSize = other.imageSize,
-        patchSize = other.patchSize,
-        device = other.device,
-        _rng = other._rng,
-        _isVal = isVal {
+    : rootPath = other.rootPath,
+      imageSize = other.imageSize,
+      patchSize = other.patchSize,
+      device = other.device,
+      _rng = other._rng,
+      _isVal = isVal {
     classes = other.classes;
     _train.addAll(other._train);
     _val.addAll(other._val);
@@ -258,9 +248,9 @@ class ImageFolderDataset extends Dataset<FaceSample> {
 
   /// Train classes with `>= 2` samples (needed for triplet sampling).
   List<int> get tripletReadyClasses => [
-        for (int c = 0; c < _trainByClass.length; c++)
-          if (_trainByClass[c].length >= 2) c,
-      ];
+    for (int c = 0; c < _trainByClass.length; c++)
+      if (_trainByClass[c].length >= 2) c,
+  ];
 
   /// Draw one triplet from the train split.
   TripletSample sampleTriplet() {

@@ -98,8 +98,7 @@ class TextTokenDataset extends Dataset<LmSample> {
     List<int> tokens, {
     required int blockSize,
     Device device = Device.CPU,
-  }) =>
-      TextTokenDataset._(List<int>.from(tokens), blockSize, device);
+  }) => TextTokenDataset._(List<int>.from(tokens), blockSize, device);
 
   @override
   int get length => tokens.length - blockSize;

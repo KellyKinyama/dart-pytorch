@@ -90,14 +90,12 @@ class CsvDataset extends Dataset<CsvSample> {
     }
     final firstCells = _splitLine(lines[start], delimiter);
     final totalCols = firstCells.length;
-    if (labelColumn != null &&
-        (labelColumn < 0 || labelColumn >= totalCols)) {
+    if (labelColumn != null && (labelColumn < 0 || labelColumn >= totalCols)) {
       throw ArgumentError(
         'labelColumn=$labelColumn out of range [0, $totalCols)',
       );
     }
-    final numFeatures =
-        labelColumn == null ? totalCols : totalCols - 1;
+    final numFeatures = labelColumn == null ? totalCols : totalCols - 1;
 
     final rows = <List<double>>[];
     final labels = <double>[];
@@ -156,7 +154,7 @@ class CsvDataset extends Dataset<CsvSample> {
 
   @override
   CsvSample operator [](int index) => CsvSample(
-        Tensor.fromList([numFeatures], _rows[index], device: device),
-        _labels[index],
-      );
+    Tensor.fromList([numFeatures], _rows[index], device: device),
+    _labels[index],
+  );
 }

@@ -47,8 +47,7 @@ Directory _buildImageFolder({
           ..g = g
           ..b = b;
       }
-      File('${dir.path}/img_$k.png')
-          .writeAsBytesSync(img.encodePng(image));
+      File('${dir.path}/img_$k.png').writeAsBytesSync(img.encodePng(image));
     }
   }
   return root;
@@ -80,8 +79,10 @@ void main() {
     print('root:        ${root.path}');
     print('classes:     ${ds.classes}  (numClasses=${ds.numClasses})');
     print('train / val: ${ds.numTrain} / ${ds.numVal}');
-    print('per-item:    patches=[${ds.numPatches}, ${ds.patchPixels}]  '
-        '+ int label');
+    print(
+      'per-item:    patches=[${ds.numPatches}, ${ds.patchPixels}]  '
+      '+ int label',
+    );
 
     final dl = DataLoader(ds, batchSize: 4, shuffle: true, seed: 1);
     print('DataLoader:  batchSize=4, ${dl.length} batches / epoch');
@@ -89,16 +90,20 @@ void main() {
     for (final batch in dl.batches()) {
       final labels = batch.map((s) => s.label).toList();
       final firstShape = batch.first.patches.shape;
-      print('  batch ${b++}  size=${batch.length}  '
-          'labels=$labels  first.patches=$firstShape');
+      print(
+        '  batch ${b++}  size=${batch.length}  '
+        'labels=$labels  first.patches=$firstShape',
+      );
     }
 
     print('\ntriplet sampling for face-recognition style training:');
     for (int i = 0; i < 3; i++) {
       final t = ds.sampleTriplet();
-      print('  triplet $i  anchor/positive class=${t.anchorClass}, '
-          'negative class=${t.negativeClass}  '
-          '(shapes ${t.anchor.shape})');
+      print(
+        '  triplet $i  anchor/positive class=${t.anchorClass}, '
+        'negative class=${t.negativeClass}  '
+        '(shapes ${t.anchor.shape})',
+      );
     }
   } finally {
     root.deleteSync(recursive: true);
@@ -116,11 +121,7 @@ and then moves on.
 ''';
   final tok = CharTokenizer.fromText(poem);
   print('tokenizer:   CharTokenizer  vocabSize=${tok.vocabSize}');
-  final lmDs = TextTokenDataset.fromText(
-    poem,
-    tokenizer: tok,
-    blockSize: 16,
-  );
+  final lmDs = TextTokenDataset.fromText(poem, tokenizer: tok, blockSize: 16);
   print('numTokens:   ${lmDs.numTokens}');
   print('length:      ${lmDs.length}  (windows of size ${16})');
 
@@ -130,8 +131,10 @@ and then moves on.
   final sample = firstBatch.first;
   final inIds = sample.input.toList().map((v) => v.toInt()).toList();
   final tgtIds = sample.target.toList().map((v) => v.toInt()).toList();
-  print('sample:      input.shape=${sample.input.shape}  '
-      'target.shape=${sample.target.shape}');
+  print(
+    'sample:      input.shape=${sample.input.shape}  '
+    'target.shape=${sample.target.shape}',
+  );
   print('             input decoded : ${_pretty(tok.decode(inIds))}');
   print('             target decoded: ${_pretty(tok.decode(tgtIds))}');
 
