@@ -108,9 +108,11 @@ int _argmax(List<double> v) {
 void main(List<String> args) {
   final device = args.contains('--gpu') ? Device.GPU : Device.CPU;
   print('=== multi_modal_demo : audio+video classifier (${device.name}) ===');
-  print('audio [$_audioSeqLen, $_audioFeatDim] '
-      'video [$_videoFrames, $_videoFeatDim] '
-      'classes=$_numClasses  embed=$_embedDim');
+  print(
+    'audio [$_audioSeqLen, $_audioFeatDim] '
+    'video [$_videoFrames, $_videoFeatDim] '
+    'classes=$_numClasses  embed=$_embedDim',
+  );
 
   final clf = MultiModalClassifier(
     audio: AudioTransformer(
@@ -145,12 +147,20 @@ void main(List<String> args) {
   final trainY = <Tensor>[];
   for (int i = 0; i < _trainSamples; i++) {
     final label = i % _numClasses;
-    trainA.add(Tensor.fromList(
-        [_audioSeqLen, _audioFeatDim], _audioClip(label, dataRng),
-        device: device));
-    trainV.add(Tensor.fromList(
-        [_videoFrames, _videoFeatDim], _videoClip(label, dataRng),
-        device: device));
+    trainA.add(
+      Tensor.fromList(
+        [_audioSeqLen, _audioFeatDim],
+        _audioClip(label, dataRng),
+        device: device,
+      ),
+    );
+    trainV.add(
+      Tensor.fromList(
+        [_videoFrames, _videoFeatDim],
+        _videoClip(label, dataRng),
+        device: device,
+      ),
+    );
     trainY.add(Tensor.fromList([1], [label.toDouble()], device: device));
   }
 
@@ -169,9 +179,11 @@ void main(List<String> args) {
     if (step == 1 || step % _logEvery == 0 || step == _trainSteps) {
       final lossVal = loss.toList()[0];
       final ms = sw.elapsedMilliseconds / step;
-      print('  step ${step.toString().padLeft(4)}  '
-          'loss=${lossVal.toStringAsFixed(4)}  '
-          '(${ms.toStringAsFixed(1)} ms/step)');
+      print(
+        '  step ${step.toString().padLeft(4)}  '
+        'loss=${lossVal.toStringAsFixed(4)}  '
+        '(${ms.toStringAsFixed(1)} ms/step)',
+      );
     }
   }
   sw.stop();
@@ -184,29 +196,39 @@ void main(List<String> args) {
       final logits = clf(trainA[i], trainV[i]).toList();
       if (_argmax(logits) == i % _numClasses) trainCorrect++;
     }
-    print('\ntrain accuracy: '
-        '${(trainCorrect / _trainSamples * 100).toStringAsFixed(1)}%');
+    print(
+      '\ntrain accuracy: '
+      '${(trainCorrect / _trainSamples * 100).toStringAsFixed(1)}%',
+    );
 
     print('\neval samples (fresh noise, unseen):');
     final evalRng = math.Random(42);
     int evalCorrect = 0;
     for (int i = 0; i < _evalSamples; i++) {
       final label = evalRng.nextInt(_numClasses);
-      final a = Tensor.fromList([_audioSeqLen, _audioFeatDim],
-          _audioClip(label, evalRng),
-          device: device);
-      final v = Tensor.fromList([_videoFrames, _videoFeatDim],
-          _videoClip(label, evalRng),
-          device: device);
+      final a = Tensor.fromList(
+        [_audioSeqLen, _audioFeatDim],
+        _audioClip(label, evalRng),
+        device: device,
+      );
+      final v = Tensor.fromList(
+        [_videoFrames, _videoFeatDim],
+        _videoClip(label, evalRng),
+        device: device,
+      );
       final logits = clf(a, v).toList();
       final pred = _argmax(logits);
       if (pred == label) evalCorrect++;
       final tag = pred == label ? 'ok ' : 'MISS';
-      print('  [$tag] true=$label pred=$pred  '
-          'logits=[${logits.map((x) => x.toStringAsFixed(2)).join(', ')}]');
+      print(
+        '  [$tag] true=$label pred=$pred  '
+        'logits=[${logits.map((x) => x.toStringAsFixed(2)).join(', ')}]',
+      );
     }
-    print('\neval accuracy: '
-        '${(evalCorrect / _evalSamples * 100).toStringAsFixed(1)}% '
-        '($evalCorrect/$_evalSamples)');
+    print(
+      '\neval accuracy: '
+      '${(evalCorrect / _evalSamples * 100).toStringAsFixed(1)}% '
+      '($evalCorrect/$_evalSamples)',
+    );
   });
 }

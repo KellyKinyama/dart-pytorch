@@ -30,6 +30,8 @@ export 'core/nn/gpt.dart';
 export 'core/nn/vision/vit_backbone.dart';
 export 'core/nn/vision/vit_classifier.dart';
 export 'core/nn/vision/vit_face_embedding.dart';
+export 'core/nn/vision/vit_object_detector.dart';
+export 'core/utils/hungarian_algorithm.dart';
 export 'core/nn/modalities/audio_transformer.dart';
 export 'core/nn/modalities/video_transformer.dart';
 export 'core/nn/modalities/text_transformer.dart';
