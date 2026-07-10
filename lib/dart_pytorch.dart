@@ -45,6 +45,10 @@ export 'core/optim/grad_utils.dart';
 export 'core/optim/lr_scheduler.dart';
 export 'core/data/bpe_tokenizer.dart';
 export 'core/data/char_tokenizer.dart';
+export 'core/data/dataset.dart';
+export 'core/data/image_folder_dataset.dart';
+export 'core/data/text_token_dataset.dart';
+export 'core/data/csv_dataset.dart';
 
 /// Trivial sanity function used by the smoke test.
 int calculate() {

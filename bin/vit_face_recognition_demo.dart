@@ -68,19 +68,12 @@ Tensor _jitteredFace(List<double> base, math.Random rng, Device device) {
     final g = math.sqrt(-2 * math.log(u1)) * math.cos(2 * math.pi * u2);
     out[i] = base[i] + _jitter * g;
   }
-  return Tensor.fromList(
-    [_numPatches, _patchPixels],
-    out,
-    device: device,
-  );
+  return Tensor.fromList([_numPatches, _patchPixels], out, device: device);
 }
 
 /// Cosine similarity matrix over [_numIdentities] embeddings. Assumes
 /// each row is already L2-normalized.
-List<List<double>> _simMatrix(
-  ViTFaceEmbedding model,
-  List<Tensor> cleanFaces,
-) {
+List<List<double>> _simMatrix(ViTFaceEmbedding model, List<Tensor> cleanFaces) {
   return Tensor.noGrad(() {
     final embeds = <List<double>>[];
     for (final face in cleanFaces) {
@@ -100,13 +93,11 @@ List<List<double>> _simMatrix(
 
 void _printSimMatrix(String label, List<List<double>> m) {
   print('$label cosine-similarity matrix:');
-  final header = '        ' +
-      List.generate(_numIdentities, (j) => '  id$j  ').join('  ');
+  final header =
+      '        ' + List.generate(_numIdentities, (j) => '  id$j  ').join('  ');
   print(header);
   for (int i = 0; i < _numIdentities; i++) {
-    final row = m[i]
-        .map((v) => v.toStringAsFixed(3).padLeft(6))
-        .join('  ');
+    final row = m[i].map((v) => v.toStringAsFixed(3).padLeft(6)).join('  ');
     print('  id$i  $row');
   }
 }
@@ -130,8 +121,10 @@ double _tripletMargin(List<List<double>> m) {
 void main(List<String> args) {
   final device = args.contains('--gpu') ? Device.GPU : Device.CPU;
   print('=== vit_face_recognition_demo (${device.name}) ===');
-  print('image ${_imageSize}x$_imageSize, patch $_patchSize, embed=$_embedDim, '
-      'outputDim=$_outputDim, identities=$_numIdentities');
+  print(
+    'image ${_imageSize}x$_imageSize, patch $_patchSize, embed=$_embedDim, '
+    'outputDim=$_outputDim, identities=$_numIdentities',
+  );
 
   final model = ViTFaceEmbedding(
     imageSize: _imageSize,
@@ -160,11 +153,15 @@ void main(List<String> args) {
   final before = _simMatrix(model, cleanFaces);
   print('');
   _printSimMatrix('BEFORE', before);
-  print('  separation (diag - off-diag mean): '
-      '${_tripletMargin(before).toStringAsFixed(4)}');
+  print(
+    '  separation (diag - off-diag mean): '
+    '${_tripletMargin(before).toStringAsFixed(4)}',
+  );
 
-  print('\ntraining $_epochs epochs '
-      '(lr=$_lr, margin=$_margin, jitter=$_jitter)...');
+  print(
+    '\ntraining $_epochs epochs '
+    '(lr=$_lr, margin=$_margin, jitter=$_jitter)...',
+  );
   final rng = math.Random(0);
   final sw = Stopwatch()..start();
   final marginT = Tensor.fill([1], _margin, device: device);
@@ -204,9 +201,11 @@ void main(List<String> args) {
 
     if (epoch % 15 == 0 || epoch == _epochs) {
       final ms = sw.elapsedMilliseconds / (epoch + 1);
-      print('  epoch ${epoch.toString().padLeft(4)}  '
-          'triplet=${lossVal.toStringAsFixed(6)}  '
-          '(a=$iA, n=$iN, ${ms.toStringAsFixed(1)} ms/step)');
+      print(
+        '  epoch ${epoch.toString().padLeft(4)}  '
+        'triplet=${lossVal.toStringAsFixed(6)}  '
+        '(a=$iA, n=$iN, ${ms.toStringAsFixed(1)} ms/step)',
+      );
     }
   }
   sw.stop();
@@ -215,12 +214,16 @@ void main(List<String> args) {
   final after = _simMatrix(model, cleanFaces);
   print('');
   _printSimMatrix('AFTER ', after);
-  print('  separation (diag - off-diag mean): '
-      '${_tripletMargin(after).toStringAsFixed(4)}');
+  print(
+    '  separation (diag - off-diag mean): '
+    '${_tripletMargin(after).toStringAsFixed(4)}',
+  );
 
   final delta = _tripletMargin(after) - _tripletMargin(before);
-  print('\nseparation change: '
-      '${delta >= 0 ? '+' : ''}${delta.toStringAsFixed(4)}');
+  print(
+    '\nseparation change: '
+    '${delta >= 0 ? '+' : ''}${delta.toStringAsFixed(4)}',
+  );
   if (delta > 0.05) {
     print('✅ identities are more separated after training.');
   } else {

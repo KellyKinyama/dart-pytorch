@@ -10,6 +10,8 @@ environment:
 dependencies:
   path: ^1.9.0
   ffi: ^2.2.0
+  # Used by ImageFolderDataset for decoding jpg/png files.
+  image: ^4.8.0
 
 dev_dependencies:
   lints: ^6.0.0
