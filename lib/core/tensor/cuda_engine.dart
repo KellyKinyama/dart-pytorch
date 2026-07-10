@@ -268,6 +268,9 @@ class CudaEngine {
   // ReLU backward (fwd is a plain `reluTensor` above).
   late DReluBwd reluBackwardOp;
 
+  // abs backward: gA += sign(a) * gO. Fwd is `absTensor` above.
+  late DReluBwd absBackwardOp;
+
   CudaEngine() {
     _lib = ffi.DynamicLibrary.open(
       '${Directory.current.path}/native/lib/libmat_mul.so',
@@ -349,6 +352,7 @@ class CudaEngine {
     reluBackwardOp = _lib.lookupFunction<CReluBwd, DReluBwd>(
       'relu_backward_op',
     );
+    absBackwardOp = _lib.lookupFunction<CReluBwd, DReluBwd>('abs_backward_op');
   }
 }
 

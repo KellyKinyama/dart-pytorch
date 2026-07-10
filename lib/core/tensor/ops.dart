@@ -342,20 +342,20 @@ extension TensorOps on Tensor {
     return out;
   }
 
-  /// Absolute value. Backward needs a sign mask; CPU-only for now.
+  /// Absolute value. Backward: `dX = dOut * sign(X)` (with sign(0)=0).
   Tensor abs() {
     final out = _unaryFwd(cpuFn: (x) => x.abs(), gpu: engine.absTensor);
     if (requiresGrad) {
       final x = this;
       out._setBackward([x], () {
         if (x.device == Device.GPU) {
-          throw UnimplementedError(
-            'abs.backward on GPU needs a sign kernel; '
-            'call .to(Device.CPU) before abs.',
-          );
+          final gX = Tensor.fill(x.shape, 0.0, device: Device.GPU);
+          engine.absBackwardOp(x._handle!, out._grad!._handle!, gX._handle!);
+          x._accumulateGrad(gX);
+        } else {
+          final s = x._signMaskCpu();
+          x._accumulateGrad(out._grad! * s);
         }
-        final s = x._signMaskCpu();
-        x._accumulateGrad(out._grad! * s);
       });
     }
     return out;

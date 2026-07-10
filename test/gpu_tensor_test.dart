@@ -231,6 +231,22 @@ void main() {
       expect(x.abs().toList(), closeToList([1.5, 0.0, 2.5, 4.0]));
     });
 
+    test('abs backward on GPU matches CPU (sign kernel)', () {
+      final data = [-1.5, 0.0, 2.5, -4.0, 3.25, -0.125];
+      final cpu = Tensor.fromList([2, 3], data, requiresGrad: true);
+      final gpu = Tensor.fromList(
+        [2, 3],
+        data,
+        device: Device.GPU,
+        requiresGrad: true,
+      );
+      cpu.abs().sum().backward(freeGraph: true);
+      gpu.abs().sum().backward(freeGraph: true);
+      expectClose(gpu.grad!.toList(), cpu.grad!.toList());
+      // sign(0) = 0 on both paths.
+      expect(gpu.grad!.toList()[1], 0.0);
+    });
+
     test('pow(2) squares each element (CPU vs GPU parity)', () {
       final data = _fake(500, 6);
       final cpu = Tensor.fromList([500], data).pow(2.0);

@@ -291,6 +291,17 @@ extern "C"
             a->data_gpu, gO->data_gpu, gA->data_gpu, a->size);
     }
 
+    // abs backward: gA += sign(a) * gO. `gA` is caller-allocated
+    // zero-init; kernel atomicAdds into it. sign(0) = 0.
+    DLLEXPORT void abs_backward_op(void *ah, void *goh, void *gaH)
+    {
+        Tensor *a = (Tensor *)ah;
+        Tensor *gO = (Tensor *)goh;
+        Tensor *gA = (Tensor *)gaH;
+        abs_bwd<<<(a->size + 255) / 256, 256>>>(
+            a->data_gpu, gO->data_gpu, gA->data_gpu, a->size);
+    }
+
     // ---------------------------------------------------------------------
     // Rearrangement.
     // ---------------------------------------------------------------------

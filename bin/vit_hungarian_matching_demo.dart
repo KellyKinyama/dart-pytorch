@@ -199,16 +199,6 @@ void main(List<String> args) {
       }
     }
 
-    // Precompute the sign of (pred - gt) on the host. This lets us
-    // implement L1 = diff * sign entirely with autograd-friendly
-    // primitives (elementwise mul), avoiding abs's GPU backward gap.
-    // sign is a stop-gradient constant.
-    final signRaw = List<double>.filled(_numQueries * 4, 0.0);
-    for (int i = 0; i < signRaw.length; i++) {
-      final d = predBoxValues[i] - alignedBoxes[i];
-      signRaw[i] = d >= 0 ? 1.0 : -1.0;
-    }
-
     final gtClasses = Tensor.fromList(
       [_numQueries],
       alignedClasses,
@@ -224,17 +214,11 @@ void main(List<String> args) {
       boxMaskRaw,
       device: device,
     );
-    final signTensor = Tensor.fromList(
-      [_numQueries, 4],
-      signRaw,
-      device: device,
-    );
 
-    // 3) Masked + weighted loss. |diff| = diff * sign(diff).
+    // 3) Masked + weighted loss.
     final classLoss = logits.crossEntropy(gtClasses).mean();
-    final diff = boxes - gtBoxes;
-    final absDiff = diff * signTensor;
-    final maskedDiff = absDiff * boxMask;
+    final rawDiff = (boxes - gtBoxes).abs();
+    final maskedDiff = rawDiff * boxMask;
     final boxLoss = maskedDiff.mean();
     final totalLoss = (classLoss * _classWeight) + (boxLoss * _boxWeight);
 
