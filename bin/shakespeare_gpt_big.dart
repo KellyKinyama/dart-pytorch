@@ -28,7 +28,7 @@ const int _blockSize = 192;
 const int _embedDim = 384;
 const int _numLayers = 6;
 const int _numHeads = 6;
-const int _trainSteps = 80;
+const int _trainSteps = 500;
 const int _logEvery = 10;
 const double _lr = 3e-4;
 
@@ -84,10 +84,10 @@ void main() {
       final flag = lastLoss.isNaN
           ? ' NaN'
           : lastLoss.isInfinite
-              ? ' inf'
-              : lastLoss == 0.0
-                  ? ' ZERO'
-                  : '';
+          ? ' inf'
+          : lastLoss == 0.0
+          ? ' ZERO'
+          : '';
       print(
         '  step ${step.toString().padLeft(4)}  '
         'loss=$lastLoss$flag  '
