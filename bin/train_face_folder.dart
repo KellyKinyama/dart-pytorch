@@ -1,41 +1,49 @@
-/// Real face-recognition training on `ImageFolderDataset`.
+/// Real face-recognition training on `ImageFolderDataset` using an
+/// actual celebrity-photo dataset.
 ///
-/// End-to-end training pipeline using the new data loaders instead of
-/// synthetic in-memory tensors. Concretely:
+/// End-to-end training pipeline using the new data loaders on real
+/// (not synthetic) images. Concretely:
 ///
-///  1. Programmatically writes a small "identity gallery" to a
-///     stable directory (`./faces_gallery/` by default, relative to
-///     the current working directory) with 4 identities × 8 PNG
-///     images each. Every identity has a distinctive base visual
-///     pattern (vertical / horizontal stripes, diagonals, and a
-///     concentric-circle "logo") plus per-sample jitter (random
-///     phase, hue rotation, Gaussian pixel noise). The result: a
-///     folder that decodes and behaves exactly like a real face
-///     dataset from disk — and you can open the PNGs in any image
-///     viewer to inspect the samples. Pass `--tmp` to write to a
-///     `/tmp/dp_faces_...` directory that is deleted on exit.
+///  1. Reads real celebrity face photos from
+///     `/mnt/c/Users/kkinyama/dart_cuda/Faces` — a flat directory of
+///     `{PersonName}_{index}.jpg` images. The script groups them by
+///     name prefix and materializes an `ImageFolder`-style layout at
+///     `./faces_gallery/{PersonName}/sample_{k}.jpg`, ready to be
+///     opened in any image viewer. Pass `--tmp` to build the gallery
+///     in a `/tmp/dp_faces_...` directory that is deleted on exit,
+///     or `--synthetic` to fall back to the toy 4-identity cartoon
+///     gallery for a quick smoke test.
 ///
 ///  2. Loads it with [ImageFolderDataset], deterministically split
-///     into train / val at 25 %.
+///     into train / val at 25 %. Every image is decoded and resized
+///     to 32 × 32 inside the dataset.
 ///
-///  3. Trains a [ViTFaceEmbedding] with triplet loss
-///     `relu(‖a-p‖² - ‖a-n‖² + margin)` — anchors and positives are
-///     drawn from the same identity, negatives from a different one
-///     via `ImageFolderDataset.sampleTriplet()`.
+///  3. Trains one of two models depending on the dataset:
+///     * **real photos** → [ViTClassifier] with cross-entropy on
+///       class indices, reporting top-1 val accuracy. Chosen because
+///       triplet loss collapses to a degenerate "all embeddings
+///       identical" minimum on a tiny untrained ViT with real 64×64
+///       face crops — cross-entropy always has non-zero gradient.
+///     * **synthetic cartoons** (`--synthetic`) → [ViTFaceEmbedding]
+///       with triplet loss `relu(‖a-p‖² - ‖a-n‖² + margin)`, where
+///       anchors and positives come from the same identity via
+///       `ImageFolderDataset.sampleTriplet()`. Chosen because the
+///       distinctive cartoon palettes give the untrained model a
+///       clear starting gap.
 ///
-///  4. Reports before/after cosine-similarity gap on held-out
-///     validation images (same-identity pairs vs different-identity
-///     pairs). This is the metric-learning equivalent of "val
-///     accuracy" — a well-trained embedding should cluster same-
-///     identity images tightly and separate different identities.
+///  4. Reports before/after task-appropriate val metric — top-1
+///     accuracy for the classifier, cosine-similarity gap for the
+///     triplet path.
 ///
 /// Runs on CPU by default; pass `--gpu` for CUDA.
 ///
 /// Run:
 ///
-///     dart run bin/train_face_folder.dart               # CPU, ./faces_gallery/
+///     dart run bin/train_face_folder.dart               # CPU, real faces
 ///     dart run bin/train_face_folder.dart --gpu         # GPU
+///     dart run bin/train_face_folder.dart --synthetic   # cartoon faces
 ///     dart run bin/train_face_folder.dart --tmp         # ephemeral /tmp dir
+///     dart run bin/train_face_folder.dart --all-classes # use every id (slow)
 library;
 
 import 'dart:io';
@@ -47,20 +55,29 @@ import 'package:dart_pytorch/dart_pytorch.dart';
 
 import 'shakespeare_util.dart' show paramScalarCount;
 
-const int _imageSize = 32;
+const int _imageSize = 64;
 const int _patchSize = 8;
 const int _numChannels = 3;
-const int _embedDim = 64;
-const int _outputDim = 32;
+const int _embedDim = 96;
+const int _outputDim = 48;
 const int _numLayers = 2;
 const int _numHeads = 4;
 
 const int _numIdentities = 4;
-const int _samplesPerIdentity = 8;
-const int _steps = 300;
-const int _logEvery = 30;
+const int _samplesPerIdentity = 16;
+const int _steps = 1500;
+const int _logEvery = 150;
 const double _lr = 1e-3;
-const double _margin = 0.4;
+const double _margin = 0.2;
+
+/// Source folder holding flat `{PersonName}_{index}.jpg` files. Copy
+/// / rename the constant if your dataset lives elsewhere.
+const String _realFacesSource = '/mnt/c/Users/kkinyama/dart_cuda/Faces';
+
+/// Cap the number of identities used by default. `--all-classes`
+/// lifts it. Chosen so a full training run stays under ~2 minutes on
+/// CPU while still exercising a non-trivial number of classes.
+const int _defaultMaxClasses = 8;
 
 /// One 32×32 cartoon face drawn for identity [id], sample [k]. Each
 /// identity has a fixed "look" (skin tone, hair color/style, eye
@@ -173,7 +190,8 @@ img.Image _drawIdentity(int id, int k, {int size = 32}) {
       for (int y = cy - headR - 1; y <= cy - 3; y++) {
         for (int x = cx - headR - 1; x <= cx + headR + 1; x++) {
           final d2 = (x - cx) * (x - cx) + (y - cy) * (y - cy);
-          if (d2 <= (headR + 1) * (headR + 1) && d2 >= (headR - 1) * (headR - 1) ||
+          if (d2 <= (headR + 1) * (headR + 1) &&
+                  d2 >= (headR - 1) * (headR - 1) ||
               (d2 <= headR * headR && y <= cy - 5)) {
             setPx(x, y, hair);
           }
@@ -286,7 +304,7 @@ img.Image _drawIdentity(int id, int k, {int size = 32}) {
 /// `./faces_gallery/` directory (cleaned and re-created each run)
 /// so the PNGs remain on disk after the script exits and can be
 /// opened in any image viewer.
-Directory _buildFaceGallery({required bool ephemeral}) {
+Directory _buildSyntheticGallery({required bool ephemeral}) {
   final Directory root;
   if (ephemeral) {
     root = Directory.systemTemp.createTempSync('dp_faces_');
@@ -302,6 +320,93 @@ Directory _buildFaceGallery({required bool ephemeral}) {
     for (int k = 0; k < _samplesPerIdentity; k++) {
       final png = img.encodePng(_drawIdentity(id, k, size: _imageSize));
       File('${dir.path}/sample_$k.png').writeAsBytesSync(png);
+    }
+  }
+  return root;
+}
+
+/// Scan [_realFacesSource] (flat `{PersonName}_{index}.jpg`), group
+/// files by name prefix, and copy the first [samplesPerClass] images
+/// of each identity into `./faces_gallery/{PersonName}/sample_{k}.jpg`
+/// (or a temp dir when [ephemeral] is true). Only classes with at
+/// least [samplesPerClass] source images are kept.
+Directory _buildRealGallery({
+  required bool ephemeral,
+  required int samplesPerClass,
+  int? maxClasses,
+}) {
+  final source = Directory(_realFacesSource);
+  if (!source.existsSync()) {
+    throw StateError(
+      'real-face source folder not found: $_realFacesSource\n'
+      'pass --synthetic to skip real faces or fix the _realFacesSource path.',
+    );
+  }
+
+  // Group source files by name prefix (everything before the last '_').
+  final byClass = <String, List<File>>{};
+  final imgExts = {'.jpg', '.jpeg', '.png'};
+  for (final entry in source.listSync().whereType<File>()) {
+    final name = entry.path.split(Platform.pathSeparator).last;
+    final dot = name.lastIndexOf('.');
+    if (dot < 0 || !imgExts.contains(name.substring(dot).toLowerCase())) {
+      continue;
+    }
+    final stem = name.substring(0, dot);
+    final us = stem.lastIndexOf('_');
+    if (us <= 0) continue;
+    final person = stem.substring(0, us);
+    (byClass[person] ??= <File>[]).add(entry);
+  }
+
+  // Deterministic ordering: alphabetize classes and, within each,
+  // sort files by their trailing integer so we pick sample_0, _1, ...
+  final classNames = byClass.keys.toList()..sort();
+  final chosen = <String, List<File>>{};
+  for (final person in classNames) {
+    final files = byClass[person]!
+      ..sort((a, b) {
+        int idx(File f) {
+          final n = f.path.split(Platform.pathSeparator).last;
+          final dot = n.lastIndexOf('.');
+          final us = n.lastIndexOf('_');
+          return int.tryParse(n.substring(us + 1, dot)) ?? 0;
+        }
+
+        return idx(a).compareTo(idx(b));
+      });
+    if (files.length < samplesPerClass) continue;
+    chosen[person] = files.sublist(0, samplesPerClass);
+    if (maxClasses != null && chosen.length >= maxClasses) break;
+  }
+  if (chosen.isEmpty) {
+    throw StateError(
+      'no classes in $_realFacesSource had ≥ $samplesPerClass samples',
+    );
+  }
+
+  // Materialize the ImageFolder layout.
+  final Directory root;
+  if (ephemeral) {
+    root = Directory.systemTemp.createTempSync('dp_faces_');
+  } else {
+    root = Directory('faces_gallery');
+    if (root.existsSync()) {
+      root.deleteSync(recursive: true);
+    }
+    root.createSync(recursive: true);
+  }
+  for (final entry in chosen.entries) {
+    // Sanitize class dir name (spaces → _) so path handling stays
+    // portable; keep the display name via the folder itself.
+    final classDir = Directory('${root.path}/${entry.key}')..createSync();
+    for (int k = 0; k < entry.value.length; k++) {
+      final src = entry.value[k];
+      final ext = src.path
+          .substring(src.path.lastIndexOf('.'))
+          .toLowerCase();
+      final dst = File('${classDir.path}/sample_$k$ext');
+      dst.writeAsBytesSync(src.readAsBytesSync());
     }
   }
   return root;
@@ -364,19 +469,251 @@ double _cosine(Tensor a, Tensor b) {
   });
 }
 
+/// Top-1 classification accuracy on the val split — for the
+/// classifier path.
+({double acc, int correct, int total}) _evalTopK(
+  ViTClassifier model,
+  ImageFolderDataset val,
+) {
+  return Tensor.noGrad(() {
+    int correct = 0;
+    for (int i = 0; i < val.length; i++) {
+      final s = val[i];
+      final logits = model(s.patches).toList();
+      int argmax = 0;
+      double best = logits[0];
+      for (int c = 1; c < logits.length; c++) {
+        if (logits[c] > best) {
+          best = logits[c];
+          argmax = c;
+        }
+      }
+      if (argmax == s.label) correct++;
+    }
+    return (
+      acc: val.length == 0 ? 0.0 : correct / val.length,
+      correct: correct,
+      total: val.length,
+    );
+  });
+}
+
+/// Triplet-loss path: `ViTFaceEmbedding` + `triplet` on same/diff-id
+/// pairs. Well-suited to the synthetic cartoon gallery, where the
+/// initial embedding already separates classes and the margin can
+/// push it further.
+void _runTriplet(
+  ImageFolderDataset ds,
+  ImageFolderDataset val,
+  Device device,
+) {
+  final model = ViTFaceEmbedding(
+    imageSize: _imageSize,
+    patchSize: _patchSize,
+    numChannels: _numChannels,
+    embedDim: _embedDim,
+    outputDim: _outputDim,
+    numLayers: _numLayers,
+    numHeads: _numHeads,
+    device: device,
+    seed: 0,
+  );
+  final params = model.parameters();
+  print('model:     ViTFaceEmbedding, ${paramScalarCount(params)} scalars');
+
+  final opt = Adam(params, lr: _lr);
+  final marginT = Tensor.fill([1], _margin, device: device);
+
+  final before = _evalSeparation(model, val);
+  print(
+    '\nBEFORE  same-avg=${before.sameAvg.toStringAsFixed(4)} '
+    '(${before.sameN} pairs)  '
+    'diff-avg=${before.diffAvg.toStringAsFixed(4)} '
+    '(${before.diffN} pairs)  '
+    'gap=${(before.sameAvg - before.diffAvg).toStringAsFixed(4)}',
+  );
+
+  print(
+    '\ntraining $_steps steps (lr=$_lr, margin=$_margin, triplet loss)...',
+  );
+  final sw = Stopwatch()..start();
+  int trainedSteps = 0;
+  double lossSum = 0;
+  for (int step = 1; step <= _steps; step++) {
+    opt.zeroGrad();
+    final t = ds.sampleTriplet();
+    final embA = model(t.anchor);
+    final embP = model(t.positive);
+    final embN = model(t.negative);
+
+    final diffP = embA - embP;
+    final diffN = embA - embN;
+    final distP = (diffP * diffP).sum();
+    final distN = (diffN * diffN).sum();
+    final raw = (distP - distN) + marginT;
+    final loss = raw.relu();
+
+    final lossVal = loss.toList()[0];
+    if (lossVal > 0) {
+      loss.backward();
+      clipGradNorm(params, 1.0);
+      opt.step();
+      trainedSteps++;
+      lossSum += lossVal;
+    }
+
+    if (step == 1 || step % _logEvery == 0 || step == _steps) {
+      final ms = sw.elapsedMilliseconds / step;
+      final avg = trainedSteps == 0 ? 0.0 : lossSum / trainedSteps;
+      print(
+        '  step ${step.toString().padLeft(4)}  '
+        'triplet=${lossVal.toStringAsFixed(6)}  '
+        'trained=${trainedSteps.toString().padLeft(3)}/$step  '
+        'avg=${avg.toStringAsFixed(4)}  '
+        '(${ms.toStringAsFixed(1)} ms/step)',
+      );
+    }
+  }
+  sw.stop();
+
+  model.eval();
+  final after = _evalSeparation(model, val);
+  print(
+    '\nAFTER   same-avg=${after.sameAvg.toStringAsFixed(4)}  '
+    'diff-avg=${after.diffAvg.toStringAsFixed(4)}  '
+    'gap=${(after.sameAvg - after.diffAvg).toStringAsFixed(4)}',
+  );
+
+  final delta =
+      (after.sameAvg - after.diffAvg) - (before.sameAvg - before.diffAvg);
+  print(
+    '\nseparation gap change: '
+    '${delta >= 0 ? '+' : ''}${delta.toStringAsFixed(4)}',
+  );
+  if (delta > 0.05) {
+    print('✅ val identities are more separated after training.');
+  } else {
+    print('⚠️  training did not clearly improve separation on val.');
+  }
+}
+
+/// Classifier path: `ViTClassifier` + cross-entropy on class indices.
+/// Well-suited to the real-photo gallery, where triplet loss collapses
+/// to a degenerate all-embeddings-identical minimum on the tiny
+/// untrained ViT. Cross-entropy always has non-zero gradient, so
+/// the model reliably learns to separate the closed set of identities.
+void _runClassifier(
+  ImageFolderDataset ds,
+  ImageFolderDataset val,
+  Device device,
+) {
+  final model = ViTClassifier(
+    imageSize: _imageSize,
+    patchSize: _patchSize,
+    numChannels: _numChannels,
+    embedDim: _embedDim,
+    numClasses: ds.numClasses,
+    numLayers: _numLayers,
+    numHeads: _numHeads,
+    device: device,
+    seed: 0,
+  );
+  final params = model.parameters();
+  print('model:     ViTClassifier, ${paramScalarCount(params)} scalars');
+
+  final opt = Adam(params, lr: _lr);
+
+  final before = _evalTopK(model, val);
+  final uniform = 1.0 / ds.numClasses;
+  print(
+    '\nBEFORE  val top-1 = ${(before.acc * 100).toStringAsFixed(1)}% '
+    '(${before.correct}/${before.total}, uniform baseline '
+    '${(uniform * 100).toStringAsFixed(1)}%)',
+  );
+
+  print(
+    '\ntraining $_steps steps (lr=$_lr, cross-entropy, '
+    'random train samples)...',
+  );
+  final sw = Stopwatch()..start();
+  double lossSum = 0;
+  final rng = math.Random(1);
+  for (int step = 1; step <= _steps; step++) {
+    opt.zeroGrad();
+    final sample = ds[rng.nextInt(ds.length)];
+    final logits = model(sample.patches); // [1, numClasses]
+    final target = Tensor.fromList(
+      [1],
+      [sample.label.toDouble()],
+      device: device,
+    );
+    final loss = logits.crossEntropy(target).mean();
+    loss.backward();
+    clipGradNorm(params, 1.0);
+    opt.step();
+    lossSum += loss.toList()[0];
+
+    if (step == 1 || step % _logEvery == 0 || step == _steps) {
+      final ms = sw.elapsedMilliseconds / step;
+      final avg = lossSum / step;
+      print(
+        '  step ${step.toString().padLeft(4)}  '
+        'ce=${loss.toList()[0].toStringAsFixed(4)}  '
+        'avg=${avg.toStringAsFixed(4)}  '
+        '(${ms.toStringAsFixed(1)} ms/step)',
+      );
+    }
+  }
+  sw.stop();
+
+  model.eval();
+  final after = _evalTopK(model, val);
+  print(
+    '\nAFTER   val top-1 = ${(after.acc * 100).toStringAsFixed(1)}% '
+    '(${after.correct}/${after.total})',
+  );
+
+  final delta = after.acc - before.acc;
+  print(
+    '\naccuracy change: '
+    '${delta >= 0 ? '+' : ''}${(delta * 100).toStringAsFixed(1)}%',
+  );
+  if (after.acc > uniform * 1.5) {
+    print('✅ classifier beats uniform baseline.');
+  } else {
+    print('⚠️  classifier did not clearly beat uniform baseline.');
+  }
+}
+
 void main(List<String> args) {
   final device = args.contains('--gpu') ? Device.GPU : Device.CPU;
   final ephemeral = args.contains('--tmp');
+  final synthetic = args.contains('--synthetic');
+  final allClasses = args.contains('--all-classes');
   print('=== train_face_folder (${device.name}) ===');
 
-  // 1. Build synthetic-but-real face gallery on disk.
-  final root = _buildFaceGallery(ephemeral: ephemeral);
+  // 1. Build gallery on disk — real photos by default, cartoon
+  //    synthetic fallback via --synthetic.
+  final Directory root;
+  if (synthetic) {
+    root = _buildSyntheticGallery(ephemeral: ephemeral);
+  } else {
+    root = _buildRealGallery(
+      ephemeral: ephemeral,
+      samplesPerClass: _samplesPerIdentity,
+      maxClasses: allClasses ? null : _defaultMaxClasses,
+    );
+  }
   try {
+    final numClasses = root.listSync().whereType<Directory>().length;
     print(
       'gallery: ${root.absolute.path}'
       '${ephemeral ? '  (--tmp, deleted on exit)' : '  (kept — open in image viewer)'}',
     );
-    print('  $_numIdentities identities × $_samplesPerIdentity PNG samples');
+    print(
+      '  source:  ${synthetic ? 'synthetic cartoons' : _realFacesSource}',
+    );
+    print('  $numClasses identities × $_samplesPerIdentity samples');
 
     // 2. Load with ImageFolderDataset (real disk decode).
     final ds = ImageFolderDataset(
@@ -392,97 +729,11 @@ void main(List<String> args) {
     print('train/val: ${ds.numTrain} / ${ds.numVal}');
     print('per-item:  patches=[${ds.numPatches}, ${ds.patchPixels}]');
 
-    // 3. Build model + optimizer.
-    final model = ViTFaceEmbedding(
-      imageSize: _imageSize,
-      patchSize: _patchSize,
-      numChannels: _numChannels,
-      embedDim: _embedDim,
-      outputDim: _outputDim,
-      numLayers: _numLayers,
-      numHeads: _numHeads,
-      device: device,
-      seed: 0,
-    );
-    final params = model.parameters();
-    print('params:    ${paramScalarCount(params)} scalars');
-
-    final opt = Adam(params, lr: _lr);
-    final marginT = Tensor.fill([1], _margin, device: device);
-
-    // 4. Baseline val separation.
-    final before = _evalSeparation(model, val);
-    print(
-      '\nBEFORE  same-avg=${before.sameAvg.toStringAsFixed(4)} '
-      '(${before.sameN} pairs)  '
-      'diff-avg=${before.diffAvg.toStringAsFixed(4)} '
-      '(${before.diffN} pairs)  '
-      'gap=${(before.sameAvg - before.diffAvg).toStringAsFixed(4)}',
-    );
-
-    // 5. Train with triplet loss over triplets sampled from disk.
-    print(
-      '\ntraining $_steps steps (lr=$_lr, margin=$_margin, triplet loss)...',
-    );
-    final sw = Stopwatch()..start();
-    int trainedSteps = 0;
-    double lossSum = 0;
-    for (int step = 1; step <= _steps; step++) {
-      opt.zeroGrad();
-      final t = ds.sampleTriplet();
-      final embA = model(t.anchor);
-      final embP = model(t.positive);
-      final embN = model(t.negative);
-
-      final diffP = embA - embP;
-      final diffN = embA - embN;
-      final distP = (diffP * diffP).sum();
-      final distN = (diffN * diffN).sum();
-      final raw = (distP - distN) + marginT;
-      final loss = raw.relu();
-
-      final lossVal = loss.toList()[0];
-      if (lossVal > 0) {
-        loss.backward();
-        clipGradNorm(params, 1.0);
-        opt.step();
-        trainedSteps++;
-        lossSum += lossVal;
-      }
-
-      if (step == 1 || step % _logEvery == 0 || step == _steps) {
-        final ms = sw.elapsedMilliseconds / step;
-        final avg = trainedSteps == 0 ? 0.0 : lossSum / trainedSteps;
-        print(
-          '  step ${step.toString().padLeft(4)}  '
-          'triplet=${lossVal.toStringAsFixed(6)}  '
-          'trained=${trainedSteps.toString().padLeft(3)}/$step  '
-          'avg=${avg.toStringAsFixed(4)}  '
-          '(${ms.toStringAsFixed(1)} ms/step)',
-        );
-      }
-    }
-    sw.stop();
-
-    // 6. Final val separation.
-    model.eval();
-    final after = _evalSeparation(model, val);
-    print(
-      '\nAFTER   same-avg=${after.sameAvg.toStringAsFixed(4)}  '
-      'diff-avg=${after.diffAvg.toStringAsFixed(4)}  '
-      'gap=${(after.sameAvg - after.diffAvg).toStringAsFixed(4)}',
-    );
-
-    final delta =
-        (after.sameAvg - after.diffAvg) - (before.sameAvg - before.diffAvg);
-    print(
-      '\nseparation gap change: '
-      '${delta >= 0 ? '+' : ''}${delta.toStringAsFixed(4)}',
-    );
-    if (delta > 0.05) {
-      print('✅ val identities are more separated after training.');
+    // 3. Train — pick the training strategy that suits the data.
+    if (synthetic) {
+      _runTriplet(ds, val, device);
     } else {
-      print('⚠️  training did not clearly improve separation on val.');
+      _runClassifier(ds, val, device);
     }
   } finally {
     if (ephemeral) {
