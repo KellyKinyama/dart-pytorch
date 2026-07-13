@@ -89,18 +89,13 @@ Map<String, Object?> _probeToJson(String path) {
   } on FileSystemException catch (e) {
     return {'path': path, 'size_bytes': size, 'error': e.message};
   }
-  return {
-    'path': path,
-    'size_bytes': size,
-    ..._infoToJson(info),
-  };
+  return {'path': path, 'size_bytes': size, ..._infoToJson(info)};
 }
 
 Map<String, Object?> _infoToJson(FaissIndexInfo info) {
   return {
     'fourcc': info.fourccStr,
-    'fourcc_hex':
-        '0x${info.fourcc.toRadixString(16).padLeft(8, '0')}',
+    'fourcc_hex': '0x${info.fourcc.toRadixString(16).padLeft(8, '0')}',
     'kind': _kindTag(info.kind),
     if (info.d != null) 'd': info.d,
     if (info.codeSize != null) 'code_size': info.codeSize,

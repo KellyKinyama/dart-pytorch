@@ -2885,9 +2885,15 @@ Uint8List writeTunedFaissIndexToBytes(Index inner, TuningMetadata meta) {
 /// Parse a byte buffer previously written by
 /// [writeTunedFaissIndexToBytes]. Throws [FormatException] if the
 /// leading fourcc is not `IxDT` or the wrapper version is unknown.
+///
+/// When [applyTuning] is `true`, the chosen operating-point value
+/// from the tuning block is applied to the decoded index via
+/// [applyTuningToIndex] before returning — useful for one-call
+/// "load and warm up" workflows.
 ({Index index, TuningMetadata metadata}) readTunedFaissIndexFromBytes(
-  Uint8List bytes,
-) {
+  Uint8List bytes, {
+  bool applyTuning = false,
+}) {
   if (bytes.length < 4) {
     throw FormatException(
       'readTunedFaissIndex: blob is ${bytes.length} bytes, need at '
@@ -2920,6 +2926,7 @@ Uint8List writeTunedFaissIndexToBytes(Index inner, TuningMetadata meta) {
   final meta = _readTuningPayload(tuningBytes);
   final innerBytes = r.readBytes(r.remaining);
   final inner = readFaissIndexFromBytes(innerBytes);
+  if (applyTuning) applyTuningToIndex(inner, meta);
   return (index: inner, metadata: meta);
 }
 
@@ -2928,9 +2935,91 @@ void saveTunedFaissIndex(String path, Index inner, TuningMetadata meta) {
   File(path).writeAsBytesSync(writeTunedFaissIndexToBytes(inner, meta));
 }
 
-/// File variant of [readTunedFaissIndexFromBytes].
-({Index index, TuningMetadata metadata}) loadTunedFaissIndex(String path) {
-  return readTunedFaissIndexFromBytes(File(path).readAsBytesSync());
+/// File variant of [readTunedFaissIndexFromBytes]. Forwards
+/// [applyTuning] so callers can load-and-warm-up in a single call.
+({Index index, TuningMetadata metadata}) loadTunedFaissIndex(
+  String path, {
+  bool applyTuning = false,
+}) {
+  return readTunedFaissIndexFromBytes(
+    File(path).readAsBytesSync(),
+    applyTuning: applyTuning,
+  );
+}
+
+/// Apply the chosen operating-point value from [meta] to [index].
+///
+/// Inspects [TuningMetadata.chosenParamValue] together with the
+/// matching point's `paramLabel` to decide which knob to set:
+///
+///   * `nprobe` prefix   -> `IndexIVFFlat` / `IndexIVFPQ` (also when
+///                          wrapped in an `IndexRefineFlat`) `.nprobe`
+///   * `efSearch` prefix -> `IndexHNSW.efSearch`
+///
+/// Returns `true` when a setter was found and applied; `false` when
+/// [TuningMetadata.chosenParamValue] is `null` or the sweep produced
+/// a parameter class this helper doesn't know how to re-apply
+/// post-facto (e.g. PQ subquantiser count `m`, which is baked into
+/// the trained index).
+///
+/// Throws [ArgumentError] when the chosen paramValue is not in
+/// [TuningMetadata.points], or when a recognised label does not
+/// match the index type (e.g. `nprobe=8` targeting an `IndexFlat`).
+bool applyTuningToIndex(Index index, TuningMetadata meta) {
+  final chosen = meta.chosenParamValue;
+  if (chosen == null) return false;
+  final point = meta.points.firstWhere(
+    (p) => p.paramValue == chosen,
+    orElse: () => throw ArgumentError(
+      'applyTuningToIndex: chosen paramValue $chosen is not present '
+      'in TuningMetadata.points',
+    ),
+  );
+  final label = point.paramLabel.toLowerCase();
+  if (label.startsWith('nprobe')) {
+    _applyNprobe(index, chosen);
+    return true;
+  }
+  if (label.startsWith('efsearch')) {
+    _applyEfSearch(index, chosen);
+    return true;
+  }
+  return false;
+}
+
+void _applyNprobe(Index index, int value) {
+  if (index is IndexIVFFlat) {
+    index.nprobe = value;
+    return;
+  }
+  if (index is IndexIVFPQ) {
+    index.nprobe = value;
+    return;
+  }
+  if (index is IndexRefineFlat) {
+    final base = index.base;
+    if (base is IndexIVFFlat) {
+      base.nprobe = value;
+      return;
+    }
+    if (base is IndexIVFPQ) {
+      base.nprobe = value;
+      return;
+    }
+  }
+  throw ArgumentError(
+    'applyTuningToIndex: no nprobe setter for ${index.runtimeType}',
+  );
+}
+
+void _applyEfSearch(Index index, int value) {
+  if (index is IndexHNSW) {
+    index.efSearch = value;
+    return;
+  }
+  throw ArgumentError(
+    'applyTuningToIndex: no efSearch setter for ${index.runtimeType}',
+  );
 }
 
 /// Returns `true` when [bytes] begins with the `IxDT` wrapper fourcc.

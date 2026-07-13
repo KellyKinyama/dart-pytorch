@@ -3378,10 +3378,7 @@ void main() {
   test('stripTuningWrapper rejects a plain FAISS blob', () {
     final inner = IndexFlatL2(d)..add(xs);
     final plain = writeFaissIndexToBytes(inner);
-    expect(
-      () => stripTuningWrapper(plain),
-      throwsA(isA<FormatException>()),
-    );
+    expect(() => stripTuningWrapper(plain), throwsA(isA<FormatException>()));
   });
 
   test('stripTuningWrapperFile writes a plain FAISS file', () {
@@ -3409,6 +3406,143 @@ void main() {
     } finally {
       if (tmpIn.existsSync()) tmpIn.deleteSync();
       if (tmpOut.existsSync()) tmpOut.deleteSync();
+    }
+  });
+
+  test('applyTuningToIndex sets nprobe on IndexIVFFlat', () {
+    final ivf = IndexIVFFlat(d: d, nlist: 8, nprobe: 1)
+      ..train(xs)
+      ..add(xs);
+    final meta = TuningMetadata(
+      createdAt: DateTime.fromMicrosecondsSinceEpoch(1),
+      metric: Metric.l2,
+      points: <OperatingPoint>[
+        OperatingPoint(
+          paramValue: 8,
+          paramLabel: 'nprobe=8',
+          recall: 0.99,
+          meanUs: 30.0,
+        ),
+      ],
+      chosenParamValue: 8,
+    );
+    expect(ivf.nprobe, equals(1));
+    final applied = applyTuningToIndex(ivf, meta);
+    expect(applied, isTrue);
+    expect(ivf.nprobe, equals(8));
+  });
+
+  test('applyTuningToIndex walks through IndexRefineFlat to IVFFlat', () {
+    final ivf = IndexIVFFlat(d: d, nlist: 8, nprobe: 1)
+      ..train(xs)
+      ..add(xs);
+    final flat = IndexFlatL2(d)..add(xs);
+    final refine = wrapWithRefine(ivf, flat);
+    final meta = TuningMetadata(
+      createdAt: DateTime.fromMicrosecondsSinceEpoch(1),
+      metric: Metric.l2,
+      points: <OperatingPoint>[
+        OperatingPoint(
+          paramValue: 4,
+          paramLabel: 'nprobe=4',
+          recall: 0.9,
+          meanUs: 20.0,
+        ),
+      ],
+      chosenParamValue: 4,
+    );
+    expect(ivf.nprobe, equals(1));
+    expect(applyTuningToIndex(refine, meta), isTrue);
+    expect(ivf.nprobe, equals(4));
+  });
+
+  test('applyTuningToIndex sets efSearch on IndexHNSW', () {
+    final hnsw = IndexHNSW(d: d, M: 8, efConstruction: 40, efSearch: 16)
+      ..add(xs);
+    final meta = TuningMetadata(
+      createdAt: DateTime.fromMicrosecondsSinceEpoch(1),
+      metric: Metric.l2,
+      points: <OperatingPoint>[
+        OperatingPoint(
+          paramValue: 128,
+          paramLabel: 'efSearch=128',
+          recall: 1.0,
+          meanUs: 100.0,
+        ),
+      ],
+      chosenParamValue: 128,
+    );
+    expect(hnsw.efSearch, equals(16));
+    expect(applyTuningToIndex(hnsw, meta), isTrue);
+    expect(hnsw.efSearch, equals(128));
+  });
+
+  test('applyTuningToIndex is a no-op when chosenParamValue is null', () {
+    final ivf = IndexIVFFlat(d: d, nlist: 8, nprobe: 3)
+      ..train(xs)
+      ..add(xs);
+    final meta = TuningMetadata(
+      createdAt: DateTime.fromMicrosecondsSinceEpoch(1),
+      metric: Metric.l2,
+      points: const <OperatingPoint>[],
+    );
+    expect(applyTuningToIndex(ivf, meta), isFalse);
+    expect(ivf.nprobe, equals(3));
+  });
+
+  test('applyTuningToIndex throws when the paramLabel targets the '
+      'wrong index type', () {
+    final flat = IndexFlatL2(d)..add(xs);
+    final meta = TuningMetadata(
+      createdAt: DateTime.fromMicrosecondsSinceEpoch(1),
+      metric: Metric.l2,
+      points: <OperatingPoint>[
+        OperatingPoint(
+          paramValue: 8,
+          paramLabel: 'nprobe=8',
+          recall: 0.9,
+          meanUs: 10.0,
+        ),
+      ],
+      chosenParamValue: 8,
+    );
+    expect(
+      () => applyTuningToIndex(flat, meta),
+      throwsA(isA<ArgumentError>()),
+    );
+  });
+
+  test('loadTunedFaissIndex(applyTuning: true) warms up the loaded '
+      'index in one call', () {
+    final ivf = IndexIVFFlat(d: d, nlist: 8, nprobe: 1)
+      ..train(xs)
+      ..add(xs);
+    final meta = TuningMetadata(
+      createdAt: DateTime.fromMicrosecondsSinceEpoch(1),
+      metric: Metric.l2,
+      points: <OperatingPoint>[
+        OperatingPoint(
+          paramValue: 8,
+          paramLabel: 'nprobe=8',
+          recall: 0.99,
+          meanUs: 30.0,
+        ),
+      ],
+      chosenParamValue: 8,
+    );
+    final tmp = File(
+      '${Directory.systemTemp.path}/dart_pytorch_apply_tuning.faiss',
+    );
+    try {
+      saveTunedFaissIndex(tmp.path, ivf, meta);
+      final loaded = loadTunedFaissIndex(tmp.path, applyTuning: true);
+      final reloaded = loaded.index as IndexIVFFlat;
+      expect(reloaded.nprobe, equals(8));
+      // Without applyTuning the on-disk nprobe (1) survives.
+      final untouched = loadTunedFaissIndex(tmp.path);
+      expect((untouched.index as IndexIVFFlat).nprobe, equals(1));
+    } finally {
+      if (tmp.existsSync()) tmp.deleteSync();
     }
   });
 
