@@ -52,6 +52,13 @@ export 'core/data/dataset.dart';
 export 'core/data/image_folder_dataset.dart';
 export 'core/data/text_token_dataset.dart';
 export 'core/data/csv_dataset.dart';
+export 'core/vector_store/index.dart';
+export 'core/vector_store/index_flat.dart';
+export 'core/vector_store/kmeans.dart';
+export 'core/vector_store/index_ivf_flat.dart';
+export 'core/vector_store/index_pq.dart';
+export 'core/vector_store/index_ivf_pq.dart';
+export 'core/vector_store/index_hnsw.dart';
 
 /// Trivial sanity function used by the smoke test.
 int calculate() {
