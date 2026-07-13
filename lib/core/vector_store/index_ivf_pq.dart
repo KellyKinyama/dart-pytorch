@@ -59,6 +59,45 @@ class IndexIVFPQ extends Index {
   /// length `m * len(_invListsIds[cell])`.
   late final List<List<int>> _invListsCodes;
 
+  /// Read-only view of per-cell id lists (insertion order).
+  List<List<int>> get invListsIds => _invListsIds;
+
+  /// Read-only view of per-cell PQ code bytes; each cell has
+  /// `m * invListsIds[cell].length` bytes.
+  List<List<int>> get invListsCodes => _invListsCodes;
+
+  /// I/O hook: bulk-replace per-cell ids + codes and set ntotal.
+  /// Used by `faiss_io.dart` when rehydrating an `IwPQ` blob.
+  void ioSetInvLists(
+    List<List<int>> newIds,
+    List<List<int>> newCodes,
+    int newNtotal,
+  ) {
+    if (newIds.length != nlist || newCodes.length != nlist) {
+      throw ArgumentError(
+        'ioSetInvLists: got ${newIds.length}/${newCodes.length} lists, '
+        'expected nlist=$nlist',
+      );
+    }
+    for (var c = 0; c < nlist; c++) {
+      final ids = newIds[c];
+      final codes = newCodes[c];
+      if (codes.length != ids.length * m) {
+        throw ArgumentError(
+          'ioSetInvLists: cell $c has ${codes.length} code bytes but '
+          '${ids.length} ids (expected ${ids.length * m} = ids*m)',
+        );
+      }
+      _invListsIds[c]
+        ..clear()
+        ..addAll(ids);
+      _invListsCodes[c]
+        ..clear()
+        ..addAll(codes);
+    }
+    ntotal = newNtotal;
+  }
+
   @override
   void train(List<Float32List> xs) {
     if (xs.length < nlist) {

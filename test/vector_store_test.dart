@@ -1988,7 +1988,8 @@ void main() {
     final ilar = FaissFourcc.of('ilar');
     var offset = -1;
     for (var i = 0; i < bytes.length - 3; i++) {
-      final t = bytes[i] |
+      final t =
+          bytes[i] |
           (bytes[i + 1] << 8) |
           (bytes[i + 2] << 16) |
           (bytes[i + 3] << 24);
@@ -1999,10 +2000,120 @@ void main() {
     }
     expect(offset, greaterThan(0));
     final listTypeOff = offset + 4 + 8 + 8; // fourcc + nlist + code_size
-    final listType = bytes[listTypeOff] |
+    final listType =
+        bytes[listTypeOff] |
         (bytes[listTypeOff + 1] << 8) |
         (bytes[listTypeOff + 2] << 16) |
         (bytes[listTypeOff + 3] << 24);
     expect(FaissFourcc.toStr(listType), equals('sprs'));
+  });
+
+  test('writeFaissIndex emits IwPQ fourcc and correct header bytes', () {
+    final ivpq = IndexIVFPQ(d: d, nlist: 4, m: 4, nprobe: 2)..train(xs);
+    final bytes = writeFaissIndexToBytes(ivpq);
+    final tag =
+        bytes[0] | (bytes[1] << 8) | (bytes[2] << 16) | (bytes[3] << 24);
+    expect(FaissFourcc.toStr(tag), equals('IwPQ'));
+    final dRead =
+        bytes[4] | (bytes[5] << 8) | (bytes[6] << 16) | (bytes[7] << 24);
+    expect(dRead, equals(d));
+    expect(bytes[32], equals(1)); // is_trained
+    expect(bytes[33], equals(1)); // metric = L2
+  });
+
+  test('FAISS interop round-trips IndexIVFPQ (L2, nprobe=nlist)', () {
+    final ivpq = IndexIVFPQ(d: d, nlist: 4, m: 4, nprobe: 4, seed: 17)
+      ..train(xs);
+    ivpq.add(xs);
+    final before = ivpq.search(queries, k);
+
+    final bytes = writeFaissIndexToBytes(ivpq);
+    final loaded = readFaissIndexFromBytes(bytes) as IndexIVFPQ;
+
+    expect(loaded.d, equals(d));
+    expect(loaded.nlist, equals(4));
+    expect(loaded.m, equals(4));
+    expect(loaded.nprobe, equals(4));
+    expect(loaded.metric, equals(Metric.l2));
+    expect(loaded.isTrained, isTrue);
+    expect(loaded.ntotal, equals(xs.length));
+
+    // Coarse quantizer centroids preserved.
+    for (var i = 0; i < ivpq.quantizer.ntotal; i++) {
+      expect(
+        loaded.quantizer.reconstruct(i),
+        equals(ivpq.quantizer.reconstruct(i)),
+      );
+    }
+    // PQ codebooks preserved byte-for-byte.
+    for (var sub = 0; sub < ivpq.m; sub++) {
+      for (var c = 0; c < ivpq.pq.ksub; c++) {
+        for (var j = 0; j < ivpq.pq.dsub; j++) {
+          expect(
+            loaded.pq.codebooks[sub][c][j],
+            equals(ivpq.pq.codebooks[sub][c][j]),
+          );
+        }
+      }
+    }
+    // Inverted lists preserved.
+    for (var c = 0; c < ivpq.nlist; c++) {
+      expect(loaded.invListsIds[c], equals(ivpq.invListsIds[c]));
+      expect(loaded.invListsCodes[c], equals(ivpq.invListsCodes[c]));
+    }
+
+    // Search results identical.
+    final after = loaded.search(queries, k);
+    for (var qi = 0; qi < nq; qi++) {
+      for (var j = 0; j < k; j++) {
+        expect(after.ids[qi][j], equals(before.ids[qi][j]));
+      }
+    }
+  });
+
+  test('FAISS interop round-trips IndexIVFPQ (inner product)', () {
+    final ivpq = IndexIVFPQ(
+      d: d,
+      nlist: 4,
+      m: 4,
+      nprobe: 4,
+      metric: Metric.innerProduct,
+      seed: 3,
+    )..train(xs);
+    ivpq.add(xs);
+    final before = ivpq.search(queries, k);
+
+    final bytes = writeFaissIndexToBytes(ivpq);
+    final loaded = readFaissIndexFromBytes(bytes) as IndexIVFPQ;
+    expect(loaded.metric, equals(Metric.innerProduct));
+
+    final after = loaded.search(queries, k);
+    for (var qi = 0; qi < nq; qi++) {
+      for (var j = 0; j < k; j++) {
+        expect(after.ids[qi][j], equals(before.ids[qi][j]));
+      }
+    }
+  });
+
+  test('readFaissIndex rejects IwPQ with by_residual=0', () {
+    final ivpq = IndexIVFPQ(d: d, nlist: 4, m: 4)..train(xs);
+    ivpq.add(xs);
+    final bytes = writeFaissIndexToBytes(ivpq);
+
+    // by_residual is the single byte immediately after the ivf_header.
+    // ivf_header offset layout:
+    //   fourcc(4) + index_header(33)             = 37
+    //   + nlist:u64(8) + nprobe:u64(8)           = 53
+    //   + write_index(quantizer)                 = IxF2 fourcc(4)
+    //     + index_header(33) + WVEC(u64 size(8) + nlist*d*4 bytes)
+    //   + direct_map: u8(1) + WVEC empty i64(8)  = 9
+    //   → by_residual at that offset
+    final byResidualOffset = 4 + 33 + 8 + 8 + 4 + 33 + 8 + 4 * d * 4 + 1 + 8;
+    expect(bytes[byResidualOffset], equals(1));
+    bytes[byResidualOffset] = 0;
+    expect(
+      () => readFaissIndexFromBytes(bytes),
+      throwsA(isA<UnsupportedError>()),
+    );
   });
 }

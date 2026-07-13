@@ -19,6 +19,8 @@
 /// * `IndexIVFFlat`      — fourcc `IwFl`, cell-probe IVF with a flat
 ///   (uncompressed) code store per cell. Uses the `ilar`
 ///   ArrayInvertedLists container in either `full` or `sprs` layout.
+/// * `IndexIVFPQ`        — fourcc `IwPQ`, cell-probe IVF with a PQ
+///   residual code store per cell.
 /// * `L2NormTransform`   — fourcc `VNrm`, on-sphere normalization
 ///   (FAISS's `NormalizationTransform` with `norm = 2.0`).
 /// * `RandomRotationTransform` — fourcc `rrot`, a `LinearTransform`
@@ -75,6 +77,7 @@ import 'index_flat.dart';
 import 'index_id_map.dart';
 import 'index_io.dart';
 import 'index_ivf_flat.dart';
+import 'index_ivf_pq.dart';
 import 'index_pq.dart';
 import 'index_pre_transform.dart';
 import 'index_refine_flat.dart';
@@ -237,6 +240,17 @@ class FaissFourcc {
   /// `sprs` — sparse sizes vector for `ilar` (pairs of `[cell_idx, size]`
   /// for non-empty cells only).
   static final int invListsSparse = of('sprs');
+
+  /// `IwPQ` — `IndexIVFPQ`. Layout (after fourcc):
+  ///
+  /// ```
+  ///   [write_ivf_header]
+  ///   u8  by_residual         (this port always emits/expects 1)
+  ///   u64 code_size           (= pq.M for QT_8bit)
+  ///   [write_ProductQuantizer]
+  ///   [write_InvertedLists]   (ilar with code_size = M)
+  /// ```
+  static final int indexIvfPq = of('IwPQ');
 }
 
 /// FAISS `MetricType` enum values.
@@ -568,10 +582,30 @@ void _readDirectMap(IoReader r) {
 /// `by_residual`; subclasses that need it write it themselves. `IwFl`
 /// is not one of them.
 void _writeIvfHeader(IoWriter w, IndexIVFFlat ivf) {
-  _writeHeader(w, ivf);
-  w.writeU64(ivf.nlist);
-  w.writeU64(ivf.nprobe);
-  writeFaissIndex(w, ivf.quantizer);
+  _writeIvfHeaderGeneric(
+    w,
+    header: ivf,
+    nlist: ivf.nlist,
+    nprobe: ivf.nprobe,
+    quantizer: ivf.quantizer,
+  );
+}
+
+/// Generic IVF header writer used by both `IwFl` and `IwPQ`. Mirrors
+/// FAISS's `write_ivf_header`: common index header + nlist + nprobe +
+/// recursive quantizer + direct_map (NoMap only). The `header`
+/// parameter supplies d / ntotal / is_trained / metric.
+void _writeIvfHeaderGeneric(
+  IoWriter w, {
+  required Index header,
+  required int nlist,
+  required int nprobe,
+  required IndexFlat quantizer,
+}) {
+  _writeHeader(w, header);
+  w.writeU64(nlist);
+  w.writeU64(nprobe);
+  writeFaissIndex(w, quantizer);
   _writeDirectMapNone(w);
 }
 
@@ -691,9 +725,7 @@ void _writeArrayInvertedLists(IoWriter w, IndexIVFFlat ivf) {
     );
   }
   if (codeSize != d * 4) {
-    throw FormatException(
-      'ilar: code_size $codeSize != d*4 = ${d * 4}',
-    );
+    throw FormatException('ilar: code_size $codeSize != d*4 = ${d * 4}');
   }
 
   final sizes = List<int>.filled(nlist, 0);
@@ -718,9 +750,7 @@ void _writeArrayInvertedLists(IoWriter w, IndexIVFFlat ivf) {
     for (var j = 0; j < pairs.length; j += 2) {
       final idx = pairs[j];
       if (idx < 0 || idx >= nlist) {
-        throw FormatException(
-          'ilar sprs: cell idx $idx out of [0, $nlist)',
-        );
+        throw FormatException('ilar sprs: cell idx $idx out of [0, $nlist)');
       }
       sizes[idx] = pairs[j + 1];
     }
@@ -764,6 +794,154 @@ void _writeArrayInvertedLists(IoWriter w, IndexIVFFlat ivf) {
     }
   }
   return (storage: storage, invLists: invLists);
+}
+
+/// IVFPQ variant of [_writeArrayInvertedLists]. The `ilar` container
+/// wire format is identical, but the code source is the port's
+/// per-cell byte lists (one code = `m` bytes) rather than a flat fp32
+/// storage.
+void _writeArrayInvertedListsIVFPQ(IoWriter w, IndexIVFPQ ivpq) {
+  final codeSize = ivpq.m;
+  w.writeU32(FaissFourcc.invListsArray);
+  w.writeU64(ivpq.nlist);
+  w.writeU64(codeSize);
+
+  var nNon0 = 0;
+  for (var i = 0; i < ivpq.nlist; i++) {
+    if (ivpq.invListsIds[i].isNotEmpty) nNon0++;
+  }
+  if (nNon0 > ivpq.nlist ~/ 2) {
+    w.writeU32(FaissFourcc.invListsFull);
+    final sizes = List<int>.generate(
+      ivpq.nlist,
+      (i) => ivpq.invListsIds[i].length,
+    );
+    _writeVectorI64(w, sizes);
+  } else {
+    w.writeU32(FaissFourcc.invListsSparse);
+    final pairs = <int>[];
+    for (var i = 0; i < ivpq.nlist; i++) {
+      final n = ivpq.invListsIds[i].length;
+      if (n > 0) {
+        pairs.add(i);
+        pairs.add(n);
+      }
+    }
+    _writeVectorI64(w, pairs);
+  }
+
+  for (var i = 0; i < ivpq.nlist; i++) {
+    final ids = ivpq.invListsIds[i];
+    final n = ids.length;
+    if (n == 0) continue;
+    final codes = ivpq.invListsCodes[i];
+    if (codes.length != n * codeSize) {
+      throw StateError(
+        'IwPQ: cell $i has ${codes.length} code bytes, expected '
+        '${n * codeSize} (n=$n, m=$codeSize)',
+      );
+    }
+    // codes are Dart ints in [0, 255]; write as raw bytes.
+    final buf = Uint8List(codes.length);
+    for (var j = 0; j < codes.length; j++) {
+      buf[j] = codes[j] & 0xff;
+    }
+    w.writeBytes(buf);
+    for (final id in ids) {
+      w.writeI64(id);
+    }
+  }
+}
+
+/// IVFPQ variant of [_readArrayInvertedLists]. Returns per-cell ids
+/// and per-cell code-byte lists, matching [IndexIVFPQ]'s internal
+/// representation. Asserts contiguous ids in `[0, ntotal)`.
+({List<List<int>> ids, List<List<int>> codes}) _readArrayInvertedListsIVFPQ(
+  IoReader r,
+  int m,
+  int nlist,
+  int ntotal,
+) {
+  final tag = r.readU32();
+  if (tag != FaissFourcc.invListsArray) {
+    throw UnsupportedError(
+      'IwPQ: only ilar InvertedLists supported, got fourcc '
+      '"${FaissFourcc.toStr(tag)}"',
+    );
+  }
+  final storedNlist = r.readU64();
+  final codeSize = r.readU64();
+  if (storedNlist != nlist) {
+    throw FormatException(
+      'ilar: nlist mismatch (payload=$storedNlist, header=$nlist)',
+    );
+  }
+  if (codeSize != m) {
+    throw FormatException('ilar: code_size $codeSize != m $m for IwPQ');
+  }
+
+  final sizes = List<int>.filled(nlist, 0);
+  final listType = r.readU32();
+  if (listType == FaissFourcc.invListsFull) {
+    final xs = _readVectorI64(r);
+    if (xs.length != nlist) {
+      throw FormatException(
+        'ilar full: sizes length ${xs.length} != nlist $nlist',
+      );
+    }
+    for (var i = 0; i < nlist; i++) {
+      sizes[i] = xs[i];
+    }
+  } else if (listType == FaissFourcc.invListsSparse) {
+    final pairs = _readVectorI64(r);
+    if (pairs.length.isOdd) {
+      throw FormatException(
+        'ilar sprs: pairs length ${pairs.length} is not even',
+      );
+    }
+    for (var j = 0; j < pairs.length; j += 2) {
+      final idx = pairs[j];
+      if (idx < 0 || idx >= nlist) {
+        throw FormatException('ilar sprs: cell idx $idx out of [0, $nlist)');
+      }
+      sizes[idx] = pairs[j + 1];
+    }
+  } else {
+    throw UnsupportedError(
+      'ilar: list_type "${FaissFourcc.toStr(listType)}" not supported',
+    );
+  }
+
+  var sum = 0;
+  for (final s in sizes) {
+    sum += s;
+  }
+  if (sum != ntotal) {
+    throw FormatException(
+      'ilar: sum of sizes ($sum) != header ntotal ($ntotal)',
+    );
+  }
+
+  final ids = List<List<int>>.generate(nlist, (_) => <int>[]);
+  final codes = List<List<int>>.generate(nlist, (_) => <int>[]);
+  for (var i = 0; i < nlist; i++) {
+    final n = sizes[i];
+    if (n == 0) continue;
+    final rawCodes = r.readBytes(n * m);
+    codes[i].addAll(rawCodes);
+    for (var j = 0; j < n; j++) {
+      final id = r.readI64();
+      if (id < 0 || id >= ntotal) {
+        throw UnsupportedError(
+          'IwPQ: ids must be contiguous in [0, ntotal); got id=$id '
+          '(ntotal=$ntotal). Non-contiguous FAISS blobs are not yet '
+          'supported.',
+        );
+      }
+      ids[i].add(id);
+    }
+  }
+  return (ids: ids, codes: codes);
 }
 
 /// Serializes a [VectorTransform] using FAISS's `write_VectorTransform`
@@ -1043,6 +1221,28 @@ void writeFaissIndex(IoWriter w, Index x) {
     _writeArrayInvertedLists(w, x);
     return;
   }
+  if (x is IndexIVFPQ) {
+    // IwPQ layout:
+    //   fourcc('IwPQ')
+    //   write_ivf_header
+    //   u8  by_residual         (always 1 for this port)
+    //   u64 code_size           (= m for QT_8bit PQ)
+    //   write_ProductQuantizer
+    //   write_InvertedLists     (ilar, code_size = m)
+    w.writeU32(FaissFourcc.indexIvfPq);
+    _writeIvfHeaderGeneric(
+      w,
+      header: x,
+      nlist: x.nlist,
+      nprobe: x.nprobe,
+      quantizer: x.quantizer,
+    );
+    w.writeU8(1); // by_residual = true
+    w.writeU64(x.m); // code_size = m
+    _writeProductQuantizer(w, x.pq);
+    _writeArrayInvertedListsIVFPQ(w, x);
+    return;
+  }
   throw UnsupportedError(
     'writeFaissIndex: ${x.runtimeType} not yet supported.',
   );
@@ -1248,6 +1448,62 @@ Index readFaissIndex(IoReader r) {
     final pay = _readArrayInvertedLists(r, h.d, ivfHead.nlist, h.ntotal);
     ivf.ioSetStorageAndInvLists(pay.storage, pay.invLists, h.ntotal);
     return ivf;
+  }
+  if (tag == FaissFourcc.indexIvfPq) {
+    // IwPQ: ivf_header + by_residual + code_size + PQ + ilar codes.
+    final ivfHead = _readIvfHeader(r);
+    final h = ivfHead.h;
+    final byResidual = r.readU8();
+    if (byResidual != 1) {
+      throw UnsupportedError(
+        'IwPQ: only by_residual=1 is supported, got $byResidual',
+      );
+    }
+    final codeSize = r.readU64();
+    final pq = _readProductQuantizer(r);
+    if (pq.d != h.d) {
+      throw FormatException('IwPQ: PQ d (${pq.d}) != header d (${h.d})');
+    }
+    if (codeSize != pq.m) {
+      throw FormatException(
+        'IwPQ: code_size ($codeSize) != pq.M (${pq.m}) for QT_8bit PQ',
+      );
+    }
+    if (pq.nbits != 8) {
+      throw UnsupportedError(
+        'IwPQ: only nbits=8 PQ is supported, got nbits=${pq.nbits}',
+      );
+    }
+    final ivpq = IndexIVFPQ(
+      d: h.d,
+      nlist: ivfHead.nlist,
+      m: pq.m,
+      nprobe: ivfHead.nprobe,
+      metric: h.metric,
+    );
+    // Populate coarse quantizer centroids.
+    final centroids = List<Float32List>.generate(
+      ivfHead.quantizer.ntotal,
+      (i) => Float32List.fromList(ivfHead.quantizer.reconstruct(i)),
+    );
+    ivpq.quantizer.add(centroids);
+    // Splice PQ codebook centroids into the fresh ProductQuantizer.
+    final books = ivpq.pq.codebooks;
+    final srcBooks = pq.codebooks;
+    for (var sub = 0; sub < pq.m; sub++) {
+      for (var c = 0; c < pq.ksub; c++) {
+        final src = srcBooks[sub][c];
+        final dst = books[sub][c];
+        for (var j = 0; j < pq.dsub; j++) {
+          dst[j] = src[j];
+        }
+      }
+    }
+    ivpq.pq.isTrained = true;
+    ivpq.isTrained = h.isTrained;
+    final pay = _readArrayInvertedListsIVFPQ(r, pq.m, ivfHead.nlist, h.ntotal);
+    ivpq.ioSetInvLists(pay.ids, pay.codes, h.ntotal);
+    return ivpq;
   }
   throw FormatException(
     'Unsupported FAISS fourcc "${FaissFourcc.toStr(tag)}" '
