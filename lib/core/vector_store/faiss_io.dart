@@ -92,6 +92,7 @@ import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
+import 'auto_tune.dart';
 import 'index.dart';
 import 'index_binary.dart';
 import 'index_binary_flat.dart';
@@ -2654,4 +2655,271 @@ void saveFaissBinaryIndex(String path, IndexBinary x) {
 /// Load a FAISS binary-index file from [path].
 IndexBinary loadFaissBinaryIndex(String path) {
   return readFaissBinaryIndexFromBytes(File(path).readAsBytesSync());
+}
+
+// =============================================================================
+// Tuning-metadata wrapper (port-specific fourcc `IxDT`)
+// =============================================================================
+//
+// Persists an auto-tuner's operating-point sweep alongside the inner
+// FAISS blob so a later loader can pick a working `nprobe` / `efSearch`
+// without redoing the recall benchmark. The wrapper is a Dart-only
+// extension — upstream FAISS does not know about `IxDT` and will
+// reject a wrapped file. Plain `saveFaissIndex` / `writeFaissIndex...`
+// stay 100% byte-compatible with upstream.
+//
+// Wire format (all little-endian):
+//
+//   u32 fourcc      = 'I'|'x'<<8|'D'<<16|'T'<<24  (= "IxDT")
+//   u32 version     = 1
+//   -- tuning block (WVEC-style) --
+//   u64 tuningLen
+//   [tuningLen bytes of tuning payload]  (see below)
+//   -- inner FAISS blob --
+//   [remaining bytes = raw upstream-compatible FAISS blob]
+//
+// Tuning payload:
+//   i64 createdAtMicros  (Unix epoch, DateTime.microsecondsSinceEpoch)
+//   i32 innerMetric      (0 = IP, 1 = L2 — sanity marker; NOT
+//                         authoritative for the inner index which owns
+//                         its own metric in its header)
+//   u32 numPoints
+//   for each point:
+//     i32 paramValue
+//     u32 labelLen
+//     [labelLen bytes utf-8 label]
+//     f64 recall
+//     f64 meanUs
+//   u8  chosenPresent    (0 or 1)
+//   if chosenPresent == 1:
+//     i32 chosenParamValue
+
+/// Port-specific fourcc marking a tuning-metadata wrapper (see
+/// [writeTunedFaissIndexToBytes]). Upstream FAISS does not recognize
+/// this tag; keep it out of files intended for cross-tool interop.
+final int _fourccIxDT = FaissFourcc.of('IxDT');
+
+/// Current on-disk version of the `IxDT` wrapper. Bumped on any
+/// backwards-incompatible payload change.
+const int _ixDTVersion = 1;
+
+/// Auto-tuner metadata persisted alongside a FAISS index by the
+/// `IxDT` wrapper. Captures the operating-point sweep + the chosen
+/// parameter so a downstream loader can restore the tuning decision
+/// without re-running the benchmark.
+class TuningMetadata {
+  TuningMetadata({
+    required this.createdAt,
+    required this.metric,
+    required this.points,
+    this.chosenParamValue,
+  });
+
+  /// When the tuning sweep was recorded.
+  final DateTime createdAt;
+
+  /// Sanity marker for the inner index's metric. Not authoritative —
+  /// the wrapped FAISS blob owns its own metric in its header.
+  final Metric metric;
+
+  /// Operating points from the sweep, in the order they were emitted
+  /// by the auto-tuner.
+  final List<OperatingPoint> points;
+
+  /// The parameter value chosen by the auto-tuner (e.g. the selected
+  /// `nprobe` or `efSearch`), or `null` if the sweep did not pick a
+  /// winner.
+  final int? chosenParamValue;
+
+  @override
+  String toString() =>
+      'TuningMetadata(createdAt=$createdAt, metric=$metric, '
+      'points=${points.length}, chosen=$chosenParamValue)';
+}
+
+/// Serialize [inner] with an attached [TuningMetadata] block using
+/// the port-specific `IxDT` wrapper fourcc.
+///
+/// The resulting blob is NOT loadable by upstream FAISS. Use
+/// [saveFaissIndex] / [writeFaissIndexToBytes] when byte compatibility
+/// with upstream is required.
+Uint8List writeTunedFaissIndexToBytes(Index inner, TuningMetadata meta) {
+  final w = IoWriter();
+  w.writeU32(_fourccIxDT);
+  w.writeU32(_ixDTVersion);
+  final tuning = _writeTuningPayload(meta);
+  w.writeU64(tuning.length);
+  w.writeBytes(tuning);
+  w.writeBytes(writeFaissIndexToBytes(inner));
+  return w.takeBytes();
+}
+
+/// Parse a byte buffer previously written by
+/// [writeTunedFaissIndexToBytes]. Throws [FormatException] if the
+/// leading fourcc is not `IxDT` or the wrapper version is unknown.
+({Index index, TuningMetadata metadata}) readTunedFaissIndexFromBytes(
+  Uint8List bytes,
+) {
+  if (bytes.length < 4) {
+    throw FormatException(
+      'readTunedFaissIndex: blob is ${bytes.length} bytes, need at '
+      'least 4 for the fourcc',
+    );
+  }
+  final r = IoReader(bytes);
+  final tag = r.readU32();
+  if (tag != _fourccIxDT) {
+    throw FormatException(
+      'readTunedFaissIndex: expected fourcc "IxDT" but got '
+      '"${FaissFourcc.toStr(tag)}" — this blob is not a tuned wrapper',
+    );
+  }
+  final version = r.readU32();
+  if (version != _ixDTVersion) {
+    throw FormatException(
+      'readTunedFaissIndex: unsupported IxDT wrapper version $version '
+      '(this build handles version $_ixDTVersion)',
+    );
+  }
+  final tuningLen = r.readU64();
+  if (r.remaining < tuningLen) {
+    throw FormatException(
+      'readTunedFaissIndex: tuning block declares $tuningLen bytes but '
+      'only ${r.remaining} bytes remain in the blob',
+    );
+  }
+  final tuningBytes = r.readBytes(tuningLen);
+  final meta = _readTuningPayload(tuningBytes);
+  final innerBytes = r.readBytes(r.remaining);
+  final inner = readFaissIndexFromBytes(innerBytes);
+  return (index: inner, metadata: meta);
+}
+
+/// File variant of [writeTunedFaissIndexToBytes].
+void saveTunedFaissIndex(String path, Index inner, TuningMetadata meta) {
+  File(path).writeAsBytesSync(writeTunedFaissIndexToBytes(inner, meta));
+}
+
+/// File variant of [readTunedFaissIndexFromBytes].
+({Index index, TuningMetadata metadata}) loadTunedFaissIndex(String path) {
+  return readTunedFaissIndexFromBytes(File(path).readAsBytesSync());
+}
+
+/// Returns `true` when [bytes] begins with the `IxDT` wrapper fourcc.
+/// Useful for tools that want to route a blob between
+/// [readFaissIndexFromBytes] and [readTunedFaissIndexFromBytes]
+/// without catching a `FormatException`.
+bool isTunedFaissBlob(Uint8List bytes) {
+  if (bytes.length < 4) return false;
+  final tag = bytes[0] |
+      (bytes[1] << 8) |
+      (bytes[2] << 16) |
+      (bytes[3] << 24);
+  return tag == _fourccIxDT;
+}
+
+Uint8List _writeTuningPayload(TuningMetadata meta) {
+  final w = IoWriter();
+  w.writeI64(meta.createdAt.microsecondsSinceEpoch);
+  w.writeI32(meta.metric == Metric.innerProduct ? 0 : 1);
+  w.writeU32(meta.points.length);
+  for (final p in meta.points) {
+    w.writeI32(p.paramValue);
+    final label = utf8Encode(p.paramLabel);
+    w.writeU32(label.length);
+    w.writeBytes(label);
+    w.writeF64(p.recall);
+    w.writeF64(p.meanUs);
+  }
+  final chosen = meta.chosenParamValue;
+  if (chosen == null) {
+    w.writeU8(0);
+  } else {
+    w.writeU8(1);
+    w.writeI32(chosen);
+  }
+  return w.takeBytes();
+}
+
+TuningMetadata _readTuningPayload(Uint8List bytes) {
+  final r = IoReader(bytes);
+  final createdAt = DateTime.fromMicrosecondsSinceEpoch(r.readI64());
+  final metricCode = r.readI32();
+  final metric = metricCode == 0 ? Metric.innerProduct : Metric.l2;
+  final n = r.readU32();
+  final points = <OperatingPoint>[];
+  for (var i = 0; i < n; i++) {
+    final paramValue = r.readI32();
+    final labelLen = r.readU32();
+    final labelBytes = r.readBytes(labelLen);
+    final label = utf8Decode(labelBytes);
+    final recall = r.readF64();
+    final meanUs = r.readF64();
+    points.add(OperatingPoint(
+      paramValue: paramValue,
+      paramLabel: label,
+      recall: recall,
+      meanUs: meanUs,
+    ));
+  }
+  final chosenPresent = r.readU8();
+  int? chosen;
+  if (chosenPresent == 1) {
+    chosen = r.readI32();
+  }
+  return TuningMetadata(
+    createdAt: createdAt,
+    metric: metric,
+    points: points,
+    chosenParamValue: chosen,
+  );
+}
+
+/// Minimal UTF-8 encoder / decoder used by the tuning-payload codec.
+/// Dart's `dart:convert` is intentionally avoided here to keep this
+/// module free of extra imports; labels emitted by the auto-tuner are
+/// short ASCII strings ("nprobe=8"), so the fast path dominates.
+Uint8List utf8Encode(String s) {
+  final out = <int>[];
+  for (final code in s.runes) {
+    if (code < 0x80) {
+      out.add(code);
+    } else if (code < 0x800) {
+      out.add(0xc0 | (code >> 6));
+      out.add(0x80 | (code & 0x3f));
+    } else if (code < 0x10000) {
+      out.add(0xe0 | (code >> 12));
+      out.add(0x80 | ((code >> 6) & 0x3f));
+      out.add(0x80 | (code & 0x3f));
+    } else {
+      out.add(0xf0 | (code >> 18));
+      out.add(0x80 | ((code >> 12) & 0x3f));
+      out.add(0x80 | ((code >> 6) & 0x3f));
+      out.add(0x80 | (code & 0x3f));
+    }
+  }
+  return Uint8List.fromList(out);
+}
+
+String utf8Decode(Uint8List bytes) {
+  final codes = <int>[];
+  var i = 0;
+  while (i < bytes.length) {
+    final b = bytes[i++];
+    if (b < 0x80) {
+      codes.add(b);
+    } else if ((b & 0xe0) == 0xc0) {
+      codes.add(((b & 0x1f) << 6) | (bytes[i++] & 0x3f));
+    } else if ((b & 0xf0) == 0xe0) {
+      final b1 = bytes[i++] & 0x3f;
+      final b2 = bytes[i++] & 0x3f;
+      codes.add(((b & 0x0f) << 12) | (b1 << 6) | b2);
+    } else {
+      final b1 = bytes[i++] & 0x3f;
+      final b2 = bytes[i++] & 0x3f;
+      final b3 = bytes[i++] & 0x3f;
+      codes.add(((b & 0x07) << 18) | (b1 << 12) | (b2 << 6) | b3);
+    }
+  }
+  return String.fromCharCodes(codes);
 }

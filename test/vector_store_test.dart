@@ -3178,6 +3178,89 @@ void main() {
   });
 
   // -----------------------------------------------------------------
+  // Tuning-metadata wrapper (IxDT).
+  // -----------------------------------------------------------------
+
+  test('IxDT wrapper round-trips a populated TuningMetadata block', () {
+    final inner = IndexFlatL2(d)..add(xs);
+    final meta = TuningMetadata(
+      createdAt: DateTime.fromMicrosecondsSinceEpoch(1_700_000_000_000_000),
+      metric: Metric.l2,
+      points: <OperatingPoint>[
+        OperatingPoint(
+          paramValue: 1,
+          paramLabel: 'nprobe=1',
+          recall: 0.42,
+          meanUs: 12.5,
+        ),
+        OperatingPoint(
+          paramValue: 8,
+          paramLabel: 'nprobe=8',
+          recall: 0.97,
+          meanUs: 88.0,
+        ),
+      ],
+      chosenParamValue: 8,
+    );
+    final bytes = writeTunedFaissIndexToBytes(inner, meta);
+    expect(isTunedFaissBlob(bytes), isTrue);
+    final decoded = readTunedFaissIndexFromBytes(bytes);
+    expect(decoded.metadata.createdAt, equals(meta.createdAt));
+    expect(decoded.metadata.metric, equals(Metric.l2));
+    expect(decoded.metadata.chosenParamValue, equals(8));
+    expect(decoded.metadata.points, hasLength(2));
+    expect(decoded.metadata.points[0].paramLabel, equals('nprobe=1'));
+    expect(decoded.metadata.points[0].recall, closeTo(0.42, 1e-12));
+    expect(decoded.metadata.points[1].meanUs, closeTo(88.0, 1e-12));
+    // Inner index survives byte-identical.
+    final restored = decoded.index;
+    expect(restored, isA<IndexFlat>());
+    expect(restored.d, equals(inner.d));
+    expect(restored.ntotal, equals(inner.ntotal));
+  });
+
+  test('IxDT wrapper round-trips an empty operating-point list with no '
+      'chosen value', () {
+    final inner = IndexFlatL2(d)..add(xs);
+    final meta = TuningMetadata(
+      createdAt: DateTime.fromMicrosecondsSinceEpoch(0),
+      metric: Metric.innerProduct,
+      points: const <OperatingPoint>[],
+    );
+    final bytes = writeTunedFaissIndexToBytes(inner, meta);
+    final decoded = readTunedFaissIndexFromBytes(bytes);
+    expect(decoded.metadata.points, isEmpty);
+    expect(decoded.metadata.chosenParamValue, isNull);
+    expect(decoded.metadata.metric, equals(Metric.innerProduct));
+  });
+
+  test('readTunedFaissIndexFromBytes rejects a plain FAISS blob', () {
+    final inner = IndexFlatL2(d)..add(xs);
+    final plain = writeFaissIndexToBytes(inner);
+    expect(isTunedFaissBlob(plain), isFalse);
+    expect(
+      () => readTunedFaissIndexFromBytes(plain),
+      throwsA(isA<FormatException>()),
+    );
+  });
+
+  test('IxDT wrapper preserves the inner FAISS blob byte-for-byte', () {
+    final inner = IndexFlatL2(d)..add(xs);
+    final plain = writeFaissIndexToBytes(inner);
+    final meta = TuningMetadata(
+      createdAt: DateTime.fromMicrosecondsSinceEpoch(1),
+      metric: Metric.l2,
+      points: const <OperatingPoint>[],
+    );
+    final wrapped = writeTunedFaissIndexToBytes(inner, meta);
+    // Inner blob is appended verbatim at the tail of the wrapper.
+    expect(
+      wrapped.sublist(wrapped.length - plain.length),
+      equals(plain),
+    );
+  });
+
+  // -----------------------------------------------------------------
   // GPU-backed flat search.
   // -----------------------------------------------------------------
 
