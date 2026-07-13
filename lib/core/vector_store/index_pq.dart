@@ -233,6 +233,24 @@ class IndexPQ extends Index {
   Uint8List _codes = Uint8List(0);
   int _capacityCodes = 0;
 
+  /// Read-only view of the currently used byte codes buffer (length
+  /// `ntotal * m`). Zero-copy; do not mutate.
+  Uint8List get codes => Uint8List.sublistView(_codes, 0, ntotal * m);
+
+  /// I/O hook: replace the codes buffer wholesale and set `ntotal`.
+  /// Used by `faiss_io.dart` when reading a persisted index.
+  void ioSetCodes(Uint8List codes, int newNtotal) {
+    if (codes.length != newNtotal * m) {
+      throw ArgumentError(
+        'IndexPQ.ioSetCodes: got ${codes.length} bytes, expected '
+        '${newNtotal * m} for ntotal=$newNtotal, m=$m',
+      );
+    }
+    _codes = Uint8List.fromList(codes);
+    _capacityCodes = _codes.length;
+    ntotal = newNtotal;
+  }
+
   @override
   void train(List<Float32List> xs) {
     pq.train(xs);

@@ -11,6 +11,7 @@
 /// * `IndexFlat`         — fourcc `IxF2` (L2) / `IxFI` (inner product).
 /// * `IndexIDMap`        — fourcc `IxMp`, wraps a sub-index + `i64` id table.
 /// * `IndexPreTransform` — fourcc `IxPT`, chain of transforms + inner.
+/// * `IndexPQ`           — fourcc `IxPq`, product-quantised flat index.
 /// * `L2NormTransform`   — fourcc `VNrm`, on-sphere normalization
 ///   (FAISS's `NormalizationTransform` with `norm = 2.0`).
 /// * `RandomRotationTransform` — fourcc `rrot`, a `LinearTransform`
@@ -66,6 +67,7 @@ import 'index.dart';
 import 'index_flat.dart';
 import 'index_id_map.dart';
 import 'index_io.dart';
+import 'index_pq.dart';
 import 'index_pre_transform.dart';
 import 'l2_norm_transform.dart';
 import 'pca_transform.dart';
@@ -148,6 +150,19 @@ class FaissFourcc {
   /// epsilon, random_rotation flag, balanced_bins, mean, eigenvalues,
   /// PCAMat) precede the LinearTransform body.
   static final int pca = of('Pcam');
+
+  /// `IxPq` — `IndexPQ`. Layout (after fourcc):
+  ///
+  /// ```
+  ///   [write_index_header]
+  ///   [write_ProductQuantizer]  u64 d, u64 M, u64 nbits,
+  ///                             WVEC f32 centroids  (M*ksub*dsub)
+  ///   WVEC u8 codes             (ntotal * M bytes)
+  ///   i32 search_type           (0 = ST_PQ)
+  ///   u8  encode_signs          (bool, 0 outside polysemous mode)
+  ///   i32 polysemous_ht         (0 outside polysemous mode)
+  /// ```
+  static final int indexPq = of('IxPq');
 }
 
 /// FAISS `MetricType` enum values.
@@ -301,6 +316,78 @@ _VTCommon _readVTCommon(IoReader r) {
   return (dIn: dIn, dOut: dOut, isTrained: isTrained);
 }
 
+/// Serializes a [ProductQuantizer] using FAISS's `write_ProductQuantizer`
+/// layout:
+///
+/// ```
+///   u64 d      (size_t)
+///   u64 M      (size_t)
+///   u64 nbits  (size_t)
+///   WVEC f32 centroids  (M * ksub * dsub floats, row-major
+///                        [sub][c][j])
+/// ```
+///
+/// The order in the centroid blob is `sub` outermost, then `c` (code),
+/// then `j` (sub-dim). Length = `M * (1 << nbits) * (d / M)`.
+void _writeProductQuantizer(IoWriter w, ProductQuantizer pq) {
+  w.writeU64(pq.d);
+  w.writeU64(pq.m);
+  w.writeU64(pq.nbits);
+  final ksub = pq.ksub;
+  final dsub = pq.dsub;
+  final flat = Float32List(pq.m * ksub * dsub);
+  final books = pq.codebooks;
+  for (var sub = 0; sub < pq.m; sub++) {
+    final base = sub * ksub * dsub;
+    for (var c = 0; c < ksub; c++) {
+      final cen = books[sub][c];
+      final off = base + c * dsub;
+      for (var j = 0; j < dsub; j++) {
+        flat[off + j] = cen[j];
+      }
+    }
+  }
+  _writeVectorF32(w, flat);
+}
+
+/// Parses the FAISS `write_ProductQuantizer` payload from [r], returning
+/// a fully-populated [ProductQuantizer]. Only `nbits == 8` is supported
+/// by this port; other values throw [UnsupportedError].
+ProductQuantizer _readProductQuantizer(IoReader r) {
+  final d = r.readU64();
+  final m = r.readU64();
+  final nbits = r.readU64();
+  if (nbits != 8) {
+    throw UnsupportedError(
+      'IxPq: only nbits == 8 is supported by this port, got $nbits.',
+    );
+  }
+  final pq = ProductQuantizer(d: d, m: m);
+  final ksub = pq.ksub;
+  final dsub = pq.dsub;
+  final expected = m * ksub * dsub;
+  final flat = _readVectorF32(r);
+  if (flat.length != expected) {
+    throw FormatException(
+      'IxPq: centroid blob has ${flat.length} floats, expected $expected '
+      'for d=$d, M=$m, nbits=$nbits.',
+    );
+  }
+  final books = pq.codebooks;
+  for (var sub = 0; sub < m; sub++) {
+    final base = sub * ksub * dsub;
+    for (var c = 0; c < ksub; c++) {
+      final cen = books[sub][c];
+      final off = base + c * dsub;
+      for (var j = 0; j < dsub; j++) {
+        cen[j] = flat[off + j];
+      }
+    }
+  }
+  pq.isTrained = true;
+  return pq;
+}
+
 /// Serializes a [VectorTransform] using FAISS's `write_VectorTransform`
 /// dispatch, keyed on the concrete Dart type. The exact layout mirrors
 /// `faiss/impl/index_write.cpp` verbatim: subtype fourcc + subtype
@@ -323,12 +410,7 @@ void writeFaissTransform(IoWriter w, VectorTransform vt) {
     //   [LinearTransform body]  have_bias=0, A=rotation, b=[]
     //   [common VT tail]
     w.writeU32(FaissFourcc.randomRotation);
-    _writeLTBody(
-      w,
-      haveBias: false,
-      a: vt.rotation,
-      b: Float32List(0),
-    );
+    _writeLTBody(w, haveBias: false, a: vt.rotation, b: Float32List(0));
     _writeVTCommon(w, vt);
     return;
   }
@@ -528,6 +610,25 @@ void writeFaissIndex(IoWriter w, Index x) {
     writeFaissIndex(w, x.inner);
     return;
   }
+  if (x is IndexPQ) {
+    // IxPq layout:
+    //   fourcc('IxPq')
+    //   write_index_header(this)
+    //   write_ProductQuantizer(pq)
+    //   WVEC u8 codes             (ntotal * M bytes)
+    //   i32 search_type = 0       (ST_PQ; polysemous variants not
+    //                              supported)
+    //   u8  encode_signs = 0
+    //   i32 polysemous_ht = 0
+    w.writeU32(FaissFourcc.indexPq);
+    _writeHeader(w, x);
+    _writeProductQuantizer(w, x.pq);
+    _writeVectorU8(w, x.codes);
+    w.writeI32(0);
+    w.writeU8(0);
+    w.writeI32(0);
+    return;
+  }
   throw UnsupportedError(
     'writeFaissIndex: ${x.runtimeType} not yet supported.',
   );
@@ -623,6 +724,52 @@ Index readFaissIndex(IoReader r) {
     final pt = IndexPreTransform(chain: chain, inner: inner);
     pt.ntotal = inner.ntotal;
     return pt;
+  }
+  if (tag == FaissFourcc.indexPq) {
+    // IxPq: header, PQ, codes, search_type, encode_signs, polysemous_ht.
+    final h = _readHeader(r);
+    final pq = _readProductQuantizer(r);
+    if (pq.d != h.d) {
+      throw FormatException(
+        'IxPq: PQ d (${pq.d}) != header d (${h.d})',
+      );
+    }
+    final codes = _readVectorU8(r);
+    final expected = h.ntotal * pq.m;
+    if (codes.length != expected) {
+      throw FormatException(
+        'IxPq: codes length ${codes.length} != ntotal*M = $expected',
+      );
+    }
+    final searchType = r.readI32();
+    final encodeSigns = r.readU8();
+    final polysemousHt = r.readI32();
+    if (searchType != 0 || encodeSigns != 0 || polysemousHt != 0) {
+      throw UnsupportedError(
+        'IxPq: polysemous variants not supported '
+        '(search_type=$searchType, encode_signs=$encodeSigns, '
+        'polysemous_ht=$polysemousHt).',
+      );
+    }
+    final idx = IndexPQ(d: h.d, m: pq.m, metric: h.metric);
+    // Splice the trained PQ centroids into the new IndexPQ's internal
+    // ProductQuantizer. We can't just assign `idx.pq = pq` because
+    // it's a final field; instead, copy the codebook floats over.
+    final books = idx.pq.codebooks;
+    final srcBooks = pq.codebooks;
+    for (var sub = 0; sub < pq.m; sub++) {
+      for (var c = 0; c < pq.ksub; c++) {
+        final src = srcBooks[sub][c];
+        final dst = books[sub][c];
+        for (var j = 0; j < pq.dsub; j++) {
+          dst[j] = src[j];
+        }
+      }
+    }
+    idx.pq.isTrained = true;
+    idx.isTrained = h.isTrained;
+    idx.ioSetCodes(codes, h.ntotal);
+    return idx;
   }
   throw FormatException(
     'Unsupported FAISS fourcc "${FaissFourcc.toStr(tag)}" '

@@ -1495,8 +1495,7 @@ void main() {
 
     final w = IoWriter();
     writeFaissTransform(w, pca);
-    final loaded =
-        readFaissTransform(IoReader(w.takeBytes())) as PCATransform;
+    final loaded = readFaissTransform(IoReader(w.takeBytes())) as PCATransform;
 
     expect(loaded.dIn, equals(d));
     expect(loaded.dOut, equals(4));
@@ -1540,5 +1539,132 @@ void main() {
         expect(after.ids[qi][j], equals(before.ids[qi][j]));
       }
     }
+  });
+
+  test('writeFaissIndex emits IxPq fourcc and correct header bytes', () {
+    // Verify the tag + header without validating the ksub=256 codebook
+    // blob (2048 bytes for m=1, d=2). Round-trip tests below assert
+    // correctness of the payload.
+    final pq = IndexPQ(d: d, m: 4, seed: 42)..train(xs);
+    final bytes = writeFaissIndexToBytes(pq);
+    // First 4 bytes = fourcc 'IxPq'.
+    final tag =
+        bytes[0] | (bytes[1] << 8) | (bytes[2] << 16) | (bytes[3] << 24);
+    expect(FaissFourcc.toStr(tag), equals('IxPq'));
+
+    // Header at offset 4:
+    //   i32 d = 16, i64 ntotal = 0, 2*i64 dummy=1<<20, u8 is_trained,
+    //   i32 metric_type = 1 (L2)
+    // Byte 4..7 = d.
+    final dRead = bytes[4] | (bytes[5] << 8) | (bytes[6] << 16) |
+        (bytes[7] << 24);
+    expect(dRead, equals(d));
+    // is_trained at offset 4 + 4 + 8 + 8 + 8 = 32.
+    expect(bytes[32], equals(1));
+    // metric type at offset 33..36 = 1 for L2.
+    expect(bytes[33], equals(1));
+  });
+
+  test('FAISS interop round-trips a trained IndexPQ (L2)', () {
+    final pq = IndexPQ(d: d, m: 4, seed: 42)..train(xs);
+    pq.add(xs);
+    final before = pq.search(queries, k);
+
+    final bytes = writeFaissIndexToBytes(pq);
+    final loaded = readFaissIndexFromBytes(bytes) as IndexPQ;
+
+    expect(loaded.d, equals(d));
+    expect(loaded.m, equals(4));
+    expect(loaded.pq.nbits, equals(8));
+    expect(loaded.metric, equals(Metric.l2));
+    expect(loaded.isTrained, isTrue);
+    expect(loaded.ntotal, equals(xs.length));
+
+    // Codebook byte-equality.
+    for (var sub = 0; sub < pq.m; sub++) {
+      for (var c = 0; c < pq.pq.ksub; c++) {
+        for (var j = 0; j < pq.pq.dsub; j++) {
+          expect(
+            loaded.pq.codebooks[sub][c][j],
+            equals(pq.pq.codebooks[sub][c][j]),
+          );
+        }
+      }
+    }
+    // Encoded codes byte-equality.
+    expect(loaded.codes, equals(pq.codes));
+
+    // Search results identical.
+    final after = loaded.search(queries, k);
+    for (var qi = 0; qi < nq; qi++) {
+      for (var j = 0; j < k; j++) {
+        expect(after.ids[qi][j], equals(before.ids[qi][j]));
+      }
+    }
+  });
+
+  test('FAISS interop round-trips a trained IndexPQ (inner product)', () {
+    final pq = IndexPQ(d: d, m: 4, metric: Metric.innerProduct, seed: 7)
+      ..train(xs);
+    pq.add(xs);
+    final before = pq.search(queries, k);
+
+    final bytes = writeFaissIndexToBytes(pq);
+    final tag =
+        bytes[0] | (bytes[1] << 8) | (bytes[2] << 16) | (bytes[3] << 24);
+    expect(FaissFourcc.toStr(tag), equals('IxPq'));
+
+    final loaded = readFaissIndexFromBytes(bytes) as IndexPQ;
+    expect(loaded.metric, equals(Metric.innerProduct));
+
+    final after = loaded.search(queries, k);
+    for (var qi = 0; qi < nq; qi++) {
+      for (var j = 0; j < k; j++) {
+        expect(after.ids[qi][j], equals(before.ids[qi][j]));
+      }
+    }
+  });
+
+  test('FAISS interop round-trips IndexPreTransform([PCA], IndexPQ)', () {
+    // Chain PCA reduction then PQ compression.
+    final pca = PCATransform(dIn: d, dOut: 8)..train(xs);
+    final inner = IndexPQ(d: 8, m: 4, seed: 99);
+    // Train the PQ on projected data.
+    inner.train(pca.apply(xs));
+    final pt = IndexPreTransform(chain: [pca], inner: inner);
+    pt.add(xs);
+    final before = pt.search(queries, k);
+
+    final bytes = writeFaissIndexToBytes(pt);
+    final loaded = readFaissIndexFromBytes(bytes) as IndexPreTransform;
+
+    expect(loaded.chain.length, equals(1));
+    expect(loaded.chain[0], isA<PCATransform>());
+    expect(loaded.inner, isA<IndexPQ>());
+    expect(loaded.ntotal, equals(xs.length));
+
+    final after = loaded.search(queries, k);
+    for (var qi = 0; qi < nq; qi++) {
+      for (var j = 0; j < k; j++) {
+        expect(after.ids[qi][j], equals(before.ids[qi][j]));
+      }
+    }
+  });
+
+  test('readFaissIndex rejects IxPq with polysemous fields set', () {
+    // Craft a payload with valid header + PQ + codes, then non-zero
+    // polysemous_ht. Reader should throw UnsupportedError.
+    final pq = IndexPQ(d: d, m: 4, seed: 1)..train(xs);
+    // Write a valid blob first.
+    final valid = writeFaissIndexToBytes(pq);
+    // The polysemous_ht is the last 4 bytes.
+    valid[valid.length - 1] = 0x00;
+    valid[valid.length - 2] = 0x00;
+    valid[valid.length - 3] = 0x00;
+    valid[valid.length - 4] = 0x2A; // 42
+    expect(
+      () => readFaissIndexFromBytes(valid),
+      throwsA(isA<UnsupportedError>()),
+    );
   });
 }
