@@ -58,8 +58,7 @@ class IndexBinaryFlat extends IndexBinary {
   /// Read-only view of the packed code region actually in use
   /// (`ntotal * codeSize` bytes). Used by FAISS-format interop to emit
   /// the `xb` payload without copying.
-  Uint8List get codes =>
-      Uint8List.sublistView(_storage, 0, ntotal * codeSize);
+  Uint8List get codes => Uint8List.sublistView(_storage, 0, ntotal * codeSize);
 
   /// I/O hook: replace the packed code buffer with [newCodes] and set
   /// `ntotal = newNtotal`. Used by FAISS-format readers to rehydrate

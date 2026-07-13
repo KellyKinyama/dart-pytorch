@@ -2259,8 +2259,7 @@ void main() {
     final before = bf.search(queries, k);
 
     final bytes = writeFaissBinaryIndexToBytes(bf);
-    final loaded =
-        readFaissBinaryIndexFromBytes(bytes) as IndexBinaryFlat;
+    final loaded = readFaissBinaryIndexFromBytes(bytes) as IndexBinaryFlat;
 
     expect(loaded.d, equals(codeSize * 8));
     expect(loaded.codeSize, equals(codeSize));
@@ -2282,8 +2281,7 @@ void main() {
   test('FAISS interop round-trips an empty IndexBinaryFlat', () {
     final bf = IndexBinaryFlat(8);
     final bytes = writeFaissBinaryIndexToBytes(bf);
-    final loaded =
-        readFaissBinaryIndexFromBytes(bytes) as IndexBinaryFlat;
+    final loaded = readFaissBinaryIndexFromBytes(bytes) as IndexBinaryFlat;
     expect(loaded.ntotal, equals(0));
     expect(loaded.codeSize, equals(8));
     expect(loaded.d, equals(64));
@@ -2291,10 +2289,11 @@ void main() {
   });
 
   test('writeFaissBinaryIndex rejects unsupported binary index types', () {
-    // IndexBinaryIVF (IBwF) is not yet wired up.
-    final ivf = IndexBinaryIVF(codeSize: 8, nlist: 4);
+    // Simulate an out-of-port IndexBinary subtype (e.g. IndexBinaryHNSW,
+    // IndexBinaryIDMap) that this port doesn't wire up yet.
+    final foreign = _ForeignBinaryIndex(8);
     expect(
-      () => writeFaissBinaryIndexToBytes(ivf),
+      () => writeFaissBinaryIndexToBytes(foreign),
       throwsA(isA<UnsupportedError>()),
     );
   });
@@ -2324,4 +2323,123 @@ void main() {
       ),
     );
   });
+
+  test('writeFaissBinaryIndex emits IBwF fourcc and correct header bytes', () {
+    final codeSize = 8;
+    final rng = math.Random(2);
+    final codes = List<Uint8List>.generate(64, (_) {
+      final c = Uint8List(codeSize);
+      for (var j = 0; j < codeSize; j++) {
+        c[j] = rng.nextInt(256);
+      }
+      return c;
+    });
+    final ivf = IndexBinaryIVF(codeSize: codeSize, nlist: 4, nprobe: 2)
+      ..train(codes)
+      ..add(codes);
+    final bytes = writeFaissBinaryIndexToBytes(ivf);
+    final tag =
+        bytes[0] | (bytes[1] << 8) | (bytes[2] << 16) | (bytes[3] << 24);
+    expect(FaissFourcc.toStr(tag), equals('IBwF'));
+    // Binary header: i32 d, i32 code_size at offsets 4, 8.
+    final dRead =
+        bytes[4] | (bytes[5] << 8) | (bytes[6] << 16) | (bytes[7] << 24);
+    expect(dRead, equals(codeSize * 8));
+    final csRead =
+        bytes[8] | (bytes[9] << 8) | (bytes[10] << 16) | (bytes[11] << 24);
+    expect(csRead, equals(codeSize));
+    // ntotal (i64 at 12), is_trained (u8 at 20), metric (i32 at 21).
+    expect(bytes[12], equals(64));
+    expect(bytes[20], equals(1));
+    expect(bytes[21], equals(1)); // METRIC_L2
+  });
+
+  test('FAISS interop round-trips IndexBinaryIVF (nprobe=nlist)', () {
+    final codeSize = 8;
+    final rng = math.Random(11);
+    final codes = List<Uint8List>.generate(200, (_) {
+      final c = Uint8List(codeSize);
+      for (var j = 0; j < codeSize; j++) {
+        c[j] = rng.nextInt(256);
+      }
+      return c;
+    });
+    final queries = List<Uint8List>.generate(nq, (_) {
+      final c = Uint8List(codeSize);
+      for (var j = 0; j < codeSize; j++) {
+        c[j] = rng.nextInt(256);
+      }
+      return c;
+    });
+    final ivf = IndexBinaryIVF(codeSize: codeSize, nlist: 8, nprobe: 8)
+      ..train(codes)
+      ..add(codes);
+    final before = ivf.search(queries, k);
+
+    final bytes = writeFaissBinaryIndexToBytes(ivf);
+    final loaded = readFaissBinaryIndexFromBytes(bytes) as IndexBinaryIVF;
+
+    expect(loaded.codeSize, equals(codeSize));
+    expect(loaded.d, equals(codeSize * 8));
+    expect(loaded.nlist, equals(8));
+    expect(loaded.nprobe, equals(8));
+    expect(loaded.ntotal, equals(codes.length));
+    expect(loaded.isTrained, isTrue);
+
+    // Coarse quantizer centroids preserved byte-for-byte.
+    expect(loaded.quantizer.codes, equals(ivf.quantizer.codes));
+
+    // Inverted lists preserved cell-by-cell.
+    for (var c = 0; c < ivf.nlist; c++) {
+      expect(loaded.invListIds(c), equals(ivf.invListIds(c)));
+      expect(loaded.invListCodes(c), equals(ivf.invListCodes(c)));
+    }
+
+    // Search results identical.
+    final after = loaded.search(queries, k);
+    for (var qi = 0; qi < nq; qi++) {
+      for (var j = 0; j < k; j++) {
+        expect(after.ids[qi][j], equals(before.ids[qi][j]));
+      }
+    }
+  });
+
+  test('FAISS interop round-trips an empty IndexBinaryIVF (train, no add)', () {
+    final codeSize = 8;
+    final rng = math.Random(3);
+    final codes = List<Uint8List>.generate(64, (_) {
+      final c = Uint8List(codeSize);
+      for (var j = 0; j < codeSize; j++) {
+        c[j] = rng.nextInt(256);
+      }
+      return c;
+    });
+    final ivf = IndexBinaryIVF(codeSize: codeSize, nlist: 4)..train(codes);
+    final bytes = writeFaissBinaryIndexToBytes(ivf);
+    final loaded = readFaissBinaryIndexFromBytes(bytes) as IndexBinaryIVF;
+    expect(loaded.ntotal, equals(0));
+    expect(loaded.nlist, equals(4));
+    expect(loaded.quantizer.ntotal, equals(4));
+    expect(loaded.quantizer.codes, equals(ivf.quantizer.codes));
+    for (var c = 0; c < ivf.nlist; c++) {
+      expect(loaded.listSize(c), equals(0));
+    }
+  });
+}
+
+/// Stub `IndexBinary` subtype used only by the "rejects unsupported"
+/// test. Its runtimeType is neither [IndexBinaryFlat] nor
+/// [IndexBinaryIVF], so the dispatch in [writeFaissBinaryIndex] falls
+/// through to the [UnsupportedError] branch.
+class _ForeignBinaryIndex extends IndexBinary {
+  _ForeignBinaryIndex(super.codeSize);
+
+  @override
+  void add(List<Uint8List> xs) {}
+
+  @override
+  SearchResult search(List<Uint8List> queries, int k) => SearchResult(
+    List<Float32List>.generate(queries.length, (_) => Float32List(k)),
+    List<Int32List>.generate(queries.length, (_) => Int32List(k)),
+  );
 }

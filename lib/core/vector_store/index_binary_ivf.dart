@@ -46,6 +46,55 @@ class IndexBinaryIVF extends IndexBinary {
   /// Read-only view: number of vectors in cell [listNo].
   int listSize(int listNo) => _invSize[listNo];
 
+  /// Read-only view of the packed code bytes for cell [listNo]
+  /// (`listSize(listNo) * codeSize` bytes). Used by FAISS-format
+  /// interop to emit `ilar` cell payloads without copying.
+  Uint8List invListCodes(int listNo) => Uint8List.sublistView(
+    _invCodes[listNo],
+    0,
+    _invSize[listNo] * codeSize,
+  );
+
+  /// Read-only copy of the id list for cell [listNo]
+  /// (`listSize(listNo)` entries). Returns a fresh list to prevent
+  /// callers from mutating internal state.
+  List<int> invListIds(int listNo) =>
+      _invLists[listNo].sublist(0, _invSize[listNo]);
+
+  /// I/O hook: bulk-replace per-cell ids + packed codes and set
+  /// `ntotal = newNtotal`. Used by FAISS-format readers to rehydrate
+  /// an `IndexBinaryIVF` in one shot.
+  ///
+  /// * `newIds.length == newCodes.length == nlist`.
+  /// * `newCodes[c].length == newIds[c].length * codeSize`.
+  void ioSetInvertedLists(
+    List<List<int>> newIds,
+    List<Uint8List> newCodes,
+    int newNtotal,
+  ) {
+    if (newIds.length != nlist || newCodes.length != nlist) {
+      throw ArgumentError(
+        'ioSetInvertedLists: got ${newIds.length}/${newCodes.length} '
+        'lists, expected nlist=$nlist',
+      );
+    }
+    for (var c = 0; c < nlist; c++) {
+      final ids = newIds[c];
+      final codes = newCodes[c];
+      if (codes.length != ids.length * codeSize) {
+        throw ArgumentError(
+          'ioSetInvertedLists: cell $c has ${codes.length} code bytes '
+          'but ${ids.length} ids (expected ${ids.length * codeSize} = '
+          'ids * codeSize)',
+        );
+      }
+      _invLists[c] = List<int>.of(ids);
+      _invCodes[c] = Uint8List.fromList(codes);
+      _invSize[c] = ids.length;
+    }
+    ntotal = newNtotal;
+  }
+
   @override
   void train(List<Uint8List> xs) {
     if (xs.length < nlist) {
@@ -195,7 +244,7 @@ class IndexBinaryIVF extends IndexBinary {
       final have = _invSize[c];
       final needed = (have + 1) * codeSize;
       if (needed > _invCodes[c].length) {
-        var newCap = _invCodes[c].length == 0
+        var newCap = _invCodes[c].isEmpty
             ? 4 * codeSize
             : _invCodes[c].length;
         while (newCap < needed) {

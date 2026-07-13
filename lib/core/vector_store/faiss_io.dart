@@ -28,6 +28,10 @@
 ///   index over binary vectors. Serialized/parsed via the parallel
 ///   [writeFaissBinaryIndex] / [readFaissBinaryIndex] entry points
 ///   because [IndexBinary] is a separate class hierarchy from [Index].
+/// * `IndexBinaryIVF`    — fourcc `IBwF`, cell-probe binary IVF with an
+///   `IndexBinaryFlat` coarse quantizer and per-cell packed code
+///   storage (same `ilar` container as the float IVF families, with
+///   `code_size` in bytes rather than fp32 dims).
 /// * `L2NormTransform`   — fourcc `VNrm`, on-sphere normalization
 ///   (FAISS's `NormalizationTransform` with `norm = 2.0`).
 /// * `RandomRotationTransform` — fourcc `rrot`, a `LinearTransform`
@@ -82,6 +86,7 @@ import 'dart:typed_data';
 import 'index.dart';
 import 'index_binary.dart';
 import 'index_binary_flat.dart';
+import 'index_binary_ivf.dart';
 import 'index_flat.dart';
 import 'index_id_map.dart';
 import 'index_io.dart';
@@ -309,6 +314,30 @@ class FaissFourcc {
   /// always emits `metric_type = 1` and accepts any of the port's
   /// supported float metric codes on read.
   static final int indexBinaryFlat = of('IBxF');
+
+  /// `IBwF` — `IndexBinaryIVF`. Layout (after fourcc):
+  ///
+  /// ```
+  ///   [write_binary_ivf_header]:
+  ///     [write_index_binary_header]
+  ///     u64 nlist
+  ///     u64 nprobe
+  ///     write_index_binary(quantizer)   (recursive; IBxF for this port)
+  ///     [write_direct_map]:
+  ///       u8   type (0 = NoMap)
+  ///       WVEC i64 array                (empty for NoMap)
+  ///   [write_InvertedLists]:
+  ///     u32 fourcc('ilar')
+  ///     u64 nlist
+  ///     u64 code_size                   (bytes per binary vector)
+  ///     u32 list_type fourcc ('full' or 'sprs')
+  ///       'full': WVEC u64 sizes[nlist]
+  ///       'sprs': WVEC u64 pairs (flat [cell_idx, size, ...] for non-empty)
+  ///     per non-empty cell:
+  ///       (n * code_size) raw code bytes
+  ///       (n * 8)         raw idx_t (int64) ids
+  /// ```
+  static final int indexBinaryIvf = of('IBwF');
 }
 
 /// FAISS `MetricType` enum values.
@@ -1754,6 +1783,190 @@ _BinaryHeader _readBinaryHeader(IoReader r) {
   );
 }
 
+/// Serializes an [IndexBinaryIVF]'s IVF header block, mirroring
+/// FAISS's `write_binary_ivf_header`: the binary-index common header,
+/// then `nlist`, `nprobe`, the recursive quantizer, then a `NoMap`
+/// direct-map block.
+void _writeBinaryIvfHeader(IoWriter w, IndexBinaryIVF ivf) {
+  _writeBinaryHeader(w, ivf);
+  w.writeU64(ivf.nlist);
+  w.writeU64(ivf.nprobe);
+  writeFaissBinaryIndex(w, ivf.quantizer);
+  _writeDirectMapNone(w);
+}
+
+/// Parses FAISS's `write_binary_ivf_header` block. Returns the common
+/// header plus the extracted `nlist`, `nprobe`, and coarse
+/// `quantizer` (which must decode to [IndexBinaryFlat] for our port).
+({
+  ({int d, int codeSize, int ntotal, bool isTrained, int metric}) h,
+  int nlist,
+  int nprobe,
+  IndexBinaryFlat quantizer,
+})
+_readBinaryIvfHeader(IoReader r) {
+  final h = _readBinaryHeader(r);
+  final nlist = r.readU64();
+  final nprobe = r.readU64();
+  final q = readFaissBinaryIndex(r);
+  if (q is! IndexBinaryFlat) {
+    throw FormatException(
+      'Binary IVF header: quantizer is ${q.runtimeType}, '
+      'expected IndexBinaryFlat',
+    );
+  }
+  if (q.codeSize != h.codeSize) {
+    throw FormatException(
+      'Binary IVF header: quantizer codeSize=${q.codeSize} disagrees '
+      'with header codeSize=${h.codeSize}',
+    );
+  }
+  if (q.ntotal != nlist) {
+    throw FormatException(
+      'Binary IVF header: quantizer has ${q.ntotal} centroids, '
+      'header nlist=$nlist',
+    );
+  }
+  _readDirectMap(r);
+  return (h: h, nlist: nlist, nprobe: nprobe, quantizer: q);
+}
+
+/// Binary IVF variant of [_writeArrayInvertedLists]. Same `ilar`
+/// wire format as the float families, but the code source is the
+/// port's per-cell `Uint8List` bytes (`n * codeSize`) instead of a
+/// flat fp32 storage.
+void _writeArrayInvertedListsBinary(IoWriter w, IndexBinaryIVF ivf) {
+  final codeSize = ivf.codeSize;
+  w.writeU32(FaissFourcc.invListsArray);
+  w.writeU64(ivf.nlist);
+  w.writeU64(codeSize);
+
+  var nNon0 = 0;
+  for (var i = 0; i < ivf.nlist; i++) {
+    if (ivf.listSize(i) > 0) nNon0++;
+  }
+  if (nNon0 > ivf.nlist ~/ 2) {
+    w.writeU32(FaissFourcc.invListsFull);
+    final sizes = List<int>.generate(ivf.nlist, ivf.listSize);
+    _writeVectorI64(w, sizes);
+  } else {
+    w.writeU32(FaissFourcc.invListsSparse);
+    final pairs = <int>[];
+    for (var i = 0; i < ivf.nlist; i++) {
+      final n = ivf.listSize(i);
+      if (n > 0) {
+        pairs.add(i);
+        pairs.add(n);
+      }
+    }
+    _writeVectorI64(w, pairs);
+  }
+
+  for (var i = 0; i < ivf.nlist; i++) {
+    final n = ivf.listSize(i);
+    if (n == 0) continue;
+    w.writeBytes(ivf.invListCodes(i));
+    for (final id in ivf.invListIds(i)) {
+      w.writeI64(id);
+    }
+  }
+}
+
+/// Binary IVF variant of [_readArrayInvertedLists]. Returns per-cell
+/// ids and per-cell packed code buffers, matching
+/// [IndexBinaryIVF.ioSetInvertedLists]'s expectations. Asserts
+/// contiguous ids in `[0, ntotal)`.
+({List<List<int>> ids, List<Uint8List> codes}) _readArrayInvertedListsBinary(
+  IoReader r,
+  int codeSize,
+  int nlist,
+  int ntotal,
+) {
+  final tag = r.readU32();
+  if (tag != FaissFourcc.invListsArray) {
+    throw UnsupportedError(
+      'IBwF: only ilar InvertedLists supported, got fourcc '
+      '"${FaissFourcc.toStr(tag)}"',
+    );
+  }
+  final storedNlist = r.readU64();
+  final storedCodeSize = r.readU64();
+  if (storedNlist != nlist) {
+    throw FormatException(
+      'ilar: nlist mismatch (payload=$storedNlist, header=$nlist)',
+    );
+  }
+  if (storedCodeSize != codeSize) {
+    throw FormatException(
+      'ilar: code_size $storedCodeSize != $codeSize for IBwF',
+    );
+  }
+
+  final sizes = List<int>.filled(nlist, 0);
+  final listType = r.readU32();
+  if (listType == FaissFourcc.invListsFull) {
+    final xs = _readVectorI64(r);
+    if (xs.length != nlist) {
+      throw FormatException(
+        'ilar full: sizes length ${xs.length} != nlist $nlist',
+      );
+    }
+    for (var i = 0; i < nlist; i++) {
+      sizes[i] = xs[i];
+    }
+  } else if (listType == FaissFourcc.invListsSparse) {
+    final pairs = _readVectorI64(r);
+    if (pairs.length.isOdd) {
+      throw FormatException(
+        'ilar sprs: pairs length ${pairs.length} is not even',
+      );
+    }
+    for (var j = 0; j < pairs.length; j += 2) {
+      final idx = pairs[j];
+      if (idx < 0 || idx >= nlist) {
+        throw FormatException('ilar sprs: cell idx $idx out of [0, $nlist)');
+      }
+      sizes[idx] = pairs[j + 1];
+    }
+  } else {
+    throw UnsupportedError(
+      'ilar: list_type "${FaissFourcc.toStr(listType)}" not supported',
+    );
+  }
+
+  var sum = 0;
+  for (final s in sizes) {
+    sum += s;
+  }
+  if (sum != ntotal) {
+    throw FormatException(
+      'ilar: sum of sizes ($sum) != header ntotal ($ntotal)',
+    );
+  }
+
+  final ids = List<List<int>>.generate(nlist, (_) => <int>[]);
+  final codes = List<Uint8List>.generate(nlist, (_) => Uint8List(0));
+  for (var i = 0; i < nlist; i++) {
+    final n = sizes[i];
+    if (n == 0) continue;
+    codes[i] = r.readBytes(n * codeSize);
+    final cellIds = <int>[];
+    for (var j = 0; j < n; j++) {
+      final id = r.readI64();
+      if (id < 0 || id >= ntotal) {
+        throw UnsupportedError(
+          'IBwF: ids must be contiguous in [0, ntotal); got id=$id '
+          '(ntotal=$ntotal). Non-contiguous FAISS blobs are not yet '
+          'supported.',
+        );
+      }
+      cellIds.add(id);
+    }
+    ids[i] = cellIds;
+  }
+  return (ids: ids, codes: codes);
+}
+
 /// Serializes a binary index [x] in FAISS's on-disk format.
 ///
 /// Parallel to [writeFaissIndex] but for the `IndexBinary` hierarchy,
@@ -1768,6 +1981,13 @@ void writeFaissBinaryIndex(IoWriter w, IndexBinary x) {
     w.writeU32(FaissFourcc.indexBinaryFlat);
     _writeBinaryHeader(w, x);
     _writeVectorU8(w, x.codes);
+    return;
+  }
+  if (x is IndexBinaryIVF) {
+    // IBwF layout: see [FaissFourcc.indexBinaryIvf] for the full spec.
+    w.writeU32(FaissFourcc.indexBinaryIvf);
+    _writeBinaryIvfHeader(w, x);
+    _writeArrayInvertedListsBinary(w, x);
     return;
   }
   throw UnsupportedError(
@@ -1797,6 +2017,33 @@ IndexBinary readFaissBinaryIndex(IoReader r) {
     final idx = IndexBinaryFlat(h.codeSize);
     idx.ioSetCodes(codes, h.ntotal);
     idx.isTrained = h.isTrained;
+    return idx;
+  }
+  if (tag == FaissFourcc.indexBinaryIvf) {
+    final head = _readBinaryIvfHeader(r);
+    if (head.h.codeSize * 8 != head.h.d) {
+      throw FormatException(
+        'IBwF: header d=${head.h.d} but code_size=${head.h.codeSize} '
+        '(expected d = code_size * 8)',
+      );
+    }
+    final pay = _readArrayInvertedListsBinary(
+      r,
+      head.h.codeSize,
+      head.nlist,
+      head.h.ntotal,
+    );
+    final idx = IndexBinaryIVF(
+      codeSize: head.h.codeSize,
+      nlist: head.nlist,
+      nprobe: head.nprobe,
+    );
+    // Rehydrate the coarse quantizer directly from the payload we just
+    // parsed rather than the freshly-constructed placeholder.
+    idx.quantizer.ioSetCodes(head.quantizer.codes, head.quantizer.ntotal);
+    idx.quantizer.isTrained = head.quantizer.isTrained;
+    idx.isTrained = head.h.isTrained;
+    idx.ioSetInvertedLists(pay.ids, pay.codes, head.h.ntotal);
     return idx;
   }
   throw FormatException(
