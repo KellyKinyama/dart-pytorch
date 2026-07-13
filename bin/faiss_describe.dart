@@ -66,18 +66,24 @@ bool _describe(String path) {
   }
 
   stdout.writeln('$path  (${_humanBytes(size)})');
-  stdout.writeln('  fourcc      : ${info.fourccStr}  '
-      '(0x${info.fourcc.toRadixString(16).padLeft(8, '0')})');
+  stdout.writeln(
+    '  fourcc      : ${info.fourccStr}  '
+    '(0x${info.fourcc.toRadixString(16).padLeft(8, '0')})',
+  );
   stdout.writeln('  kind        : ${_kindLabel(info.kind)}');
 
   if (info.kind == FaissIndexKind.unknown) {
-    stdout.writeln('  (fourcc not in the port\'s known-index table — '
-        'header layout unknown)');
+    stdout.writeln(
+      '  (fourcc not in the port\'s known-index table — '
+      'header layout unknown)',
+    );
     return true;
   }
 
-  stdout.writeln('  d           : ${info.d}'
-      '${info.kind == FaissIndexKind.binaryIndex ? ' bits' : ''}');
+  stdout.writeln(
+    '  d           : ${info.d}'
+    '${info.kind == FaissIndexKind.binaryIndex ? ' bits' : ''}',
+  );
   if (info.codeSize != null) {
     stdout.writeln('  code_size   : ${info.codeSize} bytes/vector');
   }

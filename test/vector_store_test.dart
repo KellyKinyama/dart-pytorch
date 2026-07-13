@@ -2667,6 +2667,94 @@ void main() {
       tmp.deleteSync(recursive: true);
     }
   });
+
+  // -----------------------------------------------------------------
+  // Cross-index conversion helpers.
+  // -----------------------------------------------------------------
+
+  test('reconstructAll returns owned rows equal to the source', () {
+    final flat = IndexFlatL2(d)..add(xs);
+    final rows = reconstructAll(flat);
+    expect(rows, hasLength(xs.length));
+    // Mutating a row must not touch the source storage.
+    rows[0][0] = -12345.0;
+    expect(flat.reconstruct(0)[0], isNot(equals(-12345.0)));
+    // Values should match otherwise.
+    for (var j = 0; j < d; j++) {
+      expect(rows[1][j], equals(xs[1][j]));
+    }
+  });
+
+  test('flatToIvfFlat produces a searchable IVF with matching metric', () {
+    final flat = IndexFlatL2(d)..add(xs);
+    final ivf = flatToIvfFlat(flat, nlist: 16, nprobe: 16);
+    expect(ivf.d, equals(d));
+    expect(ivf.metric, equals(Metric.l2));
+    expect(ivf.nlist, equals(16));
+    expect(ivf.nprobe, equals(16));
+    expect(ivf.ntotal, equals(xs.length));
+    expect(ivf.isTrained, isTrue);
+    // At nprobe == nlist, IVFFlat is equivalent to a brute-force flat
+    // — recall must be 1.0.
+    final r = ivf.search(queries, k);
+    expect(_recall(r, truth, k), equals(1.0));
+  });
+
+  test('flatToIvfPq trains PQ and hits reasonable recall with refine', () {
+    final flat = IndexFlatL2(d)..add(xs);
+    final ivfpq =
+        flatToIvfPq(flat, m: 4, nbits: 8, nlist: 16, nprobe: 16);
+    expect(ivfpq.m, equals(4));
+    expect(ivfpq.nlist, equals(16));
+    expect(ivfpq.ntotal, equals(xs.length));
+    expect(ivfpq.isTrained, isTrue);
+    // PQ alone loses recall; wrap with refine to recover it.
+    final refined = wrapWithRefine(ivfpq, flat, kFactor: 8);
+    expect(refined.ntotal, equals(xs.length));
+    final r = refined.search(queries, k);
+    expect(_recall(r, truth, k), greaterThan(0.9));
+  });
+
+  test('flatToHnsw builds a graph and returns strong recall', () {
+    final flat = IndexFlatL2(d)..add(xs);
+    final hnsw = flatToHnsw(flat, m: 16, efConstruction: 80, efSearch: 64);
+    expect(hnsw.ntotal, equals(xs.length));
+    expect(hnsw.isTrained, isTrue);
+    final r = hnsw.search(queries, k);
+    expect(_recall(r, truth, k), greaterThan(0.9));
+  });
+
+  test('flatToIvfFlat rejects empty sources', () {
+    expect(
+      () => flatToIvfFlat(IndexFlatL2(d)),
+      throwsA(isA<ArgumentError>()),
+    );
+  });
+
+  test('flatToIvfPq rejects m that does not divide d', () {
+    final flat = IndexFlatL2(d)..add(xs);
+    expect(
+      () => flatToIvfPq(flat, m: 5),
+      throwsA(isA<ArgumentError>()),
+    );
+  });
+
+  test('wrapWithRefine rejects mismatched d / metric / ntotal', () {
+    final flat = IndexFlatL2(d)..add(xs);
+    final ivf = flatToIvfFlat(flat, nlist: 16, nprobe: 16);
+    // Ntotal mismatch: rebuild a smaller flat.
+    final smallFlat = IndexFlatL2(d)..add(xs.sublist(0, xs.length - 1));
+    expect(
+      () => wrapWithRefine(ivf, smallFlat),
+      throwsA(isA<ArgumentError>()),
+    );
+    // Metric mismatch: IP flat vs L2 IVF.
+    final ipFlat = IndexFlatIP(d)..add(xs);
+    expect(
+      () => wrapWithRefine(ivf, ipFlat),
+      throwsA(isA<ArgumentError>()),
+    );
+  });
 }
 
 /// Stub `IndexBinary` subtype used only by the "rejects unsupported"
