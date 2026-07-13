@@ -75,6 +75,7 @@ export 'core/vector_store/index_shards.dart';
 export 'core/vector_store/index_replicas.dart';
 export 'core/vector_store/index_factory.dart';
 export 'core/vector_store/index_io.dart';
+export 'core/vector_store/faiss_io.dart';
 
 /// Trivial sanity function used by the smoke test.
 int calculate() {

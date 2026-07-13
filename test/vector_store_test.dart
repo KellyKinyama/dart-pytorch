@@ -1003,4 +1003,131 @@ void main() {
       }
     }
   });
+
+  // --- FAISS binary-format interop -------------------------------------
+
+  test('FaissFourcc encodes and decodes ASCII tags', () {
+    // 'I'=0x49, 'x'=0x78, 'F'=0x46, '2'=0x32; LE u32 = 0x32467849.
+    expect(FaissFourcc.of('IxF2'), equals(0x32467849));
+    expect(FaissFourcc.toStr(0x32467849), equals('IxF2'));
+    expect(FaissFourcc.toStr(FaissFourcc.flatIP), equals('IxFI'));
+    expect(() => FaissFourcc.of('abc'), throwsArgumentError);
+  });
+
+  test('writeFaissIndex emits the exact FAISS byte layout for IndexFlatL2', () {
+    // Golden fixture: IndexFlatL2(d=2) containing a single vector [3, 4].
+    // Reconstructed by hand from faiss/impl/index_write.cc:
+    //
+    //   fourcc('IxF2')  : 49 78 46 32
+    //   d = 2 (i32)     : 02 00 00 00
+    //   ntotal = 1 (i64): 01 00 00 00 00 00 00 00
+    //   dummy = 1<<20   : 00 00 10 00 00 00 00 00
+    //   dummy = 1<<20   : 00 00 10 00 00 00 00 00
+    //   is_trained (u8) : 01
+    //   metric = 1 (L2) : 01 00 00 00
+    //   codes size = 8  : 08 00 00 00 00 00 00 00
+    //   3.0f 4.0f       : 00 00 40 40 00 00 80 40
+    final expected = Uint8List.fromList(<int>[
+      0x49, 0x78, 0x46, 0x32,
+      0x02, 0x00, 0x00, 0x00,
+      0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00,
+      0x01,
+      0x01, 0x00, 0x00, 0x00,
+      0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x40, 0x40, 0x00, 0x00, 0x80, 0x40,
+    ]);
+    final idx = IndexFlatL2(2)..add([Float32List.fromList([3.0, 4.0])]);
+    final got = writeFaissIndexToBytes(idx);
+    expect(got, equals(expected));
+    expect(got.length, equals(53));
+  });
+
+  test('writeFaissIndex tags IndexFlatIP with fourcc IxFI and metric 0', () {
+    final idx = IndexFlatIP(2)..add([Float32List.fromList([1.0, 0.0])]);
+    final bytes = writeFaissIndexToBytes(idx);
+    // First 4 bytes = fourcc, next 8 = i32 d + first half of i64 ntotal.
+    expect(bytes[0], equals(0x49));
+    expect(bytes[1], equals(0x78));
+    expect(bytes[2], equals(0x46));
+    expect(bytes[3], equals(0x49)); // 'I' — IxFI
+    // metric_type field sits at offset 4+4+8+8+8+1 = 33.
+    expect(bytes[33], equals(0x00));
+    expect(bytes[34], equals(0x00));
+    expect(bytes[35], equals(0x00));
+    expect(bytes[36], equals(0x00));
+  });
+
+  test('readFaissIndex round-trips IndexFlat contents', () {
+    final xs4 = List<Float32List>.generate(
+      12,
+      (i) => Float32List.fromList([
+        i.toDouble(),
+        (i * 2).toDouble(),
+        (-i).toDouble(),
+        (i * i).toDouble(),
+      ]),
+    );
+    for (final metric in [Metric.l2, Metric.innerProduct]) {
+      final idx = IndexFlat(4, metric)..add(xs4);
+      final bytes = writeFaissIndexToBytes(idx);
+      final loaded = readFaissIndexFromBytes(bytes) as IndexFlat;
+      expect(loaded.d, equals(4));
+      expect(loaded.metric, equals(metric));
+      expect(loaded.ntotal, equals(12));
+      for (var i = 0; i < 12; i++) {
+        expect(loaded.reconstruct(i), equals(xs4[i]));
+      }
+      // Search must give identical results.
+      final query = [xs4[3]];
+      final a = idx.search(query, 3);
+      final b = loaded.search(query, 3);
+      expect(b.ids[0], equals(a.ids[0]));
+    }
+  });
+
+  test('readFaissIndex parses a hand-built golden fixture back correctly', () {
+    // Same 53-byte layout as above.
+    final golden = Uint8List.fromList(<int>[
+      0x49, 0x78, 0x46, 0x32,
+      0x02, 0x00, 0x00, 0x00,
+      0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00,
+      0x01,
+      0x01, 0x00, 0x00, 0x00,
+      0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x40, 0x40, 0x00, 0x00, 0x80, 0x40,
+    ]);
+    final idx = readFaissIndexFromBytes(golden) as IndexFlat;
+    expect(idx.d, equals(2));
+    expect(idx.metric, equals(Metric.l2));
+    expect(idx.ntotal, equals(1));
+    expect(idx.isTrained, isTrue);
+    expect(idx.reconstruct(0), equals(Float32List.fromList([3.0, 4.0])));
+  });
+
+  test('readFaissIndex rejects an unknown fourcc with a helpful tag', () {
+    final bytes = Uint8List.fromList(<int>[0x41, 0x42, 0x43, 0x44]);
+    expect(
+      () => readFaissIndexFromBytes(bytes),
+      throwsA(
+        isA<FormatException>().having(
+          (e) => e.message,
+          'message',
+          contains('ABCD'),
+        ),
+      ),
+    );
+  });
+
+  test('writeFaissIndex rejects unsupported index types', () {
+    final ivf = IndexIVFFlat(d: d, nlist: 4)..train(xs);
+    ivf.add(xs);
+    expect(
+      () => writeFaissIndexToBytes(ivf),
+      throwsA(isA<UnsupportedError>()),
+    );
+  });
 }

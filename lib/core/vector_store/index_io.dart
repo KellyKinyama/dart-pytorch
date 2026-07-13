@@ -104,6 +104,17 @@ class IoWriter {
     _b.add(_scratch.buffer.asUint8List(0, 4));
   }
 
+  /// Little-endian int64. Used by FAISS-format interop where the C++
+  /// side declares fields as `idx_t` (= `int64_t`) and `size_t`.
+  void writeI64(int v) {
+    _scratch.setInt64(0, v, Endian.little);
+    _b.add(_scratch.buffer.asUint8List(0, 8));
+  }
+
+  /// Little-endian uint64. Emits the same bit pattern as [writeI64] for
+  /// non-negative values.
+  void writeU64(int v) => writeI64(v);
+
   void writeBytes(Uint8List xs) => _b.add(xs);
 
   /// Bulk-copies a Float32List assuming little-endian host (all
@@ -159,6 +170,18 @@ class IoReader {
     _pos += 4;
     return v;
   }
+
+  /// Little-endian int64. Companion to [IoWriter.writeI64].
+  int readI64() {
+    final v = _view.getInt64(_pos, Endian.little);
+    _pos += 8;
+    return v;
+  }
+
+  /// Little-endian uint64. Dart has no unsigned 64-bit type; values
+  /// above 2^63 - 1 wrap into negative territory. FAISS files never
+  /// encode sizes that large in practice.
+  int readU64() => readI64();
 
   Uint8List readBytes(int n) {
     final out = Uint8List.fromList(

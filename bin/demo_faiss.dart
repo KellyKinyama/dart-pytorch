@@ -528,7 +528,8 @@ void main() {
   }
 
   // IndexFactory — build compositions from a compact string.
-  print('\nIndexFactory:');  {
+  print('\nIndexFactory:');
+  {
     final descriptions = <String>[
       'Flat',
       'IVF64,Flat',
