@@ -1256,10 +1256,22 @@ void main() {
     //   d_out = 3    : 03 00 00 00
     //   norm  = 2.0f : 00 00 00 40
     final expected = Uint8List.fromList(<int>[
-      0x4C, 0x32, 0x6E, 0x54,
-      0x03, 0x00, 0x00, 0x00,
-      0x03, 0x00, 0x00, 0x00,
-      0x00, 0x00, 0x00, 0x40,
+      0x4C,
+      0x32,
+      0x6E,
+      0x54,
+      0x03,
+      0x00,
+      0x00,
+      0x00,
+      0x03,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x40,
     ]);
     final w = IoWriter();
     writeFaissTransform(w, L2NormTransform(3));
@@ -1302,6 +1314,120 @@ void main() {
     expect(
       () => readFaissTransform(IoReader(bytes)),
       throwsA(isA<FormatException>()),
+    );
+  });
+
+  test('writeFaissTransform emits exact FAISS layout for rrot (identity)', () {
+    // Golden fixture: identity 2x2 rotation.
+    //   fourcc 'rrot': 72 72 6F 74
+    //   d_in  = 2    : 02 00 00 00
+    //   d_out = 2    : 02 00 00 00
+    //   is_trained   : 01
+    //   A.size = 4   : 04 00 00 00 00 00 00 00
+    //   A            : 1 0 0 1 as f32 LE
+    //   b.size = 0   : 00 00 00 00 00 00 00 00
+    //   have_bias    : 00
+    //   is_orthonorm : 01
+    final expected = Uint8List.fromList(<int>[
+      0x72, 0x72, 0x6F, 0x74,
+      0x02, 0x00, 0x00, 0x00,
+      0x02, 0x00, 0x00, 0x00,
+      0x01,
+      0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x80, 0x3F, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0x3F,
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+      0x00,
+      0x01,
+    ]);
+    final rrot = RandomRotationTransform(d: 2, seed: 1);
+    // Overwrite the generated matrix with identity so bytes are
+    // deterministic for the golden compare.
+    rrot.rotation[0] = 1.0;
+    rrot.rotation[1] = 0.0;
+    rrot.rotation[2] = 0.0;
+    rrot.rotation[3] = 1.0;
+
+    final w = IoWriter();
+    writeFaissTransform(w, rrot);
+    final got = w.takeBytes();
+    expect(got, equals(expected));
+    expect(got.length, equals(47));
+  });
+
+  test('FAISS interop round-trips RandomRotationTransform matrix bytes', () {
+    final rrot = RandomRotationTransform(d: d, seed: 7);
+    final input = List<Float32List>.generate(4, (i) {
+      final v = Float32List(d);
+      for (var j = 0; j < d; j++) {
+        v[j] = ((i + 1) * (j + 1)).toDouble();
+      }
+      return v;
+    });
+    final before = rrot.apply(input);
+
+    final w = IoWriter();
+    writeFaissTransform(w, rrot);
+    final loaded =
+        readFaissTransform(IoReader(w.takeBytes())) as RandomRotationTransform;
+
+    expect(loaded.dIn, equals(d));
+    expect(loaded.dOut, equals(d));
+    expect(loaded.isTrained, isTrue);
+    for (var i = 0; i < d * d; i++) {
+      expect(loaded.rotation[i], equals(rrot.rotation[i]));
+    }
+    final after = loaded.apply(input);
+    for (var i = 0; i < input.length; i++) {
+      for (var j = 0; j < d; j++) {
+        expect(after[i][j], closeTo(before[i][j], 1e-6));
+      }
+    }
+  });
+
+  test('FAISS interop round-trips IndexPreTransform([RR, L2Norm], Flat)', () {
+    final pt = IndexPreTransform(
+      chain: [
+        RandomRotationTransform(d: d, seed: 3),
+        L2NormTransform(d),
+      ],
+      inner: IndexFlatL2(d),
+    );
+    pt.add(xs);
+    final before = pt.search(queries, k);
+
+    final bytes = writeFaissIndexToBytes(pt);
+    final loaded = readFaissIndexFromBytes(bytes) as IndexPreTransform;
+
+    expect(loaded.chain.length, equals(2));
+    expect(loaded.chain[0], isA<RandomRotationTransform>());
+    expect(loaded.chain[1], isA<L2NormTransform>());
+    expect(loaded.ntotal, equals(xs.length));
+
+    final after = loaded.search(queries, k);
+    for (var qi = 0; qi < nq; qi++) {
+      for (var j = 0; j < k; j++) {
+        expect(after.ids[qi][j], equals(before.ids[qi][j]));
+      }
+    }
+  });
+
+  test('readFaissTransform rejects rrot with have_bias set', () {
+    // Craft a payload with have_bias = 1 and a non-empty b.
+    final w = IoWriter();
+    w.writeU32(FaissFourcc.randomRotation);
+    w.writeI32(2);
+    w.writeI32(2);
+    w.writeU8(1);
+    w.writeU64(4);
+    w.writeF32List(Float32List.fromList([1.0, 0.0, 0.0, 1.0]));
+    w.writeU64(2);
+    w.writeF32List(Float32List.fromList([0.1, 0.2]));
+    w.writeU8(1); // have_bias
+    w.writeU8(1);
+    expect(
+      () => readFaissTransform(IoReader(w.takeBytes())),
+      throwsA(isA<UnsupportedError>()),
     );
   });
 }

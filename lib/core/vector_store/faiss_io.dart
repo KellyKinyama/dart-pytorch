@@ -12,6 +12,8 @@
 /// * `IndexIDMap`        — fourcc `IxMp`, wraps a sub-index + `i64` id table.
 /// * `IndexPreTransform` — fourcc `IxPT`, chain of transforms + inner.
 /// * `L2NormTransform`   — fourcc `L2nT`, on-sphere normalization.
+/// * `RandomRotationTransform` — fourcc `rrot`, a `LinearTransform`
+///   with an orthonormal `d×d` matrix and no bias.
 ///
 /// Other index families will be added in later batches. Anything
 /// unsupported raises a [FormatException] on read or an
@@ -48,6 +50,7 @@ import 'index_id_map.dart';
 import 'index_io.dart';
 import 'index_pre_transform.dart';
 import 'l2_norm_transform.dart';
+import 'random_rotation_transform.dart';
 import 'vector_transform.dart';
 
 /// FAISS 4-character type tags encoded as little-endian u32.
@@ -96,6 +99,13 @@ class FaissFourcc {
   /// `L2nT` — `NormalizationTransform` with `norm = 2.0` (unit-sphere
   /// projection). Used as one element of an `IxPT` chain.
   static final int l2NormTransform = of('L2nT');
+
+  /// `rrot` — `RandomRotationMatrix`, a `LinearTransform` sub-class
+  /// with an orthonormal `d×d` matrix and no bias. Shares the common
+  /// `write_LinearTransform` tail (A, b, have_bias, is_orthonormal)
+  /// with `PCAm`, `Viqm`, `LTra` etc. — future batches will piggyback
+  /// on the same helper.
+  static final int randomRotation = of('rrot');
 }
 
 /// FAISS `MetricType` enum values.
@@ -183,6 +193,85 @@ List<int> _readVectorI64(IoReader r) {
   return out;
 }
 
+/// FAISS `WRITEVECTOR` for `std::vector<float>`:
+///   size_t element_count (u64 LE)
+///   element_count * 4 raw bytes, each an f32 LE.
+void _writeVectorF32(IoWriter w, Float32List xs) {
+  w.writeU64(xs.length);
+  if (xs.isNotEmpty) {
+    w.writeF32List(xs);
+  }
+}
+
+Float32List _readVectorF32(IoReader r) {
+  final n = r.readU64();
+  return n == 0 ? Float32List(0) : r.readF32List(n);
+}
+
+/// Emits the tail shared by every `LinearTransform` sub-type: the base
+/// `write_LinearTransform` block in `faiss/impl/index_write.cc`.
+///
+/// ```
+///   i32 d_in
+///   i32 d_out
+///   u8  is_trained
+///   WRITEVECTOR A        (d_out * d_in floats, row-major)
+///   WRITEVECTOR b        (d_out floats when have_bias, else 0)
+///   u8  have_bias
+///   u8  is_orthonormal
+/// ```
+void _writeLinearTransformTail(
+  IoWriter w, {
+  required int dIn,
+  required int dOut,
+  required bool isTrained,
+  required Float32List a,
+  required Float32List b,
+  required bool haveBias,
+  required bool isOrthonormal,
+}) {
+  w.writeI32(dIn);
+  w.writeI32(dOut);
+  w.writeU8(isTrained ? 1 : 0);
+  _writeVectorF32(w, a);
+  _writeVectorF32(w, b);
+  w.writeU8(haveBias ? 1 : 0);
+  w.writeU8(isOrthonormal ? 1 : 0);
+}
+
+/// Companion of [_writeLinearTransformTail]. The subtype fourcc has
+/// already been consumed by the caller; any subtype-specific fields
+/// (PCA's eigenvalues etc.) must also be handled by the caller before
+/// this runs.
+typedef _LinearTail = ({
+  int dIn,
+  int dOut,
+  bool isTrained,
+  Float32List a,
+  Float32List b,
+  bool haveBias,
+  bool isOrthonormal,
+});
+
+_LinearTail _readLinearTransformTail(IoReader r) {
+  final dIn = r.readI32();
+  final dOut = r.readI32();
+  final isTrained = r.readU8() != 0;
+  final a = _readVectorF32(r);
+  final b = _readVectorF32(r);
+  final haveBias = r.readU8() != 0;
+  final isOrthonormal = r.readU8() != 0;
+  return (
+    dIn: dIn,
+    dOut: dOut,
+    isTrained: isTrained,
+    a: a,
+    b: b,
+    haveBias: haveBias,
+    isOrthonormal: isOrthonormal,
+  );
+}
+
 /// Serializes a [VectorTransform] using FAISS's `write_VectorTransform`
 /// dispatch, keyed on the concrete Dart type.
 void writeFaissTransform(IoWriter w, VectorTransform vt) {
@@ -196,6 +285,25 @@ void writeFaissTransform(IoWriter w, VectorTransform vt) {
     w.writeI32(vt.dIn);
     w.writeI32(vt.dOut);
     w.writeF32(2.0);
+    return;
+  }
+  if (vt is RandomRotationTransform) {
+    // rrot layout (per faiss/impl/index_write.cc):
+    //   fourcc('rrot')             [no subtype-specific fields]
+    //   write_LinearTransform tail: dIn, dOut, isTrained, A, b,
+    //                               have_bias, is_orthonormal
+    // RandomRotationMatrix has no bias and is always orthonormal.
+    w.writeU32(FaissFourcc.randomRotation);
+    _writeLinearTransformTail(
+      w,
+      dIn: vt.dIn,
+      dOut: vt.dOut,
+      isTrained: vt.isTrained,
+      a: vt.rotation,
+      b: Float32List(0),
+      haveBias: false,
+      isOrthonormal: true,
+    );
     return;
   }
   throw UnsupportedError(
@@ -223,6 +331,38 @@ VectorTransform readFaissTransform(IoReader r) {
       );
     }
     return L2NormTransform(dIn);
+  }
+  if (tag == FaissFourcc.randomRotation) {
+    final t = _readLinearTransformTail(r);
+    if (t.dIn != t.dOut) {
+      throw FormatException(
+        'rrot: d_in (${t.dIn}) != d_out (${t.dOut}); this port only '
+        'supports square (rotation) matrices.',
+      );
+    }
+    if (t.a.length != t.dIn * t.dOut) {
+      throw FormatException(
+        'rrot: A has ${t.a.length} floats, expected ${t.dIn * t.dOut}.',
+      );
+    }
+    if (t.haveBias || t.b.isNotEmpty) {
+      throw UnsupportedError(
+        'rrot: bias is not supported (RandomRotationMatrix has none).',
+      );
+    }
+    if (!t.isOrthonormal) {
+      throw FormatException(
+        'rrot: is_orthonormal flag must be true for RandomRotationMatrix.',
+      );
+    }
+    // Construct then overwrite the internal matrix. `seed = 0` is
+    // harmless — the generated matrix is immediately replaced.
+    final rrot = RandomRotationTransform(d: t.dIn, seed: 0);
+    for (var i = 0; i < t.a.length; i++) {
+      rrot.rotation[i] = t.a[i];
+    }
+    rrot.isTrained = t.isTrained;
+    return rrot;
   }
   throw FormatException(
     'Unsupported FAISS transform fourcc "${FaissFourcc.toStr(tag)}" '
