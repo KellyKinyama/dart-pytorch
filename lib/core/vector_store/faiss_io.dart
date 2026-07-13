@@ -2336,10 +2336,7 @@ FaissIndexInfo probeFaissIndexFile(String path) {
     if (len >= 4) {
       final head = Uint8List(4);
       raf.readIntoSync(head);
-      final tag = head[0] |
-          (head[1] << 8) |
-          (head[2] << 16) |
-          (head[3] << 24);
+      final tag = head[0] | (head[1] << 8) | (head[2] << 16) | (head[3] << 24);
       if (tag == _fourccIxDT) {
         raf.setPositionSync(0);
         final full = Uint8List(len);
@@ -3028,10 +3025,7 @@ void _applyEfSearch(Index index, int value) {
 /// without catching a `FormatException`.
 bool isTunedFaissBlob(Uint8List bytes) {
   if (bytes.length < 4) return false;
-  final tag = bytes[0] |
-      (bytes[1] << 8) |
-      (bytes[2] << 16) |
-      (bytes[3] << 24);
+  final tag = bytes[0] | (bytes[1] << 8) | (bytes[2] << 16) | (bytes[3] << 24);
   return tag == _fourccIxDT;
 }
 
@@ -3122,12 +3116,14 @@ TuningMetadata _readTuningPayload(Uint8List bytes) {
     final label = utf8Decode(labelBytes);
     final recall = r.readF64();
     final meanUs = r.readF64();
-    points.add(OperatingPoint(
-      paramValue: paramValue,
-      paramLabel: label,
-      recall: recall,
-      meanUs: meanUs,
-    ));
+    points.add(
+      OperatingPoint(
+        paramValue: paramValue,
+        paramLabel: label,
+        recall: recall,
+        meanUs: meanUs,
+      ),
+    );
   }
   final chosenPresent = r.readU8();
   int? chosen;

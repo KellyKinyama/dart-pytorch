@@ -345,12 +345,7 @@ class _TuneSpec {
   final String labelPrefix;
   final String paramName;
   final RegExp paramPattern;
-  final Index Function(
-    IndexIVFFlat,
-    IndexIVFPQ,
-    IndexRefineFlat,
-    IndexHNSW,
-  )
+  final Index Function(IndexIVFFlat, IndexIVFPQ, IndexRefineFlat, IndexHNSW)
   pick;
 }
 
