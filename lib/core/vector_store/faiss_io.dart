@@ -2176,7 +2176,8 @@ class FaissIndexInfo {
   final int? codeSize;
 
   @override
-  String toString() => 'FaissIndexInfo(fourcc=$fourccStr, kind=$kind, '
+  String toString() =>
+      'FaissIndexInfo(fourcc=$fourccStr, kind=$kind, '
       'd=$d, ntotal=$ntotal, metric=$metric, isTrained=$isTrained'
       '${codeSize != null ? ", codeSize=$codeSize" : ""})';
 }

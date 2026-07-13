@@ -2558,38 +2558,40 @@ void main() {
     );
   });
 
-  test('probeFaissIndex reports metadata for float indexes without decoding',
-      () {
-    final flat = IndexFlatL2(d)..add(xs);
-    final flatBytes = writeFaissIndexToBytes(flat);
-    final flatInfo = probeFaissIndex(flatBytes);
-    expect(flatInfo.fourccStr, equals('IxF2'));
-    expect(flatInfo.kind, equals(FaissIndexKind.floatIndex));
-    expect(flatInfo.d, equals(d));
-    expect(flatInfo.ntotal, equals(xs.length));
-    expect(flatInfo.metric, equals(Metric.l2));
-    expect(flatInfo.isTrained, isTrue);
-    expect(flatInfo.codeSize, isNull);
+  test(
+    'probeFaissIndex reports metadata for float indexes without decoding',
+    () {
+      final flat = IndexFlatL2(d)..add(xs);
+      final flatBytes = writeFaissIndexToBytes(flat);
+      final flatInfo = probeFaissIndex(flatBytes);
+      expect(flatInfo.fourccStr, equals('IxF2'));
+      expect(flatInfo.kind, equals(FaissIndexKind.floatIndex));
+      expect(flatInfo.d, equals(d));
+      expect(flatInfo.ntotal, equals(xs.length));
+      expect(flatInfo.metric, equals(Metric.l2));
+      expect(flatInfo.isTrained, isTrue);
+      expect(flatInfo.codeSize, isNull);
 
-    final ip = IndexFlatIP(d)..add(xs);
-    final ipInfo = probeFaissIndex(writeFaissIndexToBytes(ip));
-    expect(ipInfo.fourccStr, equals('IxFI'));
-    expect(ipInfo.metric, equals(Metric.innerProduct));
+      final ip = IndexFlatIP(d)..add(xs);
+      final ipInfo = probeFaissIndex(writeFaissIndexToBytes(ip));
+      expect(ipInfo.fourccStr, equals('IxFI'));
+      expect(ipInfo.metric, equals(Metric.innerProduct));
 
-    final hnsw = IndexHNSW(d: d, M: 8, efConstruction: 40, efSearch: 32)
-      ..add(xs);
-    final hnswInfo = probeFaissIndex(writeFaissIndexToBytes(hnsw));
-    expect(hnswInfo.fourccStr, equals('IHNf'));
-    expect(hnswInfo.kind, equals(FaissIndexKind.floatIndex));
-    expect(hnswInfo.d, equals(d));
-    expect(hnswInfo.ntotal, equals(xs.length));
+      final hnsw = IndexHNSW(d: d, M: 8, efConstruction: 40, efSearch: 32)
+        ..add(xs);
+      final hnswInfo = probeFaissIndex(writeFaissIndexToBytes(hnsw));
+      expect(hnswInfo.fourccStr, equals('IHNf'));
+      expect(hnswInfo.kind, equals(FaissIndexKind.floatIndex));
+      expect(hnswInfo.d, equals(d));
+      expect(hnswInfo.ntotal, equals(xs.length));
 
-    final idmap = IndexIDMap(IndexFlatL2(d))
-      ..addWithIds(xs, List<int>.generate(xs.length, (i) => i + 500));
-    final idmapInfo = probeFaissIndex(writeFaissIndexToBytes(idmap));
-    expect(idmapInfo.fourccStr, equals('IxMp'));
-    expect(idmapInfo.ntotal, equals(xs.length));
-  });
+      final idmap = IndexIDMap(IndexFlatL2(d))
+        ..addWithIds(xs, List<int>.generate(xs.length, (i) => i + 500));
+      final idmapInfo = probeFaissIndex(writeFaissIndexToBytes(idmap));
+      expect(idmapInfo.fourccStr, equals('IxMp'));
+      expect(idmapInfo.ntotal, equals(xs.length));
+    },
+  );
 
   test('probeFaissIndex reports metadata for binary indexes', () {
     final codeSize = 8;
