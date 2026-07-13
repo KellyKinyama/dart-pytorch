@@ -370,6 +370,52 @@ void main() {
     print('  post-delete search: min $minHits/${_k} hits across 5 queries');
   }
 
+  // Binary + LSH — Hamming-distance search over bit-packed vectors.
+  print('\nBinary + LSH:');
+  {
+    // (1) IndexBinaryFlat over random 64-bit codes: exact Hamming
+    //     ground truth, self-search should return distance 0.
+    const codeSize = 8;
+    final rngB = math.Random(11);
+    final bcodes = List<Uint8List>.generate(_nb, (_) {
+      final c = Uint8List(codeSize);
+      for (var j = 0; j < codeSize; j++) {
+        c[j] = rngB.nextInt(256);
+      }
+      return c;
+    });
+    final bqueries = bcodes.sublist(0, _nq);
+    final bf = IndexBinaryFlat(codeSize)..add(bcodes);
+    sw = Stopwatch()..start();
+    final br = bf.search(bqueries, _k);
+    sw.stop();
+    var bhit = 0;
+    for (var qi = 0; qi < _nq; qi++) {
+      if (br.ids[qi][0] == qi) bhit++;
+    }
+    print(
+      '  BinaryFlat ${codeSize * 8}-bit   '
+      'search ${(sw.elapsedMicroseconds / _nq).toStringAsFixed(1)} µs/q   '
+      'self top-1 ${((bhit / _nq) * 100).toStringAsFixed(1)} %',
+    );
+
+    // (2) IndexLSH over the float corpus — random-projection
+    //     binarization; recall grows with nbits.
+    for (final nbits in [64, 128, 256, 512]) {
+      final lsh = IndexLSH(d: _d, nbits: nbits)..add(xb);
+      sw = Stopwatch()..start();
+      final r = lsh.search(xq, _k);
+      sw.stop();
+      final recall = _recallAtK(r, truth, _k);
+      print(
+        '  LSH nbits=${nbits.toString().padLeft(3)}      '
+        'search ${(sw.elapsedMicroseconds / _nq).toStringAsFixed(1)} µs/q   '
+        'recall@10 ${(recall * 100).toStringAsFixed(1)} %   '
+        'bytes/vec ${(nbits + 7) ~/ 8}',
+      );
+    }
+  }
+
   print(
     '\nDone. Larger corpora and higher-recall settings tighten the picture.',
   );

@@ -62,8 +62,10 @@ export 'core/vector_store/index_hnsw.dart';
 export 'core/vector_store/index_id_map.dart';
 export 'core/vector_store/index_scalar_quantizer.dart';
 export 'core/vector_store/index_refine_flat.dart';
+export 'core/vector_store/index_binary.dart';
+export 'core/vector_store/index_binary_flat.dart';
+export 'core/vector_store/index_lsh.dart';
 export 'core/vector_store/index_io.dart';
-
 /// Trivial sanity function used by the smoke test.
 int calculate() {
   return 6 * 7;

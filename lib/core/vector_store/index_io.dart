@@ -38,6 +38,9 @@ import 'index_ivf_pq.dart';
 import 'index_pq.dart';
 import 'index_refine_flat.dart';
 import 'index_scalar_quantizer.dart';
+import 'index_binary.dart';
+import 'index_binary_flat.dart';
+import 'index_lsh.dart';
 
 /// Discriminator values distinguishing each supported index type on
 /// disk. Never change existing values — they are the compatibility
@@ -51,6 +54,8 @@ class IndexKind {
   static const int idMap = 0x06;
   static const int scalarQuantizer = 0x07;
   static const int refineFlat = 0x08;
+  static const int lsh = 0x09;
+  static const int binaryFlat = 0x0A;
 }
 
 /// File-format magic and version.
@@ -223,6 +228,9 @@ void writeChild(IoWriter w, Index x) {
   } else if (x is IndexRefineFlat) {
     w.writeU32(IndexKind.refineFlat);
     x.writeTo(w);
+  } else if (x is IndexLSH) {
+    w.writeU32(IndexKind.lsh);
+    x.writeTo(w);
   } else {
     throw ArgumentError('writeIndex: unsupported index type ${x.runtimeType}');
   }
@@ -265,6 +273,8 @@ Index readChild(IoReader r) {
       return IndexScalarQuantizer.readFrom(r);
     case IndexKind.refineFlat:
       return IndexRefineFlat.readFrom(r);
+    case IndexKind.lsh:
+      return IndexLSH.readFrom(r);
     default:
       throw FormatException(
         'readIndex: unknown kind 0x${kind.toRadixString(16)}',
@@ -292,4 +302,56 @@ Future<void> saveIndex(Index x, String path) async {
 Future<Index> loadIndex(String path) async {
   final bytes = await File(path).readAsBytes();
   return readIndex(bytes);
+}
+
+// -----------------------------------------------------------------------------
+// Binary-index dispatchers.
+//
+// `IndexBinary` doesn't extend `Index` (different vector type), so it
+// gets its own top-level codec pair. The wire format is identical
+// (magic + version + kind + payload); only the `kind` values differ,
+// so a caller loading a file always knows which family it belongs to.
+
+/// Serialize an [IndexBinary] to a self-contained byte blob.
+Uint8List writeBinaryIndex(IndexBinary x) {
+  final w = IoWriter();
+  for (final b in _magicBytes) {
+    w.writeU8(b);
+  }
+  w.writeU32(_version);
+  if (x is IndexBinaryFlat) {
+    w.writeU32(IndexKind.binaryFlat);
+    x.writeTo(w);
+  } else {
+    throw ArgumentError(
+      'writeBinaryIndex: unsupported type ${x.runtimeType}',
+    );
+  }
+  return w.takeBytes();
+}
+
+/// Reconstruct an [IndexBinary] from a blob written by [writeBinaryIndex].
+IndexBinary readBinaryIndex(Uint8List bytes) {
+  final r = IoReader(bytes);
+  for (var i = 0; i < _magicBytes.length; i++) {
+    final b = r.readU8();
+    if (b != _magicBytes[i]) {
+      throw FormatException(
+        'readBinaryIndex: bad magic byte at offset $i',
+      );
+    }
+  }
+  final version = r.readU32();
+  if (version != _version) {
+    throw FormatException('readBinaryIndex: unsupported version $version');
+  }
+  final kind = r.readU32();
+  switch (kind) {
+    case IndexKind.binaryFlat:
+      return IndexBinaryFlat.readFrom(r);
+    default:
+      throw FormatException(
+        'readBinaryIndex: kind 0x${kind.toRadixString(16)} is not a binary index',
+      );
+  }
 }

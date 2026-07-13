@@ -348,41 +348,42 @@ void main() {
     }
   });
 
-  test('IndexScalarQuantizer.rangeSearch returns approximately similar hits', () {
-    final sq = IndexScalarQuantizer(d)
-      ..train(xs)
-      ..add(xs);
-    final flat = IndexFlatL2(d)..add(xs);
-    final radius = 0.1;
-    final gold = flat.rangeSearch(queries, radius);
-    final got = sq.rangeSearch(queries, radius);
-    // SQ is quantized so hits aren't identical, but > 70 % of the
-    // exact hits should still be captured with the same radius.
-    var hit = 0;
-    var total = 0;
-    for (var qi = 0; qi < nq; qi++) {
-      final expected = <int>{};
-      for (var j = 0; j < gold.lengthFor(qi); j++) {
-        expected.add(gold.ids[gold.limits[qi] + j]);
+  test(
+    'IndexScalarQuantizer.rangeSearch returns approximately similar hits',
+    () {
+      final sq = IndexScalarQuantizer(d)
+        ..train(xs)
+        ..add(xs);
+      final flat = IndexFlatL2(d)..add(xs);
+      final radius = 0.1;
+      final gold = flat.rangeSearch(queries, radius);
+      final got = sq.rangeSearch(queries, radius);
+      // SQ is quantized so hits aren't identical, but > 70 % of the
+      // exact hits should still be captured with the same radius.
+      var hit = 0;
+      var total = 0;
+      for (var qi = 0; qi < nq; qi++) {
+        final expected = <int>{};
+        for (var j = 0; j < gold.lengthFor(qi); j++) {
+          expected.add(gold.ids[gold.limits[qi] + j]);
+        }
+        final got_ids = <int>{};
+        for (var j = 0; j < got.lengthFor(qi); j++) {
+          got_ids.add(got.ids[got.limits[qi] + j]);
+        }
+        hit += expected.intersection(got_ids).length;
+        total += expected.length;
       }
-      final got_ids = <int>{};
-      for (var j = 0; j < got.lengthFor(qi); j++) {
-        got_ids.add(got.ids[got.limits[qi] + j]);
+      if (total > 0) {
+        expect(hit / total, greaterThan(0.7));
       }
-      hit += expected.intersection(got_ids).length;
-      total += expected.length;
-    }
-    if (total > 0) {
-      expect(hit / total, greaterThan(0.7));
-    }
-  });
+    },
+  );
 
   test('IndexFlat.removeIds compacts and updates ntotal', () {
     final flat = IndexFlatL2(d)..add(xs);
     // Remove every third id.
-    final toRemove = <int>{
-      for (var i = 0; i < n; i += 3) i,
-    };
+    final toRemove = <int>{for (var i = 0; i < n; i += 3) i};
     final expectedKept = n - toRemove.length;
     final removed = flat.removeIds(toRemove);
     expect(removed, equals(toRemove.length));
@@ -440,5 +441,107 @@ void main() {
       () => pq.rangeSearch(queries, 0.1),
       throwsA(isA<UnsupportedError>()),
     );
+  });
+
+  // --- binary + LSH ------------------------------------------------------
+
+  test('IndexBinaryFlat finds itself at Hamming distance 0', () {
+    const codeSize = 8; // 64-bit codes
+    final rng = math.Random(11);
+    final codes = List<Uint8List>.generate(64, (_) {
+      final c = Uint8List(codeSize);
+      for (var j = 0; j < codeSize; j++) {
+        c[j] = rng.nextInt(256);
+      }
+      return c;
+    });
+    final bf = IndexBinaryFlat(codeSize)..add(codes);
+    final r = bf.search(codes.sublist(0, 4), 1);
+    for (var i = 0; i < 4; i++) {
+      expect(r.ids[i][0], equals(i));
+      expect(r.distances[i][0], equals(0.0));
+    }
+  });
+
+  test('IndexBinaryFlat search returns ids ranked by Hamming distance', () {
+    const codeSize = 4; // 32 bits
+    // Build a dataset where distance from the query grows with id.
+    final codes = <Uint8List>[];
+    for (var i = 0; i < 8; i++) {
+      final c = Uint8List(codeSize);
+      // Flip the low i bits of byte 0.
+      c[0] = (1 << i) - 1; // 0, 1, 3, 7, 15, 31, 63, 127
+      codes.add(c);
+    }
+    final bf = IndexBinaryFlat(codeSize)..add(codes);
+    final query = Uint8List(codeSize); // all zero bits → dist == popcount(code)
+    final r = bf.search([query], 3);
+    // popcount(0)=0, popcount(1)=1, popcount(3)=2 — ids 0,1,2 in order.
+    expect(r.ids[0][0], equals(0));
+    expect(r.ids[0][1], equals(1));
+    expect(r.ids[0][2], equals(2));
+    expect(r.distances[0][0], equals(0.0));
+    expect(r.distances[0][1], equals(1.0));
+    expect(r.distances[0][2], equals(2.0));
+  });
+
+  test('IndexBinaryFlat round-trips through bytes', () {
+    const codeSize = 8;
+    final rng = math.Random(3);
+    final codes = List<Uint8List>.generate(50, (_) {
+      final c = Uint8List(codeSize);
+      for (var j = 0; j < codeSize; j++) {
+        c[j] = rng.nextInt(256);
+      }
+      return c;
+    });
+    final bf = IndexBinaryFlat(codeSize)..add(codes);
+    final before = bf.search(codes.sublist(0, 5), 3);
+    final loaded = readBinaryIndex(writeBinaryIndex(bf)) as IndexBinaryFlat;
+    expect(loaded.codeSize, equals(codeSize));
+    expect(loaded.ntotal, equals(50));
+    final after = loaded.search(codes.sublist(0, 5), 3);
+    for (var qi = 0; qi < 5; qi++) {
+      for (var j = 0; j < 3; j++) {
+        expect(after.ids[qi][j], equals(before.ids[qi][j]));
+        expect(after.distances[qi][j], equals(before.distances[qi][j]));
+      }
+    }
+  });
+
+  test('IndexLSH recall grows with nbits', () {
+    // Use enough bits for a reasonable signal on d=16 blob data.
+    final flat = IndexFlatL2(d)..add(xs);
+    final flatTruth = flat.search(queries, k);
+
+    final lsh64 = IndexLSH(d: d, nbits: 64)..add(xs);
+    final r64 = lsh64.search(queries, k);
+    final recall64 = _recall(r64, flatTruth, k);
+
+    final lsh256 = IndexLSH(d: d, nbits: 256)..add(xs);
+    final r256 = lsh256.search(queries, k);
+    final recall256 = _recall(r256, flatTruth, k);
+
+    // More bits should give at least as much recall (statistically).
+    expect(recall256, greaterThanOrEqualTo(recall64 - 0.05));
+    // And the higher-bit build should be non-trivial (well above the
+    // 1-in-n baseline of ~0.01 for our test corpus).
+    expect(recall256, greaterThan(0.1));
+  });
+
+  test('IndexLSH round-trips through bytes', () {
+    final lsh = IndexLSH(d: d, nbits: 128)..add(xs);
+    final before = lsh.search(queries, k);
+    final loaded = readIndex(writeIndex(lsh)) as IndexLSH;
+    expect(loaded.nbits, equals(128));
+    expect(loaded.codeSize, equals(16));
+    expect(loaded.ntotal, equals(xs.length));
+    final after = loaded.search(queries, k);
+    for (var qi = 0; qi < nq; qi++) {
+      for (var j = 0; j < k; j++) {
+        expect(after.ids[qi][j], equals(before.ids[qi][j]));
+        expect(after.distances[qi][j], equals(before.distances[qi][j]));
+      }
+    }
   });
 }
