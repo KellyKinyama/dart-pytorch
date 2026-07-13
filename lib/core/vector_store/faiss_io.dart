@@ -24,6 +24,10 @@
 /// * `IndexLSH`          — fourcc `IxHe`, random-projection LSH with
 ///   an embedded rectangular `rrot` transform of shape
 ///   `[nbits, d]` (no thresholds, `rotate_data = true`).
+/// * `IndexBinaryFlat`   — fourcc `IBxF`, brute-force Hamming-distance
+///   index over binary vectors. Serialized/parsed via the parallel
+///   [writeFaissBinaryIndex] / [readFaissBinaryIndex] entry points
+///   because [IndexBinary] is a separate class hierarchy from [Index].
 /// * `L2NormTransform`   — fourcc `VNrm`, on-sphere normalization
 ///   (FAISS's `NormalizationTransform` with `norm = 2.0`).
 /// * `RandomRotationTransform` — fourcc `rrot`, a `LinearTransform`
@@ -76,6 +80,8 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'index.dart';
+import 'index_binary.dart';
+import 'index_binary_flat.dart';
 import 'index_flat.dart';
 import 'index_id_map.dart';
 import 'index_io.dart';
@@ -283,6 +289,26 @@ class FaissFourcc {
   /// projection is instead serialized inline directly by the IxHe
   /// dispatch.
   static final int indexLsh = of('IxHe');
+
+  /// `IBxF` — `IndexBinaryFlat`. Layout (after fourcc):
+  ///
+  /// ```
+  ///   [write_index_binary_header]:
+  ///     i32 d                (bit dimension = code_size * 8)
+  ///     i32 code_size        (bytes per vector)
+  ///     i64 ntotal
+  ///     u8  is_trained
+  ///     i32 metric_type      (upstream default = METRIC_L2 = 1)
+  ///   WVEC u8 xb             (ntotal * code_size bytes)
+  /// ```
+  ///
+  /// Note: FAISS's binary indexes share the [MetricType] enum with
+  /// their float cousins and the `IndexBinary` base default is
+  /// `METRIC_L2 = 1`; `IndexBinaryFlat` does not override it, even
+  /// though the actual scoring is always Hamming. This port therefore
+  /// always emits `metric_type = 1` and accepts any of the port's
+  /// supported float metric codes on read.
+  static final int indexBinaryFlat = of('IBxF');
 }
 
 /// FAISS `MetricType` enum values.
@@ -1675,4 +1701,134 @@ void saveFaissIndex(String path, Index x) {
 /// Load a FAISS-format file from [path].
 Index loadFaissIndex(String path) {
   return readFaissIndexFromBytes(File(path).readAsBytesSync());
+}
+
+// -----------------------------------------------------------------------------
+// Binary indexes
+// -----------------------------------------------------------------------------
+
+/// Writes the common `IndexBinary` header, matching FAISS's
+/// `write_index_binary_header` in `impl/index_write.cc` byte-for-byte.
+///
+/// ```
+///   i32 d           (bit dimension = code_size * 8)
+///   i32 code_size
+///   i64 ntotal
+///   u8  is_trained
+///   i32 metric_type (always 1 = METRIC_L2 on write; upstream default)
+/// ```
+void _writeBinaryHeader(IoWriter w, IndexBinary x) {
+  w.writeI32(x.d);
+  w.writeI32(x.codeSize);
+  w.writeI64(x.ntotal);
+  w.writeU8(x.isTrained ? 1 : 0);
+  // IndexBinary's default metric_type is METRIC_L2 = 1 (even though the
+  // real distance is Hamming); IndexBinaryFlat does not override it.
+  w.writeI32(1);
+}
+
+/// Header fields extracted from a FAISS binary-index stream. `metric`
+/// is kept as the raw i32 so exotic values (e.g. non-L2) can be
+/// surfaced verbatim in error messages instead of throwing during
+/// header parsing.
+typedef _BinaryHeader = ({
+  int d,
+  int codeSize,
+  int ntotal,
+  bool isTrained,
+  int metric,
+});
+
+_BinaryHeader _readBinaryHeader(IoReader r) {
+  final d = r.readI32();
+  final codeSize = r.readI32();
+  final ntotal = r.readI64();
+  final isTrained = r.readU8() != 0;
+  final metric = r.readI32();
+  return (
+    d: d,
+    codeSize: codeSize,
+    ntotal: ntotal,
+    isTrained: isTrained,
+    metric: metric,
+  );
+}
+
+/// Serializes a binary index [x] in FAISS's on-disk format.
+///
+/// Parallel to [writeFaissIndex] but for the `IndexBinary` hierarchy,
+/// which FAISS keeps in a separate top-level dispatch
+/// (`write_index_binary` in `impl/index_write.cc`).
+void writeFaissBinaryIndex(IoWriter w, IndexBinary x) {
+  if (x is IndexBinaryFlat) {
+    // IBxF layout:
+    //   fourcc('IBxF')
+    //   write_index_binary_header(this)
+    //   WVEC u8 xb           (ntotal * code_size bytes)
+    w.writeU32(FaissFourcc.indexBinaryFlat);
+    _writeBinaryHeader(w, x);
+    _writeVectorU8(w, x.codes);
+    return;
+  }
+  throw UnsupportedError(
+    'writeFaissBinaryIndex: ${x.runtimeType} not yet supported.',
+  );
+}
+
+/// Parses a FAISS binary-index blob starting at the current reader
+/// position.
+IndexBinary readFaissBinaryIndex(IoReader r) {
+  final tag = r.readU32();
+  if (tag == FaissFourcc.indexBinaryFlat) {
+    final h = _readBinaryHeader(r);
+    if (h.codeSize * 8 != h.d) {
+      throw FormatException(
+        'IBxF: header d=${h.d} but code_size=${h.codeSize} '
+        '(expected d = code_size * 8)',
+      );
+    }
+    final codes = _readVectorU8(r);
+    if (codes.length != h.ntotal * h.codeSize) {
+      throw FormatException(
+        'IBxF: xb payload size ${codes.length} != ntotal * code_size = '
+        '${h.ntotal * h.codeSize}',
+      );
+    }
+    final idx = IndexBinaryFlat(h.codeSize);
+    idx.ioSetCodes(codes, h.ntotal);
+    idx.isTrained = h.isTrained;
+    return idx;
+  }
+  throw FormatException(
+    'Unsupported FAISS binary fourcc "${FaissFourcc.toStr(tag)}" '
+    '(0x${tag.toRadixString(16).padLeft(8, '0')})',
+  );
+}
+
+/// Convenience: serialize a binary index [x] to a fresh byte buffer.
+Uint8List writeFaissBinaryIndexToBytes(IndexBinary x) {
+  final w = IoWriter();
+  writeFaissBinaryIndex(w, x);
+  return w.takeBytes();
+}
+
+/// Convenience: parse a byte buffer written by
+/// [writeFaissBinaryIndexToBytes] or by upstream FAISS
+/// (`write_index_binary`).
+IndexBinary readFaissBinaryIndexFromBytes(Uint8List bytes) {
+  return readFaissBinaryIndex(IoReader(bytes));
+}
+
+/// Save a binary index [x] to [path] in FAISS binary-index format.
+///
+/// The resulting file has the same magic layout that
+/// `faiss::write_index_binary(idx, path)` produces on 64-bit
+/// little-endian hosts.
+void saveFaissBinaryIndex(String path, IndexBinary x) {
+  File(path).writeAsBytesSync(writeFaissBinaryIndexToBytes(x));
+}
+
+/// Load a FAISS binary-index file from [path].
+IndexBinary loadFaissBinaryIndex(String path) {
+  return readFaissBinaryIndexFromBytes(File(path).readAsBytesSync());
 }

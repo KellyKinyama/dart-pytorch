@@ -2199,4 +2199,129 @@ void main() {
       throwsA(isA<UnsupportedError>()),
     );
   });
+
+  test('writeFaissBinaryIndex emits IBxF fourcc and correct header bytes', () {
+    final codeSize = 8;
+    final rng = math.Random(1);
+    final codes = List<Uint8List>.generate(16, (_) {
+      final c = Uint8List(codeSize);
+      for (var j = 0; j < codeSize; j++) {
+        c[j] = rng.nextInt(256);
+      }
+      return c;
+    });
+    final bf = IndexBinaryFlat(codeSize)..add(codes);
+    final bytes = writeFaissBinaryIndexToBytes(bf);
+    final tag =
+        bytes[0] | (bytes[1] << 8) | (bytes[2] << 16) | (bytes[3] << 24);
+    expect(FaissFourcc.toStr(tag), equals('IBxF'));
+    // i32 d then i32 code_size then i64 ntotal then u8 is_trained then
+    // i32 metric_type = 1.
+    final dRead =
+        bytes[4] | (bytes[5] << 8) | (bytes[6] << 16) | (bytes[7] << 24);
+    expect(dRead, equals(codeSize * 8));
+    final csRead =
+        bytes[8] | (bytes[9] << 8) | (bytes[10] << 16) | (bytes[11] << 24);
+    expect(csRead, equals(codeSize));
+    // ntotal little-endian i64 at offset 12; only low byte matters here.
+    expect(bytes[12], equals(16));
+    for (var i = 13; i < 20; i++) {
+      expect(bytes[i], equals(0));
+    }
+    expect(bytes[20], equals(1)); // is_trained
+    expect(bytes[21], equals(1)); // metric_type = METRIC_L2
+    for (var i = 22; i < 25; i++) {
+      expect(bytes[i], equals(0));
+    }
+    // WVEC size = ntotal * codeSize at offset 25 as u64 LE.
+    final xbCount = bytes[25] | (bytes[26] << 8) | (bytes[27] << 16);
+    expect(xbCount, equals(16 * codeSize));
+  });
+
+  test('FAISS interop round-trips IndexBinaryFlat (byte-equal codes)', () {
+    final codeSize = 16;
+    final rng = math.Random(42);
+    final codes = List<Uint8List>.generate(64, (_) {
+      final c = Uint8List(codeSize);
+      for (var j = 0; j < codeSize; j++) {
+        c[j] = rng.nextInt(256);
+      }
+      return c;
+    });
+    final queries = List<Uint8List>.generate(nq, (_) {
+      final c = Uint8List(codeSize);
+      for (var j = 0; j < codeSize; j++) {
+        c[j] = rng.nextInt(256);
+      }
+      return c;
+    });
+    final bf = IndexBinaryFlat(codeSize)..add(codes);
+    final before = bf.search(queries, k);
+
+    final bytes = writeFaissBinaryIndexToBytes(bf);
+    final loaded =
+        readFaissBinaryIndexFromBytes(bytes) as IndexBinaryFlat;
+
+    expect(loaded.d, equals(codeSize * 8));
+    expect(loaded.codeSize, equals(codeSize));
+    expect(loaded.ntotal, equals(codes.length));
+    expect(loaded.isTrained, isTrue);
+
+    // Packed codes preserved byte-for-byte.
+    expect(loaded.codes, equals(bf.codes));
+
+    // Search results identical.
+    final after = loaded.search(queries, k);
+    for (var qi = 0; qi < nq; qi++) {
+      for (var j = 0; j < k; j++) {
+        expect(after.ids[qi][j], equals(before.ids[qi][j]));
+      }
+    }
+  });
+
+  test('FAISS interop round-trips an empty IndexBinaryFlat', () {
+    final bf = IndexBinaryFlat(8);
+    final bytes = writeFaissBinaryIndexToBytes(bf);
+    final loaded =
+        readFaissBinaryIndexFromBytes(bytes) as IndexBinaryFlat;
+    expect(loaded.ntotal, equals(0));
+    expect(loaded.codeSize, equals(8));
+    expect(loaded.d, equals(64));
+    expect(loaded.codes.length, equals(0));
+  });
+
+  test('writeFaissBinaryIndex rejects unsupported binary index types', () {
+    // IndexBinaryIVF (IBwF) is not yet wired up.
+    final ivf = IndexBinaryIVF(codeSize: 8, nlist: 4);
+    expect(
+      () => writeFaissBinaryIndexToBytes(ivf),
+      throwsA(isA<UnsupportedError>()),
+    );
+  });
+
+  test('readFaissBinaryIndex rejects IBxF with mismatched d / code_size', () {
+    final bf = IndexBinaryFlat(8)
+      ..add(<Uint8List>[Uint8List.fromList(List<int>.filled(8, 0))]);
+    final bytes = writeFaissBinaryIndexToBytes(bf);
+    // Corrupt d (i32 at offset 4) from 64 → 32, keep code_size=8.
+    bytes[4] = 32;
+    expect(
+      () => readFaissBinaryIndexFromBytes(bytes),
+      throwsA(isA<FormatException>()),
+    );
+  });
+
+  test('readFaissBinaryIndex rejects an unknown binary fourcc', () {
+    final bogus = Uint8List.fromList(<int>[0x5A, 0x5A, 0x5A, 0x5A]);
+    expect(
+      () => readFaissBinaryIndexFromBytes(bogus),
+      throwsA(
+        isA<FormatException>().having(
+          (e) => e.message,
+          'message',
+          contains('ZZZZ'),
+        ),
+      ),
+    );
+  });
 }
