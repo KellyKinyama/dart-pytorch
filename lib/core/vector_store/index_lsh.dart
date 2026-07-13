@@ -45,6 +45,12 @@ class IndexLSH extends Index {
 
   Float32List get projection => _proj;
 
+  /// Live view of the packed code buffer, sliced to the currently
+  /// occupied region (`ntotal * codeSize` bytes). Backed by the same
+  /// underlying storage as internal writes, so callers must not mutate
+  /// it. Provided as an I/O hook for FAISS-format serialization.
+  Uint8List get codes => Uint8List.sublistView(_codes, 0, ntotal * codeSize);
+
   @override
   void train(List<Float32List> xs) {
     // The random projection is data-independent, so training data is
@@ -176,5 +182,37 @@ class IndexLSH extends Index {
     idx.ntotal = ntotal;
     idx.isTrained = isTrained;
     return idx;
+  }
+
+  /// I/O hook used by FAISS-interop readers to install an externally
+  /// supplied projection matrix and code payload without going through
+  /// [add]. [proj] must be `nbits * d` floats (row-major `[nbits, d]`);
+  /// [codes] must be exactly `newNtotal * codeSize` bytes.
+  void ioSetProjectionAndCodes(
+    Float32List proj,
+    Uint8List codes,
+    int newNtotal,
+  ) {
+    if (proj.length != _proj.length) {
+      throw ArgumentError(
+        'ioSetProjectionAndCodes: proj length ${proj.length} != '
+        'nbits * d = ${_proj.length}',
+      );
+    }
+    if (codes.length != newNtotal * codeSize) {
+      throw ArgumentError(
+        'ioSetProjectionAndCodes: codes length ${codes.length} != '
+        'newNtotal * codeSize = ${newNtotal * codeSize}',
+      );
+    }
+    for (var i = 0; i < proj.length; i++) {
+      _proj[i] = proj[i];
+    }
+    _codes = Uint8List(codes.length);
+    for (var i = 0; i < codes.length; i++) {
+      _codes[i] = codes[i];
+    }
+    _capacityCodes = codes.length;
+    ntotal = newNtotal;
   }
 }

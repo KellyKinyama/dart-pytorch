@@ -21,6 +21,9 @@
 ///   ArrayInvertedLists container in either `full` or `sprs` layout.
 /// * `IndexIVFPQ`        — fourcc `IwPQ`, cell-probe IVF with a PQ
 ///   residual code store per cell.
+/// * `IndexLSH`          — fourcc `IxHe`, random-projection LSH with
+///   an embedded rectangular `rrot` transform of shape
+///   `[nbits, d]` (no thresholds, `rotate_data = true`).
 /// * `L2NormTransform`   — fourcc `VNrm`, on-sphere normalization
 ///   (FAISS's `NormalizationTransform` with `norm = 2.0`).
 /// * `RandomRotationTransform` — fourcc `rrot`, a `LinearTransform`
@@ -78,6 +81,7 @@ import 'index_id_map.dart';
 import 'index_io.dart';
 import 'index_ivf_flat.dart';
 import 'index_ivf_pq.dart';
+import 'index_lsh.dart';
 import 'index_pq.dart';
 import 'index_pre_transform.dart';
 import 'index_refine_flat.dart';
@@ -251,6 +255,34 @@ class FaissFourcc {
   ///   [write_InvertedLists]   (ilar with code_size = M)
   /// ```
   static final int indexIvfPq = of('IwPQ');
+
+  /// `IxHe` — `IndexLSH`. Layout (after fourcc):
+  ///
+  /// ```
+  ///   [write_index_header]
+  ///   i32 nbits
+  ///   u8  rotate_data          (this port always emits/expects 1)
+  ///   u8  train_thresholds     (this port always emits/expects 0)
+  ///   WVEC f32 thresholds      (empty when train_thresholds = 0)
+  ///   i32 code_size            (= (nbits + 7) / 8)
+  ///   [inline rrot LinearTransform, non-square `[nbits, d]`]:
+  ///     u32 fourcc('rrot')
+  ///     u8  have_bias = 0
+  ///     WVEC f32 A             (nbits * d floats, row-major)
+  ///     WVEC f32 b             (empty)
+  ///     i32 d_in  = d
+  ///     i32 d_out = nbits
+  ///     u8  is_trained
+  ///   WVEC u8 codes            (ntotal * code_size bytes)
+  /// ```
+  ///
+  /// FAISS's `IndexLSH` embeds a `RandomRotationMatrix` sub-transform
+  /// that carries the actual projection. Because that transform is
+  /// rectangular (`d_in != d_out` in general), we can't route it
+  /// through [FaissFourcc.randomRotation]'s square-only reader; the
+  /// projection is instead serialized inline directly by the IxHe
+  /// dispatch.
+  static final int indexLsh = of('IxHe');
 }
 
 /// FAISS `MetricType` enum values.
@@ -1243,6 +1275,38 @@ void writeFaissIndex(IoWriter w, Index x) {
     _writeArrayInvertedListsIVFPQ(w, x);
     return;
   }
+  if (x is IndexLSH) {
+    // IxHe layout: see [FaissFourcc.indexLsh] for the full spec.
+    // The port's IndexLSH stores the raw random projection directly;
+    // FAISS wraps the same matrix in a `RandomRotationMatrix`
+    // sub-transform whose `A` field IS the projection, so on the wire
+    // we emit the LinearTransform block inline (rectangular
+    // `[nbits, d]`).
+    w.writeU32(FaissFourcc.indexLsh);
+    _writeHeader(w, x);
+    w.writeI32(x.nbits);
+    w.writeU8(1); // rotate_data
+    w.writeU8(0); // train_thresholds
+    _writeVectorF32(w, Float32List(0)); // thresholds (empty)
+    w.writeI32(x.codeSize);
+    // Inline `rrot` LinearTransform block (rectangular).
+    w.writeU32(FaissFourcc.randomRotation);
+    _writeLTBody(w, haveBias: false, a: x.projection, b: Float32List(0));
+    w.writeI32(x.d); // d_in
+    w.writeI32(x.nbits); // d_out
+    w.writeU8(x.isTrained ? 1 : 0);
+    // Trailing packed codes.
+    final n = x.ntotal;
+    final codes = Uint8List(n * x.codeSize);
+    if (n > 0) {
+      final src = x.codes;
+      for (var i = 0; i < codes.length; i++) {
+        codes[i] = src[i];
+      }
+    }
+    _writeVectorU8(w, codes);
+    return;
+  }
   throw UnsupportedError(
     'writeFaissIndex: ${x.runtimeType} not yet supported.',
   );
@@ -1504,6 +1568,81 @@ Index readFaissIndex(IoReader r) {
     final pay = _readArrayInvertedListsIVFPQ(r, pq.m, ivfHead.nlist, h.ntotal);
     ivpq.ioSetInvLists(pay.ids, pay.codes, h.ntotal);
     return ivpq;
+  }
+  if (tag == FaissFourcc.indexLsh) {
+    // IxHe: header + nbits + rotate_data + train_thresholds +
+    //       thresholds + code_size + inline rrot + codes.
+    final h = _readHeader(r);
+    if (h.metric != Metric.l2) {
+      throw FormatException(
+        'IxHe: only METRIC_L2 is supported, got ${h.metric}',
+      );
+    }
+    final nbits = r.readI32();
+    final rotateData = r.readU8();
+    if (rotateData != 1) {
+      throw UnsupportedError(
+        'IxHe: only rotate_data=1 is supported, got $rotateData',
+      );
+    }
+    final trainThresholds = r.readU8();
+    if (trainThresholds != 0) {
+      throw UnsupportedError(
+        'IxHe: only train_thresholds=0 is supported, got $trainThresholds',
+      );
+    }
+    final thresholds = _readVectorF32(r);
+    if (thresholds.isNotEmpty) {
+      throw FormatException(
+        'IxHe: thresholds must be empty when train_thresholds=0, '
+        'got ${thresholds.length} floats',
+      );
+    }
+    final codeSize = r.readI32();
+    final expectedCodeSize = (nbits + 7) ~/ 8;
+    if (codeSize != expectedCodeSize) {
+      throw FormatException(
+        'IxHe: code_size ($codeSize) != (nbits + 7) / 8 = $expectedCodeSize',
+      );
+    }
+    // Inline `rrot` LinearTransform (rectangular `[nbits, d]`).
+    final rrotTag = r.readU32();
+    if (rrotTag != FaissFourcc.randomRotation) {
+      throw FormatException(
+        'IxHe: expected inline rrot fourcc, got '
+        '"${FaissFourcc.toStr(rrotTag)}"',
+      );
+    }
+    final body = _readLTBody(r);
+    final c = _readVTCommon(r);
+    if (c.dIn != h.d || c.dOut != nbits) {
+      throw FormatException(
+        'IxHe: rrot d_in=${c.dIn}, d_out=${c.dOut} but header d=${h.d}, '
+        'nbits=$nbits',
+      );
+    }
+    if (body.haveBias || body.b.isNotEmpty) {
+      throw UnsupportedError(
+        'IxHe: rrot with bias is not supported (RandomRotationMatrix has none)',
+      );
+    }
+    if (body.a.length != nbits * h.d) {
+      throw FormatException(
+        'IxHe: rrot A has ${body.a.length} floats, expected '
+        '${nbits * h.d}',
+      );
+    }
+    final codes = _readVectorU8(r);
+    if (codes.length != h.ntotal * codeSize) {
+      throw FormatException(
+        'IxHe: codes length ${codes.length} != ntotal * code_size = '
+        '${h.ntotal * codeSize}',
+      );
+    }
+    final idx = IndexLSH(d: h.d, nbits: nbits);
+    idx.ioSetProjectionAndCodes(body.a, codes, h.ntotal);
+    idx.isTrained = h.isTrained;
+    return idx;
   }
   throw FormatException(
     'Unsupported FAISS fourcc "${FaissFourcc.toStr(tag)}" '

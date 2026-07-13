@@ -1217,9 +1217,12 @@ void main() {
   });
 
   test('writeFaissIndex rejects unsupported index types', () {
-    // IndexLSH interop (IxHe) is not yet wired up.
-    final lsh = IndexLSH(d: d, nbits: 64)..add(xs);
-    expect(() => writeFaissIndexToBytes(lsh), throwsA(isA<UnsupportedError>()));
+    // IndexHNSW interop (IHNf) is not yet wired up.
+    final hnsw = IndexHNSW(d: d)..add(xs);
+    expect(
+      () => writeFaissIndexToBytes(hnsw),
+      throwsA(isA<UnsupportedError>()),
+    );
   });
 
   test('FAISS interop round-trips IndexIDMap with custom ids', () {
@@ -2111,6 +2114,86 @@ void main() {
     final byResidualOffset = 4 + 33 + 8 + 8 + 4 + 33 + 8 + 4 * d * 4 + 1 + 8;
     expect(bytes[byResidualOffset], equals(1));
     bytes[byResidualOffset] = 0;
+    expect(
+      () => readFaissIndexFromBytes(bytes),
+      throwsA(isA<UnsupportedError>()),
+    );
+  });
+
+  test('writeFaissIndex emits IxHe fourcc and correct header bytes', () {
+    final lsh = IndexLSH(d: d, nbits: 64)..add(xs);
+    final bytes = writeFaissIndexToBytes(lsh);
+    final tag =
+        bytes[0] | (bytes[1] << 8) | (bytes[2] << 16) | (bytes[3] << 24);
+    expect(FaissFourcc.toStr(tag), equals('IxHe'));
+    final dRead =
+        bytes[4] | (bytes[5] << 8) | (bytes[6] << 16) | (bytes[7] << 24);
+    expect(dRead, equals(d));
+    // is_trained at offset 32, metric (L2 = 1) at 33.
+    expect(bytes[32], equals(1));
+    expect(bytes[33], equals(1));
+    // nbits (i32) immediately after the 33-byte index_header.
+    final nbitsOffset = 4 + 33;
+    final nbitsRead =
+        bytes[nbitsOffset] |
+        (bytes[nbitsOffset + 1] << 8) |
+        (bytes[nbitsOffset + 2] << 16) |
+        (bytes[nbitsOffset + 3] << 24);
+    expect(nbitsRead, equals(64));
+    // rotate_data = 1, train_thresholds = 0.
+    expect(bytes[nbitsOffset + 4], equals(1));
+    expect(bytes[nbitsOffset + 5], equals(0));
+  });
+
+  test('FAISS interop round-trips IndexLSH (byte-equal proj + codes)', () {
+    final lsh = IndexLSH(d: d, nbits: 64, seed: 7)..add(xs);
+    final before = lsh.search(queries, k);
+
+    final bytes = writeFaissIndexToBytes(lsh);
+    final loaded = readFaissIndexFromBytes(bytes) as IndexLSH;
+
+    expect(loaded.d, equals(d));
+    expect(loaded.nbits, equals(64));
+    expect(loaded.codeSize, equals(lsh.codeSize));
+    expect(loaded.ntotal, equals(xs.length));
+    expect(loaded.isTrained, isTrue);
+
+    // Projection matrix preserved byte-for-byte.
+    for (var i = 0; i < lsh.projection.length; i++) {
+      expect(loaded.projection[i], equals(lsh.projection[i]));
+    }
+    // Packed codes preserved byte-for-byte.
+    expect(loaded.codes, equals(lsh.codes));
+
+    // Search results identical.
+    final after = loaded.search(queries, k);
+    for (var qi = 0; qi < nq; qi++) {
+      for (var j = 0; j < k; j++) {
+        expect(after.ids[qi][j], equals(before.ids[qi][j]));
+      }
+    }
+  });
+
+  test('FAISS interop round-trips an empty IndexLSH (no add)', () {
+    final lsh = IndexLSH(d: d, nbits: 128, seed: 99)..trainProjection();
+    final bytes = writeFaissIndexToBytes(lsh);
+    final loaded = readFaissIndexFromBytes(bytes) as IndexLSH;
+    expect(loaded.ntotal, equals(0));
+    expect(loaded.nbits, equals(128));
+    expect(loaded.d, equals(d));
+    for (var i = 0; i < lsh.projection.length; i++) {
+      expect(loaded.projection[i], equals(lsh.projection[i]));
+    }
+  });
+
+  test('readFaissIndex rejects IxHe with rotate_data=0', () {
+    final lsh = IndexLSH(d: d, nbits: 64)..add(xs);
+    final bytes = writeFaissIndexToBytes(lsh);
+    // rotate_data byte is at offset (fourcc 4) + (index_header 33) +
+    // (nbits i32 4) = 41.
+    final rotateOffset = 4 + 33 + 4;
+    expect(bytes[rotateOffset], equals(1));
+    bytes[rotateOffset] = 0;
     expect(
       () => readFaissIndexFromBytes(bytes),
       throwsA(isA<UnsupportedError>()),
