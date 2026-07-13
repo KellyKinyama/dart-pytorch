@@ -6,9 +6,12 @@
 /// `FAISDART` format in `index_io.dart`; the two formats are not
 /// interchangeable, and each index has its own read/write pair.
 ///
-/// ## Supported types (batch 11)
+/// ## Supported types
 ///
-/// * `IndexFlat`  — fourcc `IxF2` (L2) / `IxFI` (inner product).
+/// * `IndexFlat`         — fourcc `IxF2` (L2) / `IxFI` (inner product).
+/// * `IndexIDMap`        — fourcc `IxMp`, wraps a sub-index + `i64` id table.
+/// * `IndexPreTransform` — fourcc `IxPT`, chain of transforms + inner.
+/// * `L2NormTransform`   — fourcc `L2nT`, on-sphere normalization.
 ///
 /// Other index families will be added in later batches. Anything
 /// unsupported raises a [FormatException] on read or an
@@ -41,7 +44,11 @@ import 'dart:typed_data';
 
 import 'index.dart';
 import 'index_flat.dart';
+import 'index_id_map.dart';
 import 'index_io.dart';
+import 'index_pre_transform.dart';
+import 'l2_norm_transform.dart';
+import 'vector_transform.dart';
 
 /// FAISS 4-character type tags encoded as little-endian u32.
 ///
@@ -79,6 +86,16 @@ class FaissFourcc {
   /// `IxFl` — generic `IndexFlat`, used for metric codes other than L2 / IP.
   /// The trailing character is a lowercase letter `l`.
   static final int flat = of('IxFl');
+
+  /// `IxMp` — `IndexIDMap` wrapping a sub-index with a custom i64 id table.
+  static final int idMap = of('IxMp');
+
+  /// `IxPT` — `IndexPreTransform`, a chain of vector transforms + inner index.
+  static final int preTransform = of('IxPT');
+
+  /// `L2nT` — `NormalizationTransform` with `norm = 2.0` (unit-sphere
+  /// projection). Used as one element of an `IxPT` chain.
+  static final int l2NormTransform = of('L2nT');
 }
 
 /// FAISS `MetricType` enum values.
@@ -147,6 +164,72 @@ Uint8List _readVectorU8(IoReader r) {
   return r.readBytes(n);
 }
 
+/// FAISS `WRITEVECTOR` for `std::vector<int64_t>`:
+///   size_t element_count (little-endian u64)
+///   element_count * 8 raw bytes, each an int64 LE.
+void _writeVectorI64(IoWriter w, List<int> xs) {
+  w.writeU64(xs.length);
+  for (final v in xs) {
+    w.writeI64(v);
+  }
+}
+
+List<int> _readVectorI64(IoReader r) {
+  final n = r.readU64();
+  final out = List<int>.filled(n, 0);
+  for (var i = 0; i < n; i++) {
+    out[i] = r.readI64();
+  }
+  return out;
+}
+
+/// Serializes a [VectorTransform] using FAISS's `write_VectorTransform`
+/// dispatch, keyed on the concrete Dart type.
+void writeFaissTransform(IoWriter w, VectorTransform vt) {
+  if (vt is L2NormTransform) {
+    // NormalizationTransform layout:
+    //   fourcc('L2nT')
+    //   i32 d_in
+    //   i32 d_out
+    //   f32 norm      (always 2.0f for L2 normalization)
+    w.writeU32(FaissFourcc.l2NormTransform);
+    w.writeI32(vt.dIn);
+    w.writeI32(vt.dOut);
+    w.writeF32(2.0);
+    return;
+  }
+  throw UnsupportedError(
+    'writeFaissTransform: ${vt.runtimeType} not yet supported.',
+  );
+}
+
+/// Parses one [VectorTransform] from the reader, dispatching on the
+/// fourcc tag that appears at the current offset.
+VectorTransform readFaissTransform(IoReader r) {
+  final tag = r.readU32();
+  if (tag == FaissFourcc.l2NormTransform) {
+    final dIn = r.readI32();
+    final dOut = r.readI32();
+    final norm = r.readF32();
+    if (dIn != dOut) {
+      throw FormatException(
+        'L2nT: d_in ($dIn) != d_out ($dOut); NormalizationTransform '
+        'must preserve dimension.',
+      );
+    }
+    if ((norm - 2.0).abs() > 1e-6) {
+      throw FormatException(
+        'L2nT: only norm == 2.0 is supported by this port, got $norm.',
+      );
+    }
+    return L2NormTransform(dIn);
+  }
+  throw FormatException(
+    'Unsupported FAISS transform fourcc "${FaissFourcc.toStr(tag)}" '
+    '(0x${tag.toRadixString(16).padLeft(8, '0')})',
+  );
+}
+
 /// Serializes [x] into FAISS binary format.
 ///
 /// Currently supports `IndexFlat`. Composite / approximate index
@@ -155,9 +238,7 @@ Uint8List _readVectorU8(IoReader r) {
 /// file.
 void writeFaissIndex(IoWriter w, Index x) {
   if (x is IndexFlat) {
-    final tag = x.metric == Metric.l2
-        ? FaissFourcc.flatL2
-        : FaissFourcc.flatIP;
+    final tag = x.metric == Metric.l2 ? FaissFourcc.flatL2 : FaissFourcc.flatIP;
     w.writeU32(tag);
     _writeHeader(w, x);
     // IndexFlat stores its vectors as std::vector<uint8_t> whose byte
@@ -177,9 +258,39 @@ void writeFaissIndex(IoWriter w, Index x) {
     _writeVectorU8(w, codes);
     return;
   }
+  if (x is IndexIDMap) {
+    // IxMp layout:
+    //   fourcc('IxMp')
+    //   write_index_header(this)
+    //   write_index(sub-index)     [recursive]
+    //   WRITEVECTOR(id_map)        [vector<int64_t>]
+    w.writeU32(FaissFourcc.idMap);
+    _writeHeader(w, x);
+    writeFaissIndex(w, x.inner);
+    // Our IndexIDMap keeps the id table in insertion order; the length
+    // is guaranteed to equal ntotal.
+    final ids = List<int>.generate(x.ntotal, x.idOf);
+    _writeVectorI64(w, ids);
+    return;
+  }
+  if (x is IndexPreTransform) {
+    // IxPT layout:
+    //   fourcc('IxPT')
+    //   write_index_header(this)
+    //   u32 chain_length
+    //   for each transform: write_VectorTransform
+    //   write_index(inner)         [recursive]
+    w.writeU32(FaissFourcc.preTransform);
+    _writeHeader(w, x);
+    w.writeU32(x.chain.length);
+    for (final t in x.chain) {
+      writeFaissTransform(w, t);
+    }
+    writeFaissIndex(w, x.inner);
+    return;
+  }
   throw UnsupportedError(
-    'writeFaissIndex: ${x.runtimeType} not yet supported. '
-    'Batch 11 covers IndexFlat only.',
+    'writeFaissIndex: ${x.runtimeType} not yet supported.',
   );
 }
 
@@ -213,6 +324,66 @@ Index readFaissIndex(IoReader r) {
     }
     idx.isTrained = h.isTrained;
     return idx;
+  }
+  if (tag == FaissFourcc.idMap) {
+    // Header is that of the wrapper (mirrors the sub-index's d/metric).
+    final h = _readHeader(r);
+    final inner = readFaissIndex(r);
+    final ids = _readVectorI64(r);
+    if (ids.length != h.ntotal) {
+      throw FormatException(
+        'IxMp: id_map length ${ids.length} != header ntotal ${h.ntotal}',
+      );
+    }
+    if (inner.ntotal != h.ntotal) {
+      throw FormatException(
+        'IxMp: inner ntotal ${inner.ntotal} != wrapper ntotal ${h.ntotal}',
+      );
+    }
+    final idmap = IndexIDMap(inner);
+    // The sub-index already contains the vectors; we only need to
+    // restore the id table without re-adding to inner. Reconstruct
+    // each row from inner and re-add via addWithIds so IndexIDMap
+    // internal bookkeeping stays consistent. This *does* double the
+    // storage momentarily, but keeps encapsulation clean.
+    if (h.ntotal > 0) {
+      if (inner is! IndexFlat) {
+        throw UnsupportedError(
+          'IxMp: reading with a non-Flat inner (${inner.runtimeType}) '
+          'is not yet supported.',
+        );
+      }
+      // Rebuild the IDMap on a fresh copy of the inner so that after
+      // addWithIds the two ntotals match exactly.
+      final freshInner = IndexFlat(inner.d, inner.metric);
+      final rebuilt = IndexIDMap(freshInner);
+      final rows = List<Float32List>.generate(
+        h.ntotal,
+        (i) => Float32List.fromList(inner.reconstruct(i)),
+      );
+      rebuilt.addWithIds(rows, ids);
+      rebuilt.isTrained = h.isTrained;
+      return rebuilt;
+    }
+    idmap.isTrained = h.isTrained;
+    return idmap;
+  }
+  if (tag == FaissFourcc.preTransform) {
+    final h = _readHeader(r);
+    final nt = r.readU32();
+    final chain = List<VectorTransform>.generate(
+      nt,
+      (_) => readFaissTransform(r),
+    );
+    final inner = readFaissIndex(r);
+    if (inner.ntotal != h.ntotal) {
+      throw FormatException(
+        'IxPT: inner ntotal ${inner.ntotal} != wrapper ntotal ${h.ntotal}',
+      );
+    }
+    final pt = IndexPreTransform(chain: chain, inner: inner);
+    pt.ntotal = inner.ntotal;
+    return pt;
   }
   throw FormatException(
     'Unsupported FAISS fourcc "${FaissFourcc.toStr(tag)}" '
