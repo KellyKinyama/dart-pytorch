@@ -3506,10 +3506,7 @@ void main() {
       ],
       chosenParamValue: 8,
     );
-    expect(
-      () => applyTuningToIndex(flat, meta),
-      throwsA(isA<ArgumentError>()),
-    );
+    expect(() => applyTuningToIndex(flat, meta), throwsA(isA<ArgumentError>()));
   });
 
   test('loadTunedFaissIndex(applyTuning: true) warms up the loaded '
