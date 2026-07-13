@@ -93,6 +93,47 @@ class IndexIDMap extends Index {
     return r;
   }
 
+  @override
+  RangeSearchResult rangeSearch(List<Float32List> queries, double radius) {
+    final r = inner.rangeSearch(queries, radius);
+    // Translate internal → external ids in the flat ids buffer.
+    for (var i = 0; i < r.ids.length; i++) {
+      final internal = r.ids[i];
+      if (internal >= 0 && internal < _extIds.length) {
+        r.ids[i] = _extIds[internal];
+      }
+    }
+    return r;
+  }
+
+  /// Remove vectors by their **external** ids. Returns the number
+  /// actually removed. Delegates to the inner index's [removeIds]
+  /// after translating to internal offsets, then compacts the
+  /// external-id table to stay in sync with the renumbered inner.
+  @override
+  int removeIds(Set<int> ids) {
+    if (ids.isEmpty) return 0;
+    _reverse ??= {for (var i = 0; i < _extIds.length; i++) _extIds[i]: i};
+    final internal = <int>{};
+    for (final ext in ids) {
+      final i = _reverse![ext];
+      if (i != null) internal.add(i);
+    }
+    if (internal.isEmpty) return 0;
+    final removed = inner.removeIds(internal);
+    // Rebuild _extIds compact to match the inner's new numbering.
+    final kept = <int>[];
+    for (var i = 0; i < _extIds.length; i++) {
+      if (!internal.contains(i)) kept.add(_extIds[i]);
+    }
+    _extIds
+      ..clear()
+      ..addAll(kept);
+    ntotal = _extIds.length;
+    _reverse = null;
+    return removed;
+  }
+
   // --- persistence --------------------------------------------------------
 
   void writeTo(IoWriter w) {

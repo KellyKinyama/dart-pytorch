@@ -135,6 +135,88 @@ class IndexIVFFlat extends Index {
     return SearchResult(distances, ids);
   }
 
+  @override
+  RangeSearchResult rangeSearch(List<Float32List> queries, double radius) {
+    if (!isTrained) throw StateError('IndexIVFFlat.rangeSearch before train()');
+    final nq = queries.length;
+    final coarse = quantizer.search(queries, nprobe);
+    final perQueryDist = List<List<double>>.generate(nq, (_) => <double>[]);
+    final perQueryIds = List<List<int>>.generate(nq, (_) => <int>[]);
+
+    for (var qi = 0; qi < nq; qi++) {
+      final q = queries[qi];
+      final probes = coarse.ids[qi];
+      final dists = perQueryDist[qi];
+      final idsRow = perQueryIds[qi];
+      for (var p = 0; p < probes.length; p++) {
+        final cell = probes[p];
+        if (cell < 0) continue;
+        final list = _invLists[cell];
+        for (var li = 0; li < list.length; li++) {
+          final vid = list[li];
+          final base = vid * d;
+          var s = 0.0;
+          if (metric == Metric.l2) {
+            for (var j = 0; j < d; j++) {
+              final diff = q[j] - _storage[base + j];
+              s += diff * diff;
+            }
+            if (s <= radius) {
+              dists.add(s);
+              idsRow.add(vid);
+            }
+          } else {
+            for (var j = 0; j < d; j++) {
+              s += q[j] * _storage[base + j];
+            }
+            if (s >= radius) {
+              dists.add(s);
+              idsRow.add(vid);
+            }
+          }
+        }
+      }
+    }
+    return RangeSearchResult.fromPerQuery(perQueryDist, perQueryIds);
+  }
+
+  @override
+  int removeIds(Set<int> ids) {
+    if (ids.isEmpty) return 0;
+    // Build old→new id translation while compacting storage.
+    final newId = Int32List(ntotal);
+    var write = 0;
+    var removed = 0;
+    for (var read = 0; read < ntotal; read++) {
+      if (ids.contains(read)) {
+        newId[read] = -1;
+        removed++;
+        continue;
+      }
+      newId[read] = write;
+      if (write != read) {
+        final srcBase = read * d;
+        final dstBase = write * d;
+        for (var j = 0; j < d; j++) {
+          _storage[dstBase + j] = _storage[srcBase + j];
+        }
+      }
+      write++;
+    }
+    // Rewrite inverted lists using the translation.
+    for (var c = 0; c < nlist; c++) {
+      final list = _invLists[c];
+      final rewritten = <int>[];
+      for (var i = 0; i < list.length; i++) {
+        final n = newId[list[i]];
+        if (n >= 0) rewritten.add(n);
+      }
+      _invLists[c] = rewritten;
+    }
+    ntotal = write;
+    return removed;
+  }
+
   /// For debugging: number of vectors in each cell.
   List<int> listSizes() => _invLists.map((l) => l.length).toList();
 
@@ -211,7 +293,10 @@ class IndexIVFFlat extends Index {
     // Copy the loaded quantizer's centroids into our own so that the
     // `final` field remains untouched (constructor built an empty one).
     if (q.ntotal > 0) {
-      final rows = List<Float32List>.generate(q.ntotal, (i) => q.reconstruct(i));
+      final rows = List<Float32List>.generate(
+        q.ntotal,
+        (i) => q.reconstruct(i),
+      );
       quantizer.add(rows);
     }
   }

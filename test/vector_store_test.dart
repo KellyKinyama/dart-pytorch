@@ -300,4 +300,145 @@ void main() {
     final blob = Uint8List.fromList(List<int>.filled(64, 0));
     expect(() => readIndex(blob), throwsA(isA<FormatException>()));
   });
+
+  // --- range search + removeIds -----------------------------------------
+
+  test('IndexFlat.rangeSearch agrees with brute-force filter of search()', () {
+    final flat = IndexFlatL2(d)..add(xs);
+    final r = flat.search(queries, n);
+    // Pick a radius strictly between the 3rd and 4th shell of query 0
+    // to avoid float32-vs-double boundary flakes.
+    final radius = (r.distances[0][2] + r.distances[0][3]) / 2;
+    final rr = flat.rangeSearch(queries, radius);
+    // For each query, the set of ids returned must exactly match the
+    // set of ids from the k=n search with distance <= radius.
+    for (var qi = 0; qi < nq; qi++) {
+      final expected = <int>{};
+      for (var j = 0; j < n; j++) {
+        if (r.distances[qi][j] <= radius) expected.add(r.ids[qi][j]);
+      }
+      final got = <int>{};
+      final len = rr.lengthFor(qi);
+      final off = rr.limits[qi];
+      for (var j = 0; j < len; j++) {
+        got.add(rr.ids[off + j]);
+      }
+      expect(got, equals(expected));
+    }
+  });
+
+  test('IndexIVFFlat.rangeSearch matches Flat when nprobe = nlist', () {
+    final ivf = IndexIVFFlat(d: d, nlist: 4, nprobe: 4)
+      ..train(xs)
+      ..add(xs);
+    final flat = IndexFlatL2(d)..add(xs);
+    final radius = 0.05;
+    final gold = flat.rangeSearch(queries, radius);
+    final got = ivf.rangeSearch(queries, radius);
+    for (var qi = 0; qi < nq; qi++) {
+      final a = <int>{};
+      for (var j = 0; j < gold.lengthFor(qi); j++) {
+        a.add(gold.ids[gold.limits[qi] + j]);
+      }
+      final b = <int>{};
+      for (var j = 0; j < got.lengthFor(qi); j++) {
+        b.add(got.ids[got.limits[qi] + j]);
+      }
+      expect(b, equals(a));
+    }
+  });
+
+  test('IndexScalarQuantizer.rangeSearch returns approximately similar hits', () {
+    final sq = IndexScalarQuantizer(d)
+      ..train(xs)
+      ..add(xs);
+    final flat = IndexFlatL2(d)..add(xs);
+    final radius = 0.1;
+    final gold = flat.rangeSearch(queries, radius);
+    final got = sq.rangeSearch(queries, radius);
+    // SQ is quantized so hits aren't identical, but > 70 % of the
+    // exact hits should still be captured with the same radius.
+    var hit = 0;
+    var total = 0;
+    for (var qi = 0; qi < nq; qi++) {
+      final expected = <int>{};
+      for (var j = 0; j < gold.lengthFor(qi); j++) {
+        expected.add(gold.ids[gold.limits[qi] + j]);
+      }
+      final got_ids = <int>{};
+      for (var j = 0; j < got.lengthFor(qi); j++) {
+        got_ids.add(got.ids[got.limits[qi] + j]);
+      }
+      hit += expected.intersection(got_ids).length;
+      total += expected.length;
+    }
+    if (total > 0) {
+      expect(hit / total, greaterThan(0.7));
+    }
+  });
+
+  test('IndexFlat.removeIds compacts and updates ntotal', () {
+    final flat = IndexFlatL2(d)..add(xs);
+    // Remove every third id.
+    final toRemove = <int>{
+      for (var i = 0; i < n; i += 3) i,
+    };
+    final expectedKept = n - toRemove.length;
+    final removed = flat.removeIds(toRemove);
+    expect(removed, equals(toRemove.length));
+    expect(flat.ntotal, equals(expectedKept));
+    // The remaining vectors should be exactly the ones that were kept,
+    // in original order (though at compacted positions).
+    final kept = <Float32List>[];
+    for (var i = 0; i < n; i++) {
+      if (!toRemove.contains(i)) kept.add(xs[i]);
+    }
+    // Verify by searching each kept vector at k=1 and seeing itself.
+    final r = flat.search(kept.sublist(0, 5), 1);
+    for (var i = 0; i < 5; i++) {
+      expect(r.distances[i][0], closeTo(0.0, 1e-5));
+    }
+  });
+
+  test('IndexIVFFlat.removeIds keeps searchable state', () {
+    final ivf = IndexIVFFlat(d: d, nlist: 4, nprobe: 4)
+      ..train(xs)
+      ..add(xs);
+    final toRemove = <int>{0, 1, 2, 3, 4};
+    final removed = ivf.removeIds(toRemove);
+    expect(removed, equals(5));
+    expect(ivf.ntotal, equals(n - 5));
+    // Search should still succeed and never return a removed original id
+    // (which would now be at some new offset — verify by ensuring the
+    // top result for xs[5] is at position 0 in the compacted store).
+    final r = ivf.search(xs.sublist(5, 6), 1);
+    expect(r.ids[0][0], equals(0));
+  });
+
+  test('IndexIDMap.removeIds preserves external ids on the remaining set', () {
+    final idmap = IndexIDMap(IndexFlatL2(d));
+    final ids = List<int>.generate(n, (i) => 2000 + i);
+    idmap.addWithIds(xs, ids);
+    final toRemove = <int>{2000, 2005, 2010};
+    final removed = idmap.removeIds(toRemove);
+    expect(removed, equals(3));
+    expect(idmap.ntotal, equals(n - 3));
+    // Searching for one of the removed vectors must NOT return its old
+    // external id — it should return the next-closest kept vector.
+    final r = idmap.search(xs.sublist(0, 1), 1);
+    expect(r.ids[0][0], isNot(equals(2000)));
+    // Searching for a still-present vector returns its unchanged id.
+    final r2 = idmap.search(xs.sublist(6, 7), 1);
+    expect(r2.ids[0][0], equals(2006));
+  });
+
+  test('Index.rangeSearch throws on indexes without support', () {
+    final pq = IndexPQ(d: d, m: 4)
+      ..train(xs)
+      ..add(xs);
+    expect(
+      () => pq.rangeSearch(queries, 0.1),
+      throwsA(isA<UnsupportedError>()),
+    );
+  });
 }

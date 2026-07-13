@@ -54,7 +54,16 @@ class IndexKind {
 }
 
 /// File-format magic and version.
-const List<int> _magicBytes = <int>[0x46, 0x41, 0x49, 0x53, 0x44, 0x41, 0x52, 0x54]; // 'FAISDART'
+const List<int> _magicBytes = <int>[
+  0x46,
+  0x41,
+  0x49,
+  0x53,
+  0x44,
+  0x41,
+  0x52,
+  0x54,
+]; // 'FAISDART'
 const int _version = 1;
 
 /// Little-endian writer over a growing `BytesBuilder`.
@@ -139,7 +148,9 @@ class IoReader {
   }
 
   Uint8List readBytes(int n) {
-    final out = Uint8List.fromList(Uint8List.sublistView(_bytes, _pos, _pos + n));
+    final out = Uint8List.fromList(
+      Uint8List.sublistView(_bytes, _pos, _pos + n),
+    );
     _pos += n;
     return out;
   }
@@ -213,9 +224,7 @@ void writeChild(IoWriter w, Index x) {
     w.writeU32(IndexKind.refineFlat);
     x.writeTo(w);
   } else {
-    throw ArgumentError(
-      'writeIndex: unsupported index type ${x.runtimeType}',
-    );
+    throw ArgumentError('writeIndex: unsupported index type ${x.runtimeType}');
   }
 }
 
@@ -257,7 +266,9 @@ Index readChild(IoReader r) {
     case IndexKind.refineFlat:
       return IndexRefineFlat.readFrom(r);
     default:
-      throw FormatException('readIndex: unknown kind 0x${kind.toRadixString(16)}');
+      throw FormatException(
+        'readIndex: unknown kind 0x${kind.toRadixString(16)}',
+      );
   }
 }
 

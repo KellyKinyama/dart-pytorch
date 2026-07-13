@@ -164,6 +164,50 @@ class IndexScalarQuantizer extends Index {
     return SearchResult(distances, ids);
   }
 
+  @override
+  RangeSearchResult rangeSearch(List<Float32List> queries, double radius) {
+    if (!isTrained) {
+      throw StateError('IndexScalarQuantizer.rangeSearch before train()');
+    }
+    final nq = queries.length;
+    final perQueryDist = List<List<double>>.generate(nq, (_) => <double>[]);
+    final perQueryIds = List<List<int>>.generate(nq, (_) => <int>[]);
+
+    for (var qi = 0; qi < nq; qi++) {
+      final q = queries[qi];
+      if (q.length != d) {
+        throw ArgumentError('query $qi length ${q.length} != $d');
+      }
+      final dists = perQueryDist[qi];
+      final idsRow = perQueryIds[qi];
+      for (var vi = 0; vi < ntotal; vi++) {
+        final base = vi * d;
+        var s = 0.0;
+        if (metric == Metric.l2) {
+          for (var j = 0; j < d; j++) {
+            final decoded = _vmin[j] + _codes[base + j] * _scale[j];
+            final diff = q[j] - decoded;
+            s += diff * diff;
+          }
+          if (s <= radius) {
+            dists.add(s);
+            idsRow.add(vi);
+          }
+        } else {
+          for (var j = 0; j < d; j++) {
+            final decoded = _vmin[j] + _codes[base + j] * _scale[j];
+            s += q[j] * decoded;
+          }
+          if (s >= radius) {
+            dists.add(s);
+            idsRow.add(vi);
+          }
+        }
+      }
+    }
+    return RangeSearchResult.fromPerQuery(perQueryDist, perQueryIds);
+  }
+
   // --- persistence --------------------------------------------------------
 
   void writeTo(IoWriter w) {

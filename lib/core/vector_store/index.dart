@@ -34,6 +34,70 @@ class SearchResult {
   int get k => nq == 0 ? 0 : distances[0].length;
 }
 
+/// Result of a radius / range search — variable-length hits per query.
+///
+/// Mirrors FAISS' CSR layout: [limits] has length `nq + 1`, and the
+/// matches for query `qi` live in `[limits[qi] .. limits[qi + 1])`
+/// inside the flat [distances] and [ids] buffers. Total match count
+/// equals `limits[nq]`.
+///
+/// Matches are returned in insertion order, not sorted; callers that
+/// need sorted output should sort each `qi` slice themselves. For
+/// [Metric.l2] a match satisfies `dist <= radius`; for
+/// [Metric.innerProduct] it satisfies `dot >= radius` (i.e. radius is
+/// a similarity threshold).
+class RangeSearchResult {
+  RangeSearchResult(this.limits, this.distances, this.ids);
+  final Int32List limits;
+  final Float32List distances;
+  final Int32List ids;
+
+  int get nq => limits.length - 1;
+  int get totalMatches => limits.isEmpty ? 0 : limits[limits.length - 1];
+  int lengthFor(int qi) => limits[qi + 1] - limits[qi];
+
+  /// Pack variable-length per-query hits into CSR layout.
+  factory RangeSearchResult.fromPerQuery(
+    List<List<double>> perQueryDist,
+    List<List<int>> perQueryIds,
+  ) {
+    final nq = perQueryDist.length;
+    final limits = Int32List(nq + 1);
+    var total = 0;
+    for (var qi = 0; qi < nq; qi++) {
+      limits[qi] = total;
+      total += perQueryDist[qi].length;
+    }
+    limits[nq] = total;
+    final distances = Float32List(total);
+    final ids = Int32List(total);
+    var w = 0;
+    for (var qi = 0; qi < nq; qi++) {
+      final dsRow = perQueryDist[qi];
+      final idsRow = perQueryIds[qi];
+      for (var j = 0; j < dsRow.length; j++) {
+        distances[w] = dsRow[j];
+        ids[w] = idsRow[j];
+        w++;
+      }
+    }
+    return RangeSearchResult(limits, distances, ids);
+  }
+
+  /// Convenience: unpack into `nq` per-query `(distances, ids)` lists.
+  ({List<Float32List> distances, List<Int32List> ids}) toRows() {
+    final ds = List<Float32List>.generate(nq, (qi) {
+      final n = lengthFor(qi);
+      return Float32List.sublistView(distances, limits[qi], limits[qi] + n);
+    });
+    final is_ = List<Int32List>.generate(nq, (qi) {
+      final n = lengthFor(qi);
+      return Int32List.sublistView(ids, limits[qi], limits[qi] + n);
+    });
+    return (distances: ds, ids: is_);
+  }
+}
+
 /// Convenience: convert a row-major `List<List<double>>` to a list of
 /// `Float32List` rows (validating dimensionality).
 List<Float32List> toFloat32Rows(List<List<double>> rows, int d) {
@@ -83,6 +147,28 @@ abstract class Index {
 
   /// k-NN search. Returns `nq × k` distance/id matrices.
   SearchResult search(List<Float32List> queries, int k);
+
+  /// Radius / range search. Returns every stored vector within
+  /// `radius` of each query. Default: `throw UnsupportedError` —
+  /// override on indexes that can support it.
+  ///
+  /// For [Metric.l2] the match criterion is `dist <= radius`; for
+  /// [Metric.innerProduct] it is `dot >= radius`.
+  RangeSearchResult rangeSearch(List<Float32List> queries, double radius) {
+    throw UnsupportedError('$runtimeType does not support rangeSearch');
+  }
+
+  /// Physically remove the vectors whose internal ids are in [ids].
+  /// Returns the number of vectors actually removed. Remaining vectors
+  /// are renumbered contiguously starting at 0 — callers holding old
+  /// ids should update them via the value returned from [search] on
+  /// the modified index.
+  ///
+  /// Default: `throw UnsupportedError`. Override on indexes that
+  /// support in-place deletion.
+  int removeIds(Set<int> ids) {
+    throw UnsupportedError('$runtimeType does not support removeIds');
+  }
 
   /// Convenience wrapper for `List<List<double>>` inputs.
   void addRows(List<List<double>> xs) => add(toFloat32Rows(xs, d));

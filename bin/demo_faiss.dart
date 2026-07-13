@@ -14,6 +14,7 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:dart_pytorch/dart_pytorch.dart';
+
 const int _d = 64;
 const int _nb = 5000;
 const int _nq = 100;
@@ -255,12 +256,8 @@ void main() {
         'IVFPQ.bin': (IndexIVFPQ(d: _d, nlist: 64, m: 8, nprobe: 8)
           ..train(xb)
           ..add(xb)),
-        'HNSW.bin': IndexHNSW(
-          d: _d,
-          M: 16,
-          efConstruction: 100,
-          efSearch: 32,
-        )..add(xb),
+        'HNSW.bin': IndexHNSW(d: _d, M: 16, efConstruction: 100, efSearch: 32)
+          ..add(xb),
         'SQ8.bin': (IndexScalarQuantizer(_d)
           ..train(xb)
           ..add(xb)),
@@ -295,7 +292,96 @@ void main() {
     }
   }
 
+  // Range search — how many db vectors sit within radius `r` of each query.
+  print('\nRange search (L2):');
+  {
+    // Pick a radius so that we typically capture a handful of neighbours.
+    // The mean k=10 distance from the flat search gives a decent scale.
+    var meanTopK = 0.0;
+    for (var qi = 0; qi < _nq; qi++) {
+      meanTopK += truth.distances[qi][_k - 1];
+    }
+    meanTopK /= _nq;
+    final radius = meanTopK; // catch ≈ top-10 per query on average.
+
+    void report(String name, RangeSearchResult r, Duration wall) {
+      var total = 0;
+      var minHits = 1 << 30;
+      var maxHits = 0;
+      for (var qi = 0; qi < _nq; qi++) {
+        final n = r.lengthFor(qi);
+        total += n;
+        if (n < minHits) minHits = n;
+        if (n > maxHits) maxHits = n;
+      }
+      final avg = total / _nq;
+      final us = wall.inMicroseconds / _nq;
+      print(
+        '  ${name.padRight(20)}'
+        'r=${radius.toStringAsFixed(3)}   '
+        'hits/q: avg ${avg.toStringAsFixed(1)} min $minHits max $maxHits   '
+        '${us.toStringAsFixed(1).padLeft(6)} µs/q',
+      );
+    }
+
+    final flatRs = _timedRange(flat, xq, radius);
+    report('IndexFlatL2', flatRs.result, flatRs.wall);
+
+    final ivf = IndexIVFFlat(d: _d, nlist: 64, nprobe: 8)
+      ..train(xb)
+      ..add(xb);
+    final ivfRs = _timedRange(ivf, xq, radius);
+    report('IVFFlat nprobe=8', ivfRs.result, ivfRs.wall);
+
+    final sq = IndexScalarQuantizer(_d)
+      ..train(xb)
+      ..add(xb);
+    final sqRs = _timedRange(sq, xq, radius);
+    report('SQ8', sqRs.result, sqRs.wall);
+  }
+
+  // removeIds — delete a slice, verify count and searchability.
+  print('\nremoveIds:');
+  {
+    final ivf = IndexIVFFlat(d: _d, nlist: 64, nprobe: 8)
+      ..train(xb)
+      ..add(xb);
+    print('  before  ntotal=${ivf.ntotal}');
+    final toRemove = <int>{
+      for (var i = 0; i < 1000; i++) i * 3, // 1000 evenly-spaced ids
+    };
+    sw = Stopwatch()..start();
+    final removed = ivf.removeIds(toRemove);
+    sw.stop();
+    print(
+      '  removed $removed vectors in ${sw.elapsed.inMilliseconds} ms   '
+      'now ntotal=${ivf.ntotal}',
+    );
+    // Post-delete search: pick a query and confirm we still get k=10 hits.
+    final r = ivf.search(xq.sublist(0, 5), _k);
+    var minHits = 1 << 30;
+    for (var qi = 0; qi < 5; qi++) {
+      var n = 0;
+      for (var j = 0; j < _k; j++) {
+        if (r.ids[qi][j] >= 0) n++;
+      }
+      if (n < minHits) minHits = n;
+    }
+    print('  post-delete search: min $minHits/${_k} hits across 5 queries');
+  }
+
   print(
     '\nDone. Larger corpora and higher-recall settings tighten the picture.',
   );
+}
+
+({Duration wall, RangeSearchResult result}) _timedRange(
+  Index idx,
+  List<Float32List> queries,
+  double radius,
+) {
+  final sw = Stopwatch()..start();
+  final r = idx.rangeSearch(queries, radius);
+  sw.stop();
+  return (wall: sw.elapsed, result: r);
 }

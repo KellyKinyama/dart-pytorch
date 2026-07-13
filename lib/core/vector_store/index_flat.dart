@@ -96,6 +96,69 @@ class IndexFlat extends Index {
     return SearchResult(distances, ids);
   }
 
+  @override
+  RangeSearchResult rangeSearch(List<Float32List> queries, double radius) {
+    final nq = queries.length;
+    final perQueryDist = List<List<double>>.generate(nq, (_) => <double>[]);
+    final perQueryIds = List<List<int>>.generate(nq, (_) => <int>[]);
+
+    for (var qi = 0; qi < nq; qi++) {
+      final q = queries[qi];
+      if (q.length != d) {
+        throw ArgumentError('query $qi length ${q.length} != $d');
+      }
+      final dists = perQueryDist[qi];
+      final idsRow = perQueryIds[qi];
+      for (var vi = 0; vi < ntotal; vi++) {
+        final base = vi * d;
+        var s = 0.0;
+        if (metric == Metric.l2) {
+          for (var j = 0; j < d; j++) {
+            final diff = q[j] - _storage[base + j];
+            s += diff * diff;
+          }
+          if (s <= radius) {
+            dists.add(s);
+            idsRow.add(vi);
+          }
+        } else {
+          for (var j = 0; j < d; j++) {
+            s += q[j] * _storage[base + j];
+          }
+          if (s >= radius) {
+            dists.add(s);
+            idsRow.add(vi);
+          }
+        }
+      }
+    }
+
+    return RangeSearchResult.fromPerQuery(perQueryDist, perQueryIds);
+  }
+
+  @override
+  int removeIds(Set<int> ids) {
+    if (ids.isEmpty) return 0;
+    var write = 0;
+    var removed = 0;
+    for (var read = 0; read < ntotal; read++) {
+      if (ids.contains(read)) {
+        removed++;
+        continue;
+      }
+      if (write != read) {
+        final srcBase = read * d;
+        final dstBase = write * d;
+        for (var j = 0; j < d; j++) {
+          _storage[dstBase + j] = _storage[srcBase + j];
+        }
+      }
+      write++;
+    }
+    ntotal = write;
+    return removed;
+  }
+
   // --- persistence --------------------------------------------------------
 
   /// Writes the common header + raw fp32 storage.
