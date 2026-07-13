@@ -509,6 +509,93 @@ void main() {
     }
   });
 
+  test('IndexBinaryIVF matches BinaryFlat when nprobe=nlist', () {
+    const codeSize = 8;
+    final rng = math.Random(4);
+    // Build 8 clustered "populations" of codes so binary k-means has
+    // real structure to discover.
+    final centers = List<Uint8List>.generate(8, (_) {
+      final c = Uint8List(codeSize);
+      for (var j = 0; j < codeSize; j++) {
+        c[j] = rng.nextInt(256);
+      }
+      return c;
+    });
+    final codes = List<Uint8List>.generate(400, (i) {
+      final base = centers[i % 8];
+      final c = Uint8List(codeSize);
+      // Flip ~5 % of bits.
+      for (var j = 0; j < codeSize; j++) {
+        var b = base[j];
+        for (var bit = 0; bit < 8; bit++) {
+          if (rng.nextDouble() < 0.05) b ^= (1 << bit);
+        }
+        c[j] = b;
+      }
+      return c;
+    });
+    final qs = codes.sublist(0, 20);
+    final flat = IndexBinaryFlat(codeSize)..add(codes);
+    final ivf = IndexBinaryIVF(codeSize: codeSize, nlist: 8, nprobe: 8);
+    ivf.train(codes);
+    ivf.add(codes);
+    final flatR = flat.search(qs, 5);
+    final ivfR = ivf.search(qs, 5);
+    // Same top-1 id in every query when we probe every list.
+    for (var qi = 0; qi < 20; qi++) {
+      expect(ivfR.ids[qi][0], equals(flatR.ids[qi][0]));
+    }
+  });
+
+  test('IndexBinaryIVF ntotal accumulates across add calls', () {
+    const codeSize = 4;
+    final rng = math.Random(5);
+    Uint8List rnd() {
+      final c = Uint8List(codeSize);
+      for (var j = 0; j < codeSize; j++) {
+        c[j] = rng.nextInt(256);
+      }
+      return c;
+    }
+    final train = List<Uint8List>.generate(50, (_) => rnd());
+    final ivf = IndexBinaryIVF(codeSize: codeSize, nlist: 4)..train(train);
+    ivf.add(List.generate(20, (_) => rnd()));
+    ivf.add(List.generate(30, (_) => rnd()));
+    expect(ivf.ntotal, equals(50));
+    var sum = 0;
+    for (var c = 0; c < 4; c++) {
+      sum += ivf.listSize(c);
+    }
+    expect(sum, equals(50));
+  });
+
+  test('IndexBinaryIVF round-trips through bytes', () {
+    const codeSize = 8;
+    final rng = math.Random(6);
+    final codes = List<Uint8List>.generate(120, (_) {
+      final c = Uint8List(codeSize);
+      for (var j = 0; j < codeSize; j++) {
+        c[j] = rng.nextInt(256);
+      }
+      return c;
+    });
+    final ivf = IndexBinaryIVF(codeSize: codeSize, nlist: 8, nprobe: 3);
+    ivf.train(codes);
+    ivf.add(codes);
+    final before = ivf.search(codes.sublist(0, 5), 3);
+    final loaded = readBinaryIndex(writeBinaryIndex(ivf)) as IndexBinaryIVF;
+    expect(loaded.nlist, equals(8));
+    expect(loaded.nprobe, equals(3));
+    expect(loaded.ntotal, equals(120));
+    final after = loaded.search(codes.sublist(0, 5), 3);
+    for (var qi = 0; qi < 5; qi++) {
+      for (var j = 0; j < 3; j++) {
+        expect(after.ids[qi][j], equals(before.ids[qi][j]));
+        expect(after.distances[qi][j], equals(before.distances[qi][j]));
+      }
+    }
+  });
+
   test('IndexLSH recall grows with nbits', () {
     // Use enough bits for a reasonable signal on d=16 blob data.
     final flat = IndexFlatL2(d)..add(xs);
@@ -808,17 +895,8 @@ void main() {
   });
 
   test('indexFactory rejects unknown specifiers', () {
-    expect(
-      () => indexFactory(d, 'Nope'),
-      throwsA(isA<FormatException>()),
-    );
-    expect(
-      () => indexFactory(d, 'IVF16'),
-      throwsA(isA<FormatException>()),
-    );
-    expect(
-      () => indexFactory(d, ''),
-      throwsA(isA<FormatException>()),
-    );
+    expect(() => indexFactory(d, 'Nope'), throwsA(isA<FormatException>()));
+    expect(() => indexFactory(d, 'IVF16'), throwsA(isA<FormatException>()));
+    expect(() => indexFactory(d, ''), throwsA(isA<FormatException>()));
   });
 }

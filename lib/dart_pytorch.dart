@@ -64,6 +64,7 @@ export 'core/vector_store/index_scalar_quantizer.dart';
 export 'core/vector_store/index_refine_flat.dart';
 export 'core/vector_store/index_binary.dart';
 export 'core/vector_store/index_binary_flat.dart';
+export 'core/vector_store/index_binary_ivf.dart';
 export 'core/vector_store/index_lsh.dart';
 export 'core/vector_store/vector_transform.dart';
 export 'core/vector_store/l2_norm_transform.dart';

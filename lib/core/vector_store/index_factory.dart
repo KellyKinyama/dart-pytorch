@@ -63,9 +63,7 @@ Index indexFactory(int d, String description, {Metric metric = Metric.l2}) {
 
   final indexTokens = tokens.sublist(i);
   if (indexTokens.isEmpty) {
-    throw FormatException(
-      'indexFactory: no index specifier in "$description"',
-    );
+    throw FormatException('indexFactory: no index specifier in "$description"');
   }
   final inner = _parseIndex(currentDim, indexTokens, metric);
 
@@ -158,13 +156,7 @@ Index _parseIndex(int d, List<String> tokens, Metric metric) {
     if (pqTail != null) {
       final m = int.parse(pqTail.group(1)!);
       final nbits = pqTail.group(2) != null ? int.parse(pqTail.group(2)!) : 8;
-      return IndexIVFPQ(
-        d: d,
-        nlist: nlist,
-        m: m,
-        nbits: nbits,
-        metric: metric,
-      );
+      return IndexIVFPQ(d: d, nlist: nlist, m: m, nbits: nbits, metric: metric);
     }
     throw FormatException('indexFactory: unknown IVF tail "$tail"');
   }

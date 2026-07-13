@@ -40,6 +40,7 @@ import 'index_refine_flat.dart';
 import 'index_scalar_quantizer.dart';
 import 'index_binary.dart';
 import 'index_binary_flat.dart';
+import 'index_binary_ivf.dart';
 import 'index_lsh.dart';
 import 'index_pre_transform.dart';
 
@@ -58,6 +59,7 @@ class IndexKind {
   static const int lsh = 0x09;
   static const int binaryFlat = 0x0A;
   static const int preTransform = 0x0B;
+  static const int binaryIVF = 0x0C;
 }
 
 /// File-format magic and version.
@@ -329,6 +331,9 @@ Uint8List writeBinaryIndex(IndexBinary x) {
   if (x is IndexBinaryFlat) {
     w.writeU32(IndexKind.binaryFlat);
     x.writeTo(w);
+  } else if (x is IndexBinaryIVF) {
+    w.writeU32(IndexKind.binaryIVF);
+    x.writeTo(w);
   } else {
     throw ArgumentError('writeBinaryIndex: unsupported type ${x.runtimeType}');
   }
@@ -352,6 +357,8 @@ IndexBinary readBinaryIndex(Uint8List bytes) {
   switch (kind) {
     case IndexKind.binaryFlat:
       return IndexBinaryFlat.readFrom(r);
+    case IndexKind.binaryIVF:
+      return IndexBinaryIVF.readFrom(r);
     default:
       throw FormatException(
         'readBinaryIndex: kind 0x${kind.toRadixString(16)} is not a binary index',

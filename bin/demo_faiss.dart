@@ -399,6 +399,36 @@ void main() {
       'self top-1 ${((bhit / _nq) * 100).toStringAsFixed(1)} %',
     );
 
+    // (1b) IndexBinaryIVF: same corpus, coarse-quantized into nlist
+    //      cells. Only nprobe cells are scanned per query. Recall
+    //      approaches BinaryFlat as nprobe grows.
+    for (final nprobe in [1, 4, 16]) {
+      final ivf = IndexBinaryIVF(
+        codeSize: codeSize,
+        nlist: 32,
+        nprobe: nprobe,
+      );
+      ivf.train(bcodes);
+      ivf.add(bcodes);
+      sw = Stopwatch()..start();
+      final r = ivf.search(bqueries, _k);
+      sw.stop();
+      // Recall vs BinaryFlat top-k.
+      var hit = 0;
+      for (var qi = 0; qi < _nq; qi++) {
+        final gold = br.ids[qi].toSet();
+        for (var j = 0; j < _k; j++) {
+          if (gold.contains(r.ids[qi][j])) hit++;
+        }
+      }
+      final rec = hit / (_nq * _k);
+      print(
+        '  BinaryIVF nprobe=${nprobe.toString().padLeft(2)}  '
+        'search ${(sw.elapsedMicroseconds / _nq).toStringAsFixed(1)} µs/q   '
+        'recall@10 vs BinaryFlat ${(rec * 100).toStringAsFixed(1)} %',
+      );
+    }
+
     // (2) IndexLSH over the float corpus — random-projection
     //     binarization; recall grows with nbits.
     for (final nbits in [64, 128, 256, 512]) {
