@@ -419,8 +419,7 @@ class IndexHNSW extends Index {
   // flat `offsets` + `neighbors` CSR layout.
 
   /// Read-only view into the packed float32 storage (`ntotal * d` values).
-  Float32List get storage =>
-      Float32List.sublistView(_storage, 0, ntotal * d);
+  Float32List get storage => Float32List.sublistView(_storage, 0, ntotal * d);
 
   /// Current graph entry point (storage id or `-1` when empty).
   int get entryPoint => _entryPoint;

@@ -1255,6 +1255,42 @@ void main() {
     }
   });
 
+  test('readFaissIndex decodes IxM2 (IndexIDMap2) as IndexIDMap', () {
+    // FAISS's `IndexIDMap2` reuses the exact byte layout of `IxMp` and
+    // rebuilds its reverse-lookup table lazily on demand. The port
+    // has no IndexIDMap2 class, so IxM2 is accepted as a read-only
+    // compatibility marker that decodes into a plain IndexIDMap.
+    final idmap = IndexIDMap(IndexFlatL2(d));
+    final ids = List<int>.generate(xs.length, (i) => 42 + i * 7);
+    idmap.addWithIds(xs, ids);
+    final before = idmap.search(queries, k);
+
+    final bytes = writeFaissIndexToBytes(idmap);
+    // Patch the leading fourcc from 'IxMp' to 'IxM2'.
+    expect(String.fromCharCodes(bytes.sublist(0, 4)), equals('IxMp'));
+    bytes[0] = 'I'.codeUnitAt(0);
+    bytes[1] = 'x'.codeUnitAt(0);
+    bytes[2] = 'M'.codeUnitAt(0);
+    bytes[3] = '2'.codeUnitAt(0);
+    expect(
+      bytes[0] | (bytes[1] << 8) | (bytes[2] << 16) | (bytes[3] << 24),
+      equals(FaissFourcc.idMap2),
+    );
+
+    final loaded = readFaissIndexFromBytes(bytes) as IndexIDMap;
+    expect(loaded.d, equals(d));
+    expect(loaded.ntotal, equals(xs.length));
+    for (var i = 0; i < xs.length; i++) {
+      expect(loaded.idOf(i), equals(ids[i]));
+    }
+    final after = loaded.search(queries, k);
+    for (var qi = 0; qi < nq; qi++) {
+      for (var j = 0; j < k; j++) {
+        expect(after.ids[qi][j], equals(before.ids[qi][j]));
+      }
+    }
+  });
+
   test('writeFaissTransform emits the exact FAISS byte layout for VNrm', () {
     // Golden fixture for a d=3 L2NormTransform, byte-for-byte the
     // output that upstream FAISS's write_VectorTransform produces

@@ -10,6 +10,10 @@
 ///
 /// * `IndexFlat`         — fourcc `IxF2` (L2) / `IxFI` (inner product).
 /// * `IndexIDMap`        — fourcc `IxMp`, wraps a sub-index + `i64` id table.
+///   `IxM2` (FAISS's `IndexIDMap2`) is accepted on read with the same
+///   payload layout — the extra reverse-lookup table is regenerated
+///   lazily by the port, so the two fourccs decode to the same
+///   [IndexIDMap] object.
 /// * `IndexPreTransform` — fourcc `IxPT`, chain of transforms + inner.
 /// * `IndexPQ`           — fourcc `IxPq`, product-quantised flat index.
 /// * `IndexScalarQuantizer` — fourcc `IxSQ`, 8-bit per-dim scalar
@@ -147,6 +151,14 @@ class FaissFourcc {
 
   /// `IxMp` — `IndexIDMap` wrapping a sub-index with a custom i64 id table.
   static final int idMap = of('IxMp');
+
+  /// `IxM2` — FAISS's `IndexIDMap2` (adds a reverse id lookup on top
+  /// of `IndexIDMap`). On disk the layout is byte-identical to
+  /// [idMap]; the reverse map is rebuilt lazily on demand and never
+  /// serialized. The port has no dedicated `IndexIDMap2` class, so
+  /// this fourcc is a read-only compatibility marker —
+  /// [readFaissIndex] decodes `IxM2` blobs into a plain [IndexIDMap].
+  static final int idMap2 = of('IxM2');
 
   /// `IxPT` — `IndexPreTransform`, a chain of vector transforms + inner index.
   static final int preTransform = of('IxPT');
@@ -1290,7 +1302,7 @@ _hnswDefaultProbas(int M, double mL) {
   final assignProbas = <double>[];
   final cumNneighborPerLevel = <int>[0];
   var nn = 0;
-  for (var level = 0;; level++) {
+  for (var level = 0; ; level++) {
     final proba = math.exp(-level / mL) * (1 - math.exp(-1 / mL));
     if (proba < 1e-9) break;
     assignProbas.add(proba);
@@ -1446,9 +1458,7 @@ _HnswPayload _readHnsw(IoReader r, int ntotal) {
   for (var i = 0; i < ntotal; i++) {
     final level = levels[i] - 1;
     if (level < 0) {
-      throw FormatException(
-        'IHNf: levels[$i] = ${levels[i]} < 1',
-      );
+      throw FormatException('IHNf: levels[$i] = ${levels[i]} < 1');
     }
     nodeLevels[i] = level;
     final layers = perNodePerLayerNeighbors[i];
@@ -1704,19 +1714,24 @@ Index readFaissIndex(IoReader r) {
     idx.isTrained = h.isTrained;
     return idx;
   }
-  if (tag == FaissFourcc.idMap) {
+  if (tag == FaissFourcc.idMap || tag == FaissFourcc.idMap2) {
+    // IxMp and IxM2 share the same on-disk layout — IndexIDMap2 only
+    // adds an in-memory reverse-lookup table that FAISS rebuilds on
+    // demand, so nothing extra is serialized. The port has no
+    // IndexIDMap2 class; both fourccs decode to a plain IndexIDMap.
+    final tagStr = FaissFourcc.toStr(tag);
     // Header is that of the wrapper (mirrors the sub-index's d/metric).
     final h = _readHeader(r);
     final inner = readFaissIndex(r);
     final ids = _readVectorI64(r);
     if (ids.length != h.ntotal) {
       throw FormatException(
-        'IxMp: id_map length ${ids.length} != header ntotal ${h.ntotal}',
+        '$tagStr: id_map length ${ids.length} != header ntotal ${h.ntotal}',
       );
     }
     if (inner.ntotal != h.ntotal) {
       throw FormatException(
-        'IxMp: inner ntotal ${inner.ntotal} != wrapper ntotal ${h.ntotal}',
+        '$tagStr: inner ntotal ${inner.ntotal} != wrapper ntotal ${h.ntotal}',
       );
     }
     final idmap = IndexIDMap(inner);
@@ -1728,7 +1743,7 @@ Index readFaissIndex(IoReader r) {
     if (h.ntotal > 0) {
       if (inner is! IndexFlat) {
         throw UnsupportedError(
-          'IxMp: reading with a non-Flat inner (${inner.runtimeType}) '
+          '$tagStr: reading with a non-Flat inner (${inner.runtimeType}) '
           'is not yet supported.',
         );
       }
