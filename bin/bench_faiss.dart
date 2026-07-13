@@ -42,76 +42,124 @@ int main(List<String> args) {
   // -----------------------------------------------------------------
   // Flat (baseline).
   // -----------------------------------------------------------------
-  results.add(benchIndex(
-    index: flat,
-    queries: queries,
-    k: opts.k,
-    truth: truth,
-    label: 'IndexFlatL2',
-  ));
+  results.add(
+    benchIndex(
+      index: flat,
+      queries: queries,
+      k: opts.k,
+      truth: truth,
+      label: 'IndexFlatL2',
+    ),
+  );
+
+  // -----------------------------------------------------------------
+  // GPU-backed flat. Wraps the same IndexFlat so the vectors are
+  // shared byte-for-byte with the CPU baseline. Warmed once so the
+  // first timing pass does not eat the DB upload cost.
+  // -----------------------------------------------------------------
+  final gpuFlat = GpuIndexFlat.wrap(flat)..warmup();
+  results.add(
+    benchIndex(
+      index: gpuFlat,
+      queries: queries,
+      k: opts.k,
+      truth: truth,
+      label: 'GpuIndexFlat',
+    ),
+  );
+
+  // Batched-mode rows for the flat comparators — GPU's Q @ D^T
+  // amortises upload + FFI cost across the whole batch, so this is
+  // where the GPU speedup (if any) actually shows up. The per-query
+  // number reported for these rows is (batch_us / nq) so it is
+  // directly comparable to the per-query rows above.
+  const batched = BenchOptions(perQuery: false);
+  results.add(
+    benchIndex(
+      index: flat,
+      queries: queries,
+      k: opts.k,
+      truth: truth,
+      label: 'IndexFlatL2 [batched]',
+      options: batched,
+    ),
+  );
+  results.add(
+    benchIndex(
+      index: gpuFlat,
+      queries: queries,
+      k: opts.k,
+      truth: truth,
+      label: 'GpuIndexFlat [batched]',
+      options: batched,
+    ),
+  );
 
   // -----------------------------------------------------------------
   // IVFFlat sweep on nprobe.
   // -----------------------------------------------------------------
   final ivf = flatToIvfFlat(flat, nlist: _autoNlist(opts.nb), nprobe: 1);
-  results.addAll(benchIndexSweep(
-    index: ivf,
-    queries: queries,
-    k: opts.k,
-    truth: truth,
-    values: <int>[1, 2, 4, 8, 16, 32],
-    configure: (nprobe) {
-      final np = nprobe.clamp(1, ivf.nlist);
-      ivf.nprobe = np;
-      return 'IVFFlat  nprobe=${np.toString().padLeft(2)}';
-    },
-  ));
+  results.addAll(
+    benchIndexSweep(
+      index: ivf,
+      queries: queries,
+      k: opts.k,
+      truth: truth,
+      values: <int>[1, 2, 4, 8, 16, 32],
+      configure: (nprobe) {
+        final np = nprobe.clamp(1, ivf.nlist);
+        ivf.nprobe = np;
+        return 'IVFFlat  nprobe=${np.toString().padLeft(2)}';
+      },
+    ),
+  );
 
   // -----------------------------------------------------------------
   // IVFPQ + IVFPQ+Refine sweep on nprobe.
   // -----------------------------------------------------------------
   final m = _pickPqM(opts.d);
-  final ivfpq = flatToIvfPq(
-    flat,
-    m: m,
-    nlist: _autoNlist(opts.nb),
-    nprobe: 1,
-  );
+  final ivfpq = flatToIvfPq(flat, m: m, nlist: _autoNlist(opts.nb), nprobe: 1);
   final refined = wrapWithRefine(ivfpq, flat, kFactor: 4);
   for (final nprobe in <int>[1, 4, 8, 16]) {
     final np = nprobe.clamp(1, ivfpq.nlist);
     ivfpq.nprobe = np;
-    results.add(benchIndex(
-      index: ivfpq,
-      queries: queries,
-      k: opts.k,
-      truth: truth,
-      label: 'IVFPQ    m=$m nprobe=${np.toString().padLeft(2)}',
-    ));
-    results.add(benchIndex(
-      index: refined,
-      queries: queries,
-      k: opts.k,
-      truth: truth,
-      label: 'IVFPQ+RF m=$m nprobe=${np.toString().padLeft(2)}',
-    ));
+    results.add(
+      benchIndex(
+        index: ivfpq,
+        queries: queries,
+        k: opts.k,
+        truth: truth,
+        label: 'IVFPQ    m=$m nprobe=${np.toString().padLeft(2)}',
+      ),
+    );
+    results.add(
+      benchIndex(
+        index: refined,
+        queries: queries,
+        k: opts.k,
+        truth: truth,
+        label: 'IVFPQ+RF m=$m nprobe=${np.toString().padLeft(2)}',
+      ),
+    );
   }
 
   // -----------------------------------------------------------------
   // HNSW sweep on efSearch.
   // -----------------------------------------------------------------
   final hnsw = flatToHnsw(flat, m: 16, efConstruction: 80);
-  results.addAll(benchIndexSweep(
-    index: hnsw,
-    queries: queries,
-    k: opts.k,
-    truth: truth,
-    values: <int>[8, 16, 32, 64, 128],
-    configure: (ef) {
-      hnsw.efSearch = ef;
-      return 'HNSW    efSearch=${ef.toString().padLeft(3)}';
-    },
-  ));
+  results.addAll(
+    benchIndexSweep(
+      index: hnsw,
+      queries: queries,
+      k: opts.k,
+      truth: truth,
+      values: <int>[8, 16, 32, 64, 128],
+      configure: (ef) {
+        hnsw.efSearch = ef;
+        return 'HNSW    efSearch=${ef.toString().padLeft(3)}';
+      },
+    ),
+  );
 
   stdout.write(formatBenchTable(results));
 
@@ -229,14 +277,7 @@ class _Options {
         return null;
       }
     }
-    return _Options(
-      nb: nb,
-      nq: nq,
-      d: d,
-      k: k,
-      seed: seed,
-      csvPath: csvPath,
-    );
+    return _Options(nb: nb, nq: nq, d: d, k: k, seed: seed, csvPath: csvPath);
   }
 }
 

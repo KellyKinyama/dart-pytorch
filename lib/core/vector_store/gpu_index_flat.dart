@@ -44,8 +44,7 @@ class GpuIndexFlat extends Index {
   }
 
   /// Construct an L2 GPU flat.
-  factory GpuIndexFlat.l2(int d) =>
-      GpuIndexFlat._(IndexFlat(d, Metric.l2));
+  factory GpuIndexFlat.l2(int d) => GpuIndexFlat._(IndexFlat(d, Metric.l2));
 
   /// Construct an inner-product GPU flat.
   factory GpuIndexFlat.ip(int d) =>
@@ -121,10 +120,7 @@ class GpuIndexFlat extends Index {
   SearchResult search(List<Float32List> queries, int k) {
     final nq = queries.length;
     if (nq == 0) {
-      return SearchResult(
-        List<Float32List>.empty(),
-        List<Int32List>.empty(),
-      );
+      return SearchResult(List<Float32List>.empty(), List<Int32List>.empty());
     }
     if (_backing.ntotal == 0 || nq * _backing.ntotal * d < gpuIndexFlatMinDot) {
       return _backing.search(queries, k);

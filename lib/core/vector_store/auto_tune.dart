@@ -48,14 +48,15 @@ class OperatingPoint {
   final double meanUs;
 
   @override
-  String toString() => '$paramLabel  recall=${recall.toStringAsFixed(3)}  '
+  String toString() =>
+      '$paramLabel  recall=${recall.toStringAsFixed(3)}  '
       'mean_us=${meanUs.toStringAsFixed(1)}';
 }
 
 /// Collection of operating points with Pareto / selection helpers.
 class OperatingPoints {
   OperatingPoints(List<OperatingPoint> points)
-      : points = List<OperatingPoint>.unmodifiable(points);
+    : points = List<OperatingPoint>.unmodifiable(points);
 
   /// All points, in the order they were measured.
   final List<OperatingPoint> points;
@@ -142,12 +143,14 @@ OperatingPoints autoTuneNprobe({
       label: 'nprobe=$np',
       options: options,
     );
-    rows.add(OperatingPoint(
-      paramValue: np,
-      paramLabel: 'nprobe=$np',
-      recall: r.recall,
-      meanUs: r.meanUs,
-    ));
+    rows.add(
+      OperatingPoint(
+        paramValue: np,
+        paramLabel: 'nprobe=$np',
+        recall: r.recall,
+        meanUs: r.meanUs,
+      ),
+    );
   }
   final points = OperatingPoints(rows);
   if (applyBest && minRecall != null) {
@@ -182,12 +185,14 @@ OperatingPoints autoTuneEfSearch({
       label: 'efSearch=$ef',
       options: options,
     );
-    rows.add(OperatingPoint(
-      paramValue: ef,
-      paramLabel: 'efSearch=$ef',
-      recall: r.recall,
-      meanUs: r.meanUs,
-    ));
+    rows.add(
+      OperatingPoint(
+        paramValue: ef,
+        paramLabel: 'efSearch=$ef',
+        recall: r.recall,
+        meanUs: r.meanUs,
+      ),
+    );
   }
   final points = OperatingPoints(rows);
   if (applyBest && minRecall != null) {
@@ -229,7 +234,5 @@ int _nprobeNlist(Index target) {
     if (base is IndexIVFFlat) return base.nlist;
     if (base is IndexIVFPQ) return base.nlist;
   }
-  throw ArgumentError(
-    'autoTuneNprobe: no nlist for ${target.runtimeType}',
-  );
+  throw ArgumentError('autoTuneNprobe: no nlist for ${target.runtimeType}');
 }

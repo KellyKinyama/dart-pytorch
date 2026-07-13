@@ -70,11 +70,7 @@ class BenchResult {
 /// Knobs for [benchIndex]. Sensible defaults are provided for one-off
 /// use; the sweep helpers reuse this class to keep argument lists sane.
 class BenchOptions {
-  const BenchOptions({
-    this.warmup = 1,
-    this.repeats = 3,
-    this.perQuery = true,
-  });
+  const BenchOptions({this.warmup = 1, this.repeats = 3, this.perQuery = true});
 
   /// Number of warmup passes (results discarded).
   final int warmup;
@@ -205,14 +201,16 @@ List<BenchResult> benchIndexSweep<T>({
   final out = <BenchResult>[];
   for (final v in values) {
     final label = configure(v);
-    out.add(benchIndex(
-      index: index,
-      queries: queries,
-      k: k,
-      truth: truth,
-      label: label,
-      options: options,
-    ));
+    out.add(
+      benchIndex(
+        index: index,
+        queries: queries,
+        k: k,
+        truth: truth,
+        label: label,
+        options: options,
+      ),
+    );
   }
   return out;
 }
@@ -252,12 +250,15 @@ String toBenchCsv(Iterable<BenchResult> rows) {
 String formatBenchTable(Iterable<BenchResult> rows) {
   final rowsList = rows.toList();
   if (rowsList.isEmpty) return '(no rows)\n';
-  final labelWidth =
-      rowsList.map((r) => r.label.length).reduce((a, b) => a > b ? a : b);
+  final labelWidth = rowsList
+      .map((r) => r.label.length)
+      .reduce((a, b) => a > b ? a : b);
   final lw = labelWidth < 12 ? 12 : labelWidth;
   final buf = StringBuffer();
   buf.write(_pad('label', lw));
-  buf.write('  recall   mean_us    p50_us    p95_us    p99_us  ntotal   nq   k\n');
+  buf.write(
+    '  recall   mean_us    p50_us    p95_us    p99_us  ntotal   nq   k\n',
+  );
   buf.write('-' * (lw + 68));
   buf.write('\n');
   for (final r in rowsList) {

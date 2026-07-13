@@ -2702,8 +2702,7 @@ void main() {
 
   test('flatToIvfPq trains PQ and hits reasonable recall with refine', () {
     final flat = IndexFlatL2(d)..add(xs);
-    final ivfpq =
-        flatToIvfPq(flat, m: 4, nbits: 8, nlist: 16, nprobe: 16);
+    final ivfpq = flatToIvfPq(flat, m: 4, nbits: 8, nlist: 16, nprobe: 16);
     expect(ivfpq.m, equals(4));
     expect(ivfpq.nlist, equals(16));
     expect(ivfpq.ntotal, equals(xs.length));
@@ -2725,18 +2724,12 @@ void main() {
   });
 
   test('flatToIvfFlat rejects empty sources', () {
-    expect(
-      () => flatToIvfFlat(IndexFlatL2(d)),
-      throwsA(isA<ArgumentError>()),
-    );
+    expect(() => flatToIvfFlat(IndexFlatL2(d)), throwsA(isA<ArgumentError>()));
   });
 
   test('flatToIvfPq rejects m that does not divide d', () {
     final flat = IndexFlatL2(d)..add(xs);
-    expect(
-      () => flatToIvfPq(flat, m: 5),
-      throwsA(isA<ArgumentError>()),
-    );
+    expect(() => flatToIvfPq(flat, m: 5), throwsA(isA<ArgumentError>()));
   });
 
   test('wrapWithRefine rejects mismatched d / metric / ntotal', () {
@@ -2744,16 +2737,10 @@ void main() {
     final ivf = flatToIvfFlat(flat, nlist: 16, nprobe: 16);
     // Ntotal mismatch: rebuild a smaller flat.
     final smallFlat = IndexFlatL2(d)..add(xs.sublist(0, xs.length - 1));
-    expect(
-      () => wrapWithRefine(ivf, smallFlat),
-      throwsA(isA<ArgumentError>()),
-    );
+    expect(() => wrapWithRefine(ivf, smallFlat), throwsA(isA<ArgumentError>()));
     // Metric mismatch: IP flat vs L2 IVF.
     final ipFlat = IndexFlatIP(d)..add(xs);
-    expect(
-      () => wrapWithRefine(ivf, ipFlat),
-      throwsA(isA<ArgumentError>()),
-    );
+    expect(() => wrapWithRefine(ivf, ipFlat), throwsA(isA<ArgumentError>()));
   });
 
   // -----------------------------------------------------------------
@@ -2847,12 +2834,7 @@ void main() {
     // Shorter queries → mismatch with `truth.nq`.
     final short = queries.sublist(0, 3);
     expect(
-      () => benchIndex(
-        index: flat,
-        queries: short,
-        k: k,
-        truth: truth,
-      ),
+      () => benchIndex(index: flat, queries: short, k: k, truth: truth),
       throwsA(isA<ArgumentError>()),
     );
     // Ask for larger k than truth has.
@@ -2903,10 +2885,7 @@ void main() {
     final frontier = points.pareto();
     // (nprobe=2) is strictly dominated by (nprobe=4).
     expect(frontier.map((p) => p.paramValue), containsAll(<int>[1, 4, 8]));
-    expect(
-      frontier.map((p) => p.paramValue),
-      isNot(contains(2)),
-    );
+    expect(frontier.map((p) => p.paramValue), isNot(contains(2)));
   });
 
   test('OperatingPoints.pickForRecall picks the fastest point >= floor', () {
@@ -2935,31 +2914,33 @@ void main() {
     expect(points.pickForRecall(0.999), isNull);
   });
 
-  test('OperatingPoints.pickForLatency picks the highest recall within budget',
-      () {
-    final points = OperatingPoints(<OperatingPoint>[
-      const OperatingPoint(
-        paramValue: 1,
-        paramLabel: 'nprobe=1',
-        recall: 0.5,
-        meanUs: 5.0,
-      ),
-      const OperatingPoint(
-        paramValue: 8,
-        paramLabel: 'nprobe=8',
-        recall: 0.9,
-        meanUs: 30.0,
-      ),
-      const OperatingPoint(
-        paramValue: 32,
-        paramLabel: 'nprobe=32',
-        recall: 0.99,
-        meanUs: 90.0,
-      ),
-    ]);
-    expect(points.pickForLatency(50.0)!.paramValue, equals(8));
-    expect(points.pickForLatency(4.0), isNull);
-  });
+  test(
+    'OperatingPoints.pickForLatency picks the highest recall within budget',
+    () {
+      final points = OperatingPoints(<OperatingPoint>[
+        const OperatingPoint(
+          paramValue: 1,
+          paramLabel: 'nprobe=1',
+          recall: 0.5,
+          meanUs: 5.0,
+        ),
+        const OperatingPoint(
+          paramValue: 8,
+          paramLabel: 'nprobe=8',
+          recall: 0.9,
+          meanUs: 30.0,
+        ),
+        const OperatingPoint(
+          paramValue: 32,
+          paramLabel: 'nprobe=32',
+          recall: 0.99,
+          meanUs: 90.0,
+        ),
+      ]);
+      expect(points.pickForLatency(50.0)!.paramValue, equals(8));
+      expect(points.pickForLatency(4.0), isNull);
+    },
+  );
 
   test('autoTuneNprobe sweeps IVFFlat and applies the chosen value', () {
     final flat = IndexFlatL2(d)..add(xs);
@@ -3053,12 +3034,7 @@ void main() {
   test('autoTuneNprobe rejects an unwrappable target', () {
     final flat = IndexFlatL2(d)..add(xs);
     expect(
-      () => autoTuneNprobe(
-        target: flat,
-        queries: queries,
-        k: k,
-        truth: truth,
-      ),
+      () => autoTuneNprobe(target: flat, queries: queries, k: k, truth: truth),
       throwsA(isA<ArgumentError>()),
     );
   });
@@ -3067,18 +3043,20 @@ void main() {
   // GPU-backed flat search.
   // -----------------------------------------------------------------
 
-  test('GpuIndexFlat matches IndexFlatL2 top-1 for a small corpus (fallback)',
-      () {
-    // Small size → wrapper transparently defers to CPU search.
-    final gpu = GpuIndexFlat.l2(d)..add(xs);
-    final flat = IndexFlatL2(d)..add(xs);
-    final g = gpu.search(queries, k);
-    final f = flat.search(queries, k);
-    for (var qi = 0; qi < queries.length; qi++) {
-      expect(g.ids[qi][0], equals(f.ids[qi][0]));
-      expect(g.distances[qi][0], closeTo(f.distances[qi][0], 1e-3));
-    }
-  });
+  test(
+    'GpuIndexFlat matches IndexFlatL2 top-1 for a small corpus (fallback)',
+    () {
+      // Small size → wrapper transparently defers to CPU search.
+      final gpu = GpuIndexFlat.l2(d)..add(xs);
+      final flat = IndexFlatL2(d)..add(xs);
+      final g = gpu.search(queries, k);
+      final f = flat.search(queries, k);
+      for (var qi = 0; qi < queries.length; qi++) {
+        expect(g.ids[qi][0], equals(f.ids[qi][0]));
+        expect(g.distances[qi][0], closeTo(f.distances[qi][0], 1e-3));
+      }
+    },
+  );
 
   test('GpuIndexFlat.l2 matches IndexFlatL2 at a size that clears the '
       'CPU-fallback threshold', () {

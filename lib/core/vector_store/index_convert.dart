@@ -158,15 +158,9 @@ IndexHNSW flatToHnsw(
 ///
 /// Requires the base to be already trained and populated to the same
 /// `ntotal` as `src`, and both to agree on `d` / `metric`.
-IndexRefineFlat wrapWithRefine(
-  Index base,
-  IndexFlat src, {
-  int kFactor = 4,
-}) {
+IndexRefineFlat wrapWithRefine(Index base, IndexFlat src, {int kFactor = 4}) {
   if (base.d != src.d) {
-    throw ArgumentError(
-      'wrapWithRefine: base.d=${base.d} != src.d=${src.d}',
-    );
+    throw ArgumentError('wrapWithRefine: base.d=${base.d} != src.d=${src.d}');
   }
   if (base.metric != src.metric) {
     throw ArgumentError(
@@ -211,11 +205,7 @@ int _autoNlist(int ntotal) {
 
 /// Deterministic uniform subsample of `xs` down to `cap` rows. Returns
 /// `xs` unchanged if `cap` is null or `>= xs.length`.
-List<Float32List> _maybeSubsample(
-  List<Float32List> xs,
-  int? cap,
-  int seed,
-) {
+List<Float32List> _maybeSubsample(List<Float32List> xs, int? cap, int seed) {
   if (cap == null || cap >= xs.length) return xs;
   // Fisher-Yates prefix — pick `cap` indices without replacement.
   final n = xs.length;
