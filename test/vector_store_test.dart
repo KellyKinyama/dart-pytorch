@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
@@ -2555,6 +2556,114 @@ void main() {
       () => readFaissIndexFromBytes(bytes),
       throwsA(isA<UnsupportedError>()),
     );
+  });
+
+  test('probeFaissIndex reports metadata for float indexes without decoding',
+      () {
+    final flat = IndexFlatL2(d)..add(xs);
+    final flatBytes = writeFaissIndexToBytes(flat);
+    final flatInfo = probeFaissIndex(flatBytes);
+    expect(flatInfo.fourccStr, equals('IxF2'));
+    expect(flatInfo.kind, equals(FaissIndexKind.floatIndex));
+    expect(flatInfo.d, equals(d));
+    expect(flatInfo.ntotal, equals(xs.length));
+    expect(flatInfo.metric, equals(Metric.l2));
+    expect(flatInfo.isTrained, isTrue);
+    expect(flatInfo.codeSize, isNull);
+
+    final ip = IndexFlatIP(d)..add(xs);
+    final ipInfo = probeFaissIndex(writeFaissIndexToBytes(ip));
+    expect(ipInfo.fourccStr, equals('IxFI'));
+    expect(ipInfo.metric, equals(Metric.innerProduct));
+
+    final hnsw = IndexHNSW(d: d, M: 8, efConstruction: 40, efSearch: 32)
+      ..add(xs);
+    final hnswInfo = probeFaissIndex(writeFaissIndexToBytes(hnsw));
+    expect(hnswInfo.fourccStr, equals('IHNf'));
+    expect(hnswInfo.kind, equals(FaissIndexKind.floatIndex));
+    expect(hnswInfo.d, equals(d));
+    expect(hnswInfo.ntotal, equals(xs.length));
+
+    final idmap = IndexIDMap(IndexFlatL2(d))
+      ..addWithIds(xs, List<int>.generate(xs.length, (i) => i + 500));
+    final idmapInfo = probeFaissIndex(writeFaissIndexToBytes(idmap));
+    expect(idmapInfo.fourccStr, equals('IxMp'));
+    expect(idmapInfo.ntotal, equals(xs.length));
+  });
+
+  test('probeFaissIndex reports metadata for binary indexes', () {
+    final codeSize = 8;
+    final rng = math.Random(1);
+    final codes = List<Uint8List>.generate(24, (_) {
+      final c = Uint8List(codeSize);
+      for (var j = 0; j < codeSize; j++) {
+        c[j] = rng.nextInt(256);
+      }
+      return c;
+    });
+    final bxf = IndexBinaryFlat(codeSize)..add(codes);
+    final bxfInfo = probeFaissIndex(writeFaissBinaryIndexToBytes(bxf));
+    expect(bxfInfo.fourccStr, equals('IBxF'));
+    expect(bxfInfo.kind, equals(FaissIndexKind.binaryIndex));
+    expect(bxfInfo.d, equals(codeSize * 8));
+    expect(bxfInfo.codeSize, equals(codeSize));
+    expect(bxfInfo.ntotal, equals(codes.length));
+    // IndexBinary's on-disk metric is METRIC_L2 = 1 (even though the
+    // real distance is Hamming) — surface it verbatim.
+    expect(bxfInfo.metric, equals(Metric.l2));
+
+    final ivf = IndexBinaryIVF(codeSize: codeSize, nlist: 4)
+      ..train(codes)
+      ..add(codes);
+    final ivfInfo = probeFaissIndex(writeFaissBinaryIndexToBytes(ivf));
+    expect(ivfInfo.fourccStr, equals('IBwF'));
+    expect(ivfInfo.kind, equals(FaissIndexKind.binaryIndex));
+    expect(ivfInfo.codeSize, equals(codeSize));
+    expect(ivfInfo.ntotal, equals(codes.length));
+  });
+
+  test('probeFaissIndex flags unknown fourccs without throwing', () {
+    // Four ASCII bytes not in the known-fourcc table.
+    final bytes = Uint8List.fromList(<int>[
+      'Z'.codeUnitAt(0),
+      'z'.codeUnitAt(0),
+      'z'.codeUnitAt(0),
+      'Z'.codeUnitAt(0),
+      // Trailing bytes that would parse as a valid header if the
+      // fourcc were recognized — probe must NOT reach for them.
+      ...List<int>.filled(64, 0xff),
+    ]);
+    final info = probeFaissIndex(bytes);
+    expect(info.fourccStr, equals('ZzzZ'));
+    expect(info.kind, equals(FaissIndexKind.unknown));
+    expect(info.d, isNull);
+    expect(info.ntotal, isNull);
+    expect(info.metric, isNull);
+    expect(info.isTrained, isNull);
+    expect(info.codeSize, isNull);
+  });
+
+  test('probeFaissIndex rejects blobs shorter than the fourcc', () {
+    expect(
+      () => probeFaissIndex(Uint8List.fromList(<int>[1, 2, 3])),
+      throwsA(isA<FormatException>()),
+    );
+  });
+
+  test('probeFaissIndexFile round-trips through disk', () {
+    final tmp = Directory.systemTemp.createTempSync('faiss_probe_');
+    try {
+      final path = '${tmp.path}/idx.faiss';
+      final flat = IndexFlatL2(d)..add(xs);
+      saveFaissIndex(path, flat);
+      final info = probeFaissIndexFile(path);
+      expect(info.fourccStr, equals('IxF2'));
+      expect(info.kind, equals(FaissIndexKind.floatIndex));
+      expect(info.d, equals(d));
+      expect(info.ntotal, equals(xs.length));
+    } finally {
+      tmp.deleteSync(recursive: true);
+    }
   });
 }
 

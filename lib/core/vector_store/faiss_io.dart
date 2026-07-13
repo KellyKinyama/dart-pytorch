@@ -2102,6 +2102,212 @@ Index loadFaissIndex(String path) {
 }
 
 // -----------------------------------------------------------------------------
+// Cheap metadata inspection (probe)
+// -----------------------------------------------------------------------------
+
+/// Category of a FAISS-format blob, distinguished by the leading
+/// fourcc tag. Determines which header layout follows and which
+/// `readFaissIndex*` entry point can decode the payload.
+enum FaissIndexKind {
+  /// Recognized float-index fourcc (`Ix*`, `Iw*`, `IHNf`, ...). The
+  /// blob starts with the 33-byte float `index_header` immediately
+  /// after the fourcc and can be decoded by [readFaissIndex].
+  floatIndex,
+
+  /// Recognized binary-index fourcc (`IB*`). The blob starts with the
+  /// 21-byte binary `index_header` and can be decoded by
+  /// [readFaissBinaryIndex].
+  binaryIndex,
+
+  /// Fourcc is not in the port's known-index table. Only the raw
+  /// fourcc bytes are populated on the returned [FaissIndexInfo] —
+  /// the header layout is unknown, so `d` / `ntotal` / etc. are left
+  /// `null`.
+  unknown,
+}
+
+/// Metadata extracted from the leading bytes of a FAISS-format blob
+/// by [probeFaissIndex]. The header fields are only populated when
+/// the fourcc is recognized ([kind] != [FaissIndexKind.unknown]);
+/// unknown blobs expose just [fourcc] / [fourccStr] so tools can
+/// surface an actionable "unsupported FAISS type X" message without
+/// paying the full decode cost.
+class FaissIndexInfo {
+  FaissIndexInfo._({
+    required this.fourcc,
+    required this.fourccStr,
+    required this.kind,
+    this.d,
+    this.ntotal,
+    this.metric,
+    this.isTrained,
+    this.codeSize,
+  });
+
+  /// Raw little-endian u32 fourcc read from the first 4 bytes.
+  final int fourcc;
+
+  /// Human-readable 4-char ASCII rendering of [fourcc] (e.g. `IxF2`).
+  final String fourccStr;
+
+  /// Whether the fourcc names a float, binary, or unknown index type.
+  final FaissIndexKind kind;
+
+  /// Vector dimensionality (elements for float, bits for binary). Only
+  /// populated when [kind] is not [FaissIndexKind.unknown].
+  final int? d;
+
+  /// Number of vectors currently stored. Populated for both float and
+  /// binary indexes when [kind] is not [FaissIndexKind.unknown].
+  final int? ntotal;
+
+  /// Distance metric. Always populated for float indexes with a
+  /// recognized metric code; for binary indexes this is `Metric.l2`
+  /// because FAISS's `IndexBinary` stores `METRIC_L2 = 1` in its
+  /// header even though the real distance is Hamming.
+  final Metric? metric;
+
+  /// `true` when the index self-reports as trained. Populated for
+  /// recognized fourccs only.
+  final bool? isTrained;
+
+  /// Packed code size in **bytes** per vector. Populated only for
+  /// binary indexes; `null` for float indexes.
+  final int? codeSize;
+
+  @override
+  String toString() => 'FaissIndexInfo(fourcc=$fourccStr, kind=$kind, '
+      'd=$d, ntotal=$ntotal, metric=$metric, isTrained=$isTrained'
+      '${codeSize != null ? ", codeSize=$codeSize" : ""})';
+}
+
+bool _isKnownFloatFourcc(int tag) {
+  return tag == FaissFourcc.flatL2 ||
+      tag == FaissFourcc.flatIP ||
+      tag == FaissFourcc.flat ||
+      tag == FaissFourcc.idMap ||
+      tag == FaissFourcc.idMap2 ||
+      tag == FaissFourcc.preTransform ||
+      tag == FaissFourcc.indexPq ||
+      tag == FaissFourcc.indexSq ||
+      tag == FaissFourcc.indexRefine ||
+      tag == FaissFourcc.indexIvfFlat ||
+      tag == FaissFourcc.indexIvfPq ||
+      tag == FaissFourcc.indexLsh ||
+      tag == FaissFourcc.indexHnswFlat;
+}
+
+bool _isKnownBinaryFourcc(int tag) {
+  return tag == FaissFourcc.indexBinaryFlat ||
+      tag == FaissFourcc.indexBinaryIvf;
+}
+
+/// Attempts to decode a [Metric] from the FAISS raw metric code
+/// without throwing. Returns `null` when the code is not one of the
+/// two metrics the port supports.
+Metric? _tryMetricFromFaiss(int v) {
+  switch (v) {
+    case 0:
+      return Metric.innerProduct;
+    case 1:
+      return Metric.l2;
+    default:
+      return null;
+  }
+}
+
+/// Peeks the fourcc + immediate index header from a FAISS-format blob
+/// without decoding the full payload.
+///
+/// This is a cheap O(1) inspection helper — the reader advances at
+/// most 4 + 33 bytes (float indexes) or 4 + 21 bytes (binary indexes)
+/// and never allocates the underlying storage or graph structures.
+/// It is intended for CLI inspection tools, format-sniffing routers,
+/// and pre-flight validation before committing to a full
+/// [readFaissIndex] / [readFaissBinaryIndex] call.
+///
+/// For unrecognized fourccs the returned [FaissIndexInfo] has
+/// [FaissIndexInfo.kind] set to [FaissIndexKind.unknown] and only the
+/// fourcc fields populated — callers can then surface a targeted
+/// error message rather than a truncated-read exception.
+FaissIndexInfo probeFaissIndex(Uint8List bytes) {
+  if (bytes.length < 4) {
+    throw FormatException(
+      'probeFaissIndex: blob is ${bytes.length} bytes, need at least 4 '
+      'for the fourcc',
+    );
+  }
+  final r = IoReader(bytes);
+  final tag = r.readU32();
+  final tagStr = FaissFourcc.toStr(tag);
+  if (_isKnownFloatFourcc(tag)) {
+    // Float header is 33 bytes: i32 d, i64 ntotal, 2 * i64 dummy,
+    // u8 is_trained, i32 metric.
+    if (bytes.length < 4 + 33) {
+      throw FormatException(
+        'probeFaissIndex: blob is ${bytes.length} bytes but the float '
+        '"$tagStr" index_header needs 4 + 33 = 37',
+      );
+    }
+    final h = _readHeader(r);
+    return FaissIndexInfo._(
+      fourcc: tag,
+      fourccStr: tagStr,
+      kind: FaissIndexKind.floatIndex,
+      d: h.d,
+      ntotal: h.ntotal,
+      metric: h.metric,
+      isTrained: h.isTrained,
+    );
+  }
+  if (_isKnownBinaryFourcc(tag)) {
+    // Binary header is 21 bytes: i32 d, i32 code_size, i64 ntotal,
+    // u8 is_trained, i32 metric.
+    if (bytes.length < 4 + 21) {
+      throw FormatException(
+        'probeFaissIndex: blob is ${bytes.length} bytes but the binary '
+        '"$tagStr" index_header needs 4 + 21 = 25',
+      );
+    }
+    final h = _readBinaryHeader(r);
+    return FaissIndexInfo._(
+      fourcc: tag,
+      fourccStr: tagStr,
+      kind: FaissIndexKind.binaryIndex,
+      d: h.d,
+      ntotal: h.ntotal,
+      metric: _tryMetricFromFaiss(h.metric),
+      isTrained: h.isTrained,
+      codeSize: h.codeSize,
+    );
+  }
+  return FaissIndexInfo._(
+    fourcc: tag,
+    fourccStr: tagStr,
+    kind: FaissIndexKind.unknown,
+  );
+}
+
+/// File-based variant of [probeFaissIndex]. Reads at most the first
+/// 37 bytes of [path] (enough to cover both float and binary headers)
+/// — significantly cheaper than [loadFaissIndex] for inspection use
+/// cases that only need the top-level metadata.
+FaissIndexInfo probeFaissIndexFile(String path) {
+  final f = File(path);
+  final raf = f.openSync();
+  try {
+    final len = raf.lengthSync();
+    // 4-byte fourcc + up to 33-byte float header = 37 bytes.
+    final want = len < 37 ? len : 37;
+    final buf = Uint8List(want);
+    raf.readIntoSync(buf);
+    return probeFaissIndex(buf);
+  } finally {
+    raf.closeSync();
+  }
+}
+
+// -----------------------------------------------------------------------------
 // Binary indexes
 // -----------------------------------------------------------------------------
 
