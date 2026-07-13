@@ -16,6 +16,9 @@
 ///   quantization (`QT_8bit` + `RS_minmax`).
 /// * `IndexRefineFlat`   — fourcc `IxRF`, base approximate index +
 ///   exact fp32 refine store + `k_factor` candidate multiplier.
+/// * `IndexIVFFlat`      — fourcc `IwFl`, cell-probe IVF with a flat
+///   (uncompressed) code store per cell. Uses the `ilar`
+///   ArrayInvertedLists container in either `full` or `sprs` layout.
 /// * `L2NormTransform`   — fourcc `VNrm`, on-sphere normalization
 ///   (FAISS's `NormalizationTransform` with `norm = 2.0`).
 /// * `RandomRotationTransform` — fourcc `rrot`, a `LinearTransform`
@@ -71,6 +74,7 @@ import 'index.dart';
 import 'index_flat.dart';
 import 'index_id_map.dart';
 import 'index_io.dart';
+import 'index_ivf_flat.dart';
 import 'index_pq.dart';
 import 'index_pre_transform.dart';
 import 'index_refine_flat.dart';
@@ -198,6 +202,41 @@ class FaissFourcc {
   /// so on write we cast to `f32` and on read we round to the nearest
   /// integer.
   static final int indexRefine = of('IxRF');
+
+  /// `IwFl` — `IndexIVFFlat`. Layout (after fourcc):
+  ///
+  /// ```
+  ///   [write_ivf_header]:
+  ///     [write_index_header]
+  ///     u64 nlist
+  ///     u64 nprobe
+  ///     write_index(quantizer)   (recursive; upstream IndexFlat)
+  ///     [write_direct_map]:
+  ///       u8  type (0 = NoMap)
+  ///       WVEC i64 array         (empty for NoMap)
+  ///   [write_InvertedLists]:
+  ///     u32 fourcc('ilar')
+  ///     u64 nlist
+  ///     u64 code_size            (= d * 4 for IndexIVFFlat)
+  ///     u32 list_type fourcc ('full' or 'sprs')
+  ///       'full': WVEC u64 sizes[nlist]
+  ///       'sprs': WVEC u64 pairs (flat [list_idx, size, ...] for non-empty)
+  ///     per non-empty cell:
+  ///       (n * code_size) raw code bytes
+  ///       (n * 8)         raw idx_t (int64) ids
+  /// ```
+  static final int indexIvfFlat = of('IwFl');
+
+  /// `ilar` — `ArrayInvertedLists` container (per-cell storage). See
+  /// [indexIvfFlat] for the full layout.
+  static final int invListsArray = of('ilar');
+
+  /// `full` — dense sizes vector for `ilar` (one size per cell).
+  static final int invListsFull = of('full');
+
+  /// `sprs` — sparse sizes vector for `ilar` (pairs of `[cell_idx, size]`
+  /// for non-empty cells only).
+  static final int invListsSparse = of('sprs');
 }
 
 /// FAISS `MetricType` enum values.
@@ -493,6 +532,240 @@ IndexScalarQuantizer _readScalarQuantizer(IoReader r, Metric metric) {
   return sq;
 }
 
+/// Serializes FAISS's `write_direct_map` block for an IVF-family index
+/// that has no direct map maintained (`DirectMap::NoMap`, the only mode
+/// this port supports). Layout:
+///
+/// ```
+///   u8       type            (0 = NoMap, 1 = Array, 2 = Hashtable)
+///   WVEC i64 array           (empty for NoMap)
+///   [WVEC pair<i64,i64>]     (only when type == Hashtable)
+/// ```
+void _writeDirectMapNone(IoWriter w) {
+  w.writeU8(0); // DirectMap::NoMap
+  _writeVectorI64(w, const <int>[]);
+}
+
+/// Parses FAISS's `write_direct_map` block. Our port only supports
+/// `NoMap` (type 0); any other value raises [UnsupportedError].
+void _readDirectMap(IoReader r) {
+  final type = r.readU8();
+  if (type != 0) {
+    throw UnsupportedError(
+      'DirectMap: only NoMap (type=0) supported, got type=$type',
+    );
+  }
+  final array = _readVectorI64(r);
+  if (array.isNotEmpty) {
+    throw FormatException(
+      'DirectMap: NoMap should carry an empty array, got ${array.length} entries',
+    );
+  }
+}
+
+/// Serializes an [IndexIVFFlat]'s IVF header block, mirroring FAISS's
+/// `write_ivf_header`. Note: FAISS's function does *not* emit
+/// `by_residual`; subclasses that need it write it themselves. `IwFl`
+/// is not one of them.
+void _writeIvfHeader(IoWriter w, IndexIVFFlat ivf) {
+  _writeHeader(w, ivf);
+  w.writeU64(ivf.nlist);
+  w.writeU64(ivf.nprobe);
+  writeFaissIndex(w, ivf.quantizer);
+  _writeDirectMapNone(w);
+}
+
+/// Parses FAISS's `write_ivf_header` block. Returns the common header
+/// plus the extracted `nlist`, `nprobe`, and coarse `quantizer` (which
+/// must decode to [IndexFlat] for our port).
+({
+  ({int d, int ntotal, bool isTrained, Metric metric}) h,
+  int nlist,
+  int nprobe,
+  IndexFlat quantizer,
+})
+_readIvfHeader(IoReader r) {
+  final h = _readHeader(r);
+  final nlist = r.readU64();
+  final nprobe = r.readU64();
+  final quantizer = readFaissIndex(r);
+  if (quantizer is! IndexFlat) {
+    throw FormatException(
+      'IVF header: quantizer sub-index is ${quantizer.runtimeType}, '
+      'expected IndexFlat',
+    );
+  }
+  if (quantizer.d != h.d || quantizer.metric != h.metric) {
+    throw FormatException(
+      'IVF header: quantizer (d=${quantizer.d}, metric=${quantizer.metric}) '
+      'disagrees with header (d=${h.d}, metric=${h.metric})',
+    );
+  }
+  if (quantizer.ntotal != nlist) {
+    throw FormatException(
+      'IVF header: quantizer has ${quantizer.ntotal} centroids, '
+      'header nlist=$nlist',
+    );
+  }
+  _readDirectMap(r);
+  return (h: h, nlist: nlist, nprobe: nprobe, quantizer: quantizer);
+}
+
+/// Serializes an [IndexIVFFlat]'s inverted-list payload as FAISS's
+/// `ArrayInvertedLists` (`ilar`) container. Picks between `full` and
+/// `sprs` size-vector encodings using FAISS's own heuristic
+/// (`sprs` when > half of the cells are empty).
+void _writeArrayInvertedLists(IoWriter w, IndexIVFFlat ivf) {
+  final codeSize = ivf.d * 4;
+  w.writeU32(FaissFourcc.invListsArray);
+  w.writeU64(ivf.nlist);
+  w.writeU64(codeSize);
+
+  var nNon0 = 0;
+  for (var i = 0; i < ivf.nlist; i++) {
+    if (ivf.invLists[i].isNotEmpty) nNon0++;
+  }
+  if (nNon0 > ivf.nlist ~/ 2) {
+    // `full`: one size per cell.
+    w.writeU32(FaissFourcc.invListsFull);
+    final sizes = List<int>.generate(ivf.nlist, (i) => ivf.invLists[i].length);
+    _writeVectorI64(w, sizes);
+  } else {
+    // `sprs`: (cell_idx, size) pairs for non-empty cells only.
+    w.writeU32(FaissFourcc.invListsSparse);
+    final pairs = <int>[];
+    for (var i = 0; i < ivf.nlist; i++) {
+      final n = ivf.invLists[i].length;
+      if (n > 0) {
+        pairs.add(i);
+        pairs.add(n);
+      }
+    }
+    _writeVectorI64(w, pairs);
+  }
+
+  // Per-cell payload: codes (n * code_size bytes) then ids (n * 8 bytes).
+  final storage = ivf.storage;
+  for (var i = 0; i < ivf.nlist; i++) {
+    final ids = ivf.invLists[i];
+    final n = ids.length;
+    if (n == 0) continue;
+    final codesFlat = Float32List(n * ivf.d);
+    for (var j = 0; j < n; j++) {
+      final id = ids[j];
+      final srcBase = id * ivf.d;
+      final dstBase = j * ivf.d;
+      for (var k = 0; k < ivf.d; k++) {
+        codesFlat[dstBase + k] = storage[srcBase + k];
+      }
+    }
+    w.writeF32List(codesFlat);
+    for (final id in ids) {
+      w.writeI64(id);
+    }
+  }
+}
+
+/// Parses FAISS's `ArrayInvertedLists` (`ilar`) container into a
+/// port-shaped state tuple: contiguous fp32 storage indexed by id, and
+/// a per-cell list of ids. The port only supports contiguous ids in
+/// `[0, ntotal)`.
+({Float32List storage, List<List<int>> invLists}) _readArrayInvertedLists(
+  IoReader r,
+  int d,
+  int nlist,
+  int ntotal,
+) {
+  final tag = r.readU32();
+  if (tag != FaissFourcc.invListsArray) {
+    throw UnsupportedError(
+      'IwFl: only ilar InvertedLists supported, got fourcc '
+      '"${FaissFourcc.toStr(tag)}"',
+    );
+  }
+  final storedNlist = r.readU64();
+  final codeSize = r.readU64();
+  if (storedNlist != nlist) {
+    throw FormatException(
+      'ilar: nlist mismatch (payload=$storedNlist, header=$nlist)',
+    );
+  }
+  if (codeSize != d * 4) {
+    throw FormatException(
+      'ilar: code_size $codeSize != d*4 = ${d * 4}',
+    );
+  }
+
+  final sizes = List<int>.filled(nlist, 0);
+  final listType = r.readU32();
+  if (listType == FaissFourcc.invListsFull) {
+    final xs = _readVectorI64(r);
+    if (xs.length != nlist) {
+      throw FormatException(
+        'ilar full: sizes length ${xs.length} != nlist $nlist',
+      );
+    }
+    for (var i = 0; i < nlist; i++) {
+      sizes[i] = xs[i];
+    }
+  } else if (listType == FaissFourcc.invListsSparse) {
+    final pairs = _readVectorI64(r);
+    if (pairs.length.isOdd) {
+      throw FormatException(
+        'ilar sprs: pairs length ${pairs.length} is not even',
+      );
+    }
+    for (var j = 0; j < pairs.length; j += 2) {
+      final idx = pairs[j];
+      if (idx < 0 || idx >= nlist) {
+        throw FormatException(
+          'ilar sprs: cell idx $idx out of [0, $nlist)',
+        );
+      }
+      sizes[idx] = pairs[j + 1];
+    }
+  } else {
+    throw UnsupportedError(
+      'ilar: list_type "${FaissFourcc.toStr(listType)}" not supported',
+    );
+  }
+
+  var sum = 0;
+  for (final s in sizes) {
+    sum += s;
+  }
+  if (sum != ntotal) {
+    throw FormatException(
+      'ilar: sum of sizes ($sum) != header ntotal ($ntotal)',
+    );
+  }
+
+  final storage = Float32List(ntotal * d);
+  final invLists = List<List<int>>.generate(nlist, (_) => <int>[]);
+  for (var i = 0; i < nlist; i++) {
+    final n = sizes[i];
+    if (n == 0) continue;
+    final codesFlat = r.readF32List(n * d);
+    for (var j = 0; j < n; j++) {
+      final id = r.readI64();
+      if (id < 0 || id >= ntotal) {
+        throw UnsupportedError(
+          'IwFl: ids must be contiguous in [0, ntotal); got id=$id '
+          '(ntotal=$ntotal). Non-contiguous FAISS blobs are not yet '
+          'supported.',
+        );
+      }
+      final dstBase = id * d;
+      final srcBase = j * d;
+      for (var k = 0; k < d; k++) {
+        storage[dstBase + k] = codesFlat[srcBase + k];
+      }
+      invLists[i].add(id);
+    }
+  }
+  return (storage: storage, invLists: invLists);
+}
+
 /// Serializes a [VectorTransform] using FAISS's `write_VectorTransform`
 /// dispatch, keyed on the concrete Dart type. The exact layout mirrors
 /// `faiss/impl/index_write.cpp` verbatim: subtype fourcc + subtype
@@ -760,6 +1033,16 @@ void writeFaissIndex(IoWriter w, Index x) {
     w.writeF32(x.kFactor.toDouble());
     return;
   }
+  if (x is IndexIVFFlat) {
+    // IwFl layout:
+    //   fourcc('IwFl')
+    //   write_ivf_header (header + nlist + nprobe + quantizer + direct_map)
+    //   write_InvertedLists (ilar container)
+    w.writeU32(FaissFourcc.indexIvfFlat);
+    _writeIvfHeader(w, x);
+    _writeArrayInvertedLists(w, x);
+    return;
+  }
   throw UnsupportedError(
     'writeFaissIndex: ${x.runtimeType} not yet supported.',
   );
@@ -942,6 +1225,29 @@ Index readFaissIndex(IoReader r) {
       ntotal: h.ntotal,
       isTrained: h.isTrained,
     );
+  }
+  if (tag == FaissFourcc.indexIvfFlat) {
+    // IwFl: ivf_header + ilar InvertedLists.
+    final ivfHead = _readIvfHeader(r);
+    final h = ivfHead.h;
+    final ivf = IndexIVFFlat(
+      d: h.d,
+      nlist: ivfHead.nlist,
+      metric: h.metric,
+      nprobe: ivfHead.nprobe,
+    );
+    // Splice loaded centroids into the freshly-created coarse quantizer.
+    // IndexIVFFlat's constructor allocates an empty IndexFlat; we need
+    // it populated so search() / add() can assign to cells.
+    final centroids = List<Float32List>.generate(
+      ivfHead.quantizer.ntotal,
+      (i) => Float32List.fromList(ivfHead.quantizer.reconstruct(i)),
+    );
+    ivf.quantizer.add(centroids);
+    ivf.isTrained = h.isTrained;
+    final pay = _readArrayInvertedLists(r, h.d, ivfHead.nlist, h.ntotal);
+    ivf.ioSetStorageAndInvLists(pay.storage, pay.invLists, h.ntotal);
+    return ivf;
   }
   throw FormatException(
     'Unsupported FAISS fourcc "${FaissFourcc.toStr(tag)}" '

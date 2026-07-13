@@ -1217,9 +1217,9 @@ void main() {
   });
 
   test('writeFaissIndex rejects unsupported index types', () {
-    final ivf = IndexIVFFlat(d: d, nlist: 4)..train(xs);
-    ivf.add(xs);
-    expect(() => writeFaissIndexToBytes(ivf), throwsA(isA<UnsupportedError>()));
+    // IndexLSH interop (IxHe) is not yet wired up.
+    final lsh = IndexLSH(d: d, nbits: 64)..add(xs);
+    expect(() => writeFaissIndexToBytes(lsh), throwsA(isA<UnsupportedError>()));
   });
 
   test('FAISS interop round-trips IndexIDMap with custom ids', () {
@@ -1893,5 +1893,116 @@ void main() {
       () => readFaissIndexFromBytes(bytes),
       throwsA(isA<FormatException>()),
     );
+  });
+
+  test('writeFaissIndex emits IwFl fourcc and correct header bytes', () {
+    final ivf = IndexIVFFlat(d: d, nlist: 4, nprobe: 2)..train(xs);
+    final bytes = writeFaissIndexToBytes(ivf);
+    final tag =
+        bytes[0] | (bytes[1] << 8) | (bytes[2] << 16) | (bytes[3] << 24);
+    expect(FaissFourcc.toStr(tag), equals('IwFl'));
+
+    // Header at offset 4: i32 d, i64 ntotal, 2*i64 dummy, u8 is_trained,
+    // i32 metric_type = 1 (L2).
+    final dRead =
+        bytes[4] | (bytes[5] << 8) | (bytes[6] << 16) | (bytes[7] << 24);
+    expect(dRead, equals(d));
+    expect(bytes[32], equals(1)); // is_trained
+    expect(bytes[33], equals(1)); // metric = L2
+  });
+
+  test('FAISS interop round-trips IndexIVFFlat (L2, nprobe=nlist)', () {
+    final ivf = IndexIVFFlat(d: d, nlist: 8, nprobe: 8)..train(xs);
+    ivf.add(xs);
+    final before = ivf.search(queries, k);
+
+    final bytes = writeFaissIndexToBytes(ivf);
+    final loaded = readFaissIndexFromBytes(bytes) as IndexIVFFlat;
+
+    expect(loaded.d, equals(d));
+    expect(loaded.nlist, equals(8));
+    expect(loaded.nprobe, equals(8));
+    expect(loaded.metric, equals(Metric.l2));
+    expect(loaded.isTrained, isTrue);
+    expect(loaded.ntotal, equals(xs.length));
+    // Quantizer centroids preserved byte-for-byte.
+    expect(loaded.quantizer.ntotal, equals(ivf.quantizer.ntotal));
+    for (var i = 0; i < ivf.quantizer.ntotal; i++) {
+      expect(
+        loaded.quantizer.reconstruct(i),
+        equals(ivf.quantizer.reconstruct(i)),
+      );
+    }
+    // Inverted-list assignments preserved.
+    for (var c = 0; c < ivf.nlist; c++) {
+      expect(loaded.invLists[c], equals(ivf.invLists[c]));
+    }
+    // Vector storage preserved.
+    expect(loaded.storage, equals(ivf.storage));
+
+    // Search results identical.
+    final after = loaded.search(queries, k);
+    for (var qi = 0; qi < nq; qi++) {
+      for (var j = 0; j < k; j++) {
+        expect(after.ids[qi][j], equals(before.ids[qi][j]));
+      }
+    }
+  });
+
+  test('FAISS interop round-trips IndexIVFFlat (inner product)', () {
+    final ivf = IndexIVFFlat(
+      d: d,
+      nlist: 4,
+      nprobe: 4,
+      metric: Metric.innerProduct,
+    )..train(xs);
+    ivf.add(xs);
+    final before = ivf.search(queries, k);
+
+    final bytes = writeFaissIndexToBytes(ivf);
+    final loaded = readFaissIndexFromBytes(bytes) as IndexIVFFlat;
+    expect(loaded.metric, equals(Metric.innerProduct));
+    expect(loaded.storage, equals(ivf.storage));
+
+    final after = loaded.search(queries, k);
+    for (var qi = 0; qi < nq; qi++) {
+      for (var j = 0; j < k; j++) {
+        expect(after.ids[qi][j], equals(before.ids[qi][j]));
+      }
+    }
+  });
+
+  test('FAISS interop round-trips an empty IndexIVFFlat (train, no add)', () {
+    // No adds means every cell is empty → ilar picks the `sprs` branch.
+    final ivf = IndexIVFFlat(d: d, nlist: 8, nprobe: 2)..train(xs);
+    final bytes = writeFaissIndexToBytes(ivf);
+    final loaded = readFaissIndexFromBytes(bytes) as IndexIVFFlat;
+    expect(loaded.ntotal, equals(0));
+    expect(loaded.nlist, equals(8));
+    for (var c = 0; c < loaded.nlist; c++) {
+      expect(loaded.invLists[c], isEmpty);
+    }
+    // Verify the sparse branch was actually taken: locate the `ilar`
+    // fourcc and then its list_type after (nlist:u64 + code_size:u64).
+    // Find first 'ilar' occurrence.
+    final ilar = FaissFourcc.of('ilar');
+    var offset = -1;
+    for (var i = 0; i < bytes.length - 3; i++) {
+      final t = bytes[i] |
+          (bytes[i + 1] << 8) |
+          (bytes[i + 2] << 16) |
+          (bytes[i + 3] << 24);
+      if (t == ilar) {
+        offset = i;
+        break;
+      }
+    }
+    expect(offset, greaterThan(0));
+    final listTypeOff = offset + 4 + 8 + 8; // fourcc + nlist + code_size
+    final listType = bytes[listTypeOff] |
+        (bytes[listTypeOff + 1] << 8) |
+        (bytes[listTypeOff + 2] << 16) |
+        (bytes[listTypeOff + 3] << 24);
+    expect(FaissFourcc.toStr(listType), equals('sprs'));
   });
 }

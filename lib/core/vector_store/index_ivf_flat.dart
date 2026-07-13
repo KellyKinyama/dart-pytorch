@@ -46,6 +46,40 @@ class IndexIVFFlat extends Index {
   /// `_invLists[cell]` = ordered ids of vectors assigned to that cell.
   late List<List<int>> _invLists;
 
+  /// Read-only view of the currently used vector storage
+  /// (length `ntotal * d`). Zero-copy; do not mutate.
+  Float32List get storage => Float32List.sublistView(_storage, 0, ntotal * d);
+
+  /// Read-only view of the inverted lists. `invLists[cell]` returns the
+  /// ids of vectors assigned to that cell in insertion order. Do not
+  /// mutate the returned lists.
+  List<List<int>> get invLists => _invLists;
+
+  /// I/O hook: bulk-replace storage + inverted lists + ntotal. Used by
+  /// `faiss_io.dart` when rehydrating an `IwFl` blob.
+  void ioSetStorageAndInvLists(
+    Float32List newStorage,
+    List<List<int>> newInvLists,
+    int newNtotal,
+  ) {
+    if (newStorage.length != newNtotal * d) {
+      throw ArgumentError(
+        'ioSetStorageAndInvLists: storage length ${newStorage.length} '
+        '!= ntotal*d = ${newNtotal * d}',
+      );
+    }
+    if (newInvLists.length != nlist) {
+      throw ArgumentError(
+        'ioSetStorageAndInvLists: got ${newInvLists.length} lists, '
+        'expected nlist=$nlist',
+      );
+    }
+    _storage = Float32List.fromList(newStorage);
+    _capacity = newNtotal;
+    _invLists = newInvLists;
+    ntotal = newNtotal;
+  }
+
   @override
   void train(List<Float32List> xs) {
     if (xs.length < nlist) {
