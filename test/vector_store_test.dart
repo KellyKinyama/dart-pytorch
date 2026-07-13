@@ -1249,35 +1249,28 @@ void main() {
     }
   });
 
-  test('writeFaissTransform emits the exact FAISS byte layout for L2nT', () {
-    // Golden fixture for a d=3 L2NormTransform:
-    //   fourcc 'L2nT': 4C 32 6E 54
-    //   d_in  = 3    : 03 00 00 00
-    //   d_out = 3    : 03 00 00 00
-    //   norm  = 2.0f : 00 00 00 40
+  test('writeFaissTransform emits the exact FAISS byte layout for VNrm', () {
+    // Golden fixture for a d=3 L2NormTransform, byte-for-byte the
+    // output that upstream FAISS's write_VectorTransform produces
+    // for a `NormalizationTransform(3, 2.0)`.
+    //
+    //   fourcc 'VNrm'  : 56 4E 72 6D
+    //   f32 norm=2.0f  : 00 00 00 40
+    //   i32 d_in  = 3  : 03 00 00 00
+    //   i32 d_out = 3  : 03 00 00 00
+    //   u8  is_trained : 01
     final expected = Uint8List.fromList(<int>[
-      0x4C,
-      0x32,
-      0x6E,
-      0x54,
-      0x03,
-      0x00,
-      0x00,
-      0x00,
-      0x03,
-      0x00,
-      0x00,
-      0x00,
-      0x00,
-      0x00,
-      0x00,
-      0x40,
+      0x56, 0x4E, 0x72, 0x6D, // fourcc
+      0x00, 0x00, 0x00, 0x40, // norm=2.0f
+      0x03, 0x00, 0x00, 0x00, // d_in
+      0x03, 0x00, 0x00, 0x00, // d_out
+      0x01, // is_trained
     ]);
     final w = IoWriter();
     writeFaissTransform(w, L2NormTransform(3));
     final got = w.takeBytes();
     expect(got, equals(expected));
-    expect(got.length, equals(16));
+    expect(got.length, equals(17));
   });
 
   test('FAISS interop round-trips IndexPreTransform(L2Norm)+FlatIP', () {
@@ -1318,27 +1311,30 @@ void main() {
   });
 
   test('writeFaissTransform emits exact FAISS layout for rrot (identity)', () {
-    // Golden fixture: identity 2x2 rotation.
-    //   fourcc 'rrot': 72 72 6F 74
-    //   d_in  = 2    : 02 00 00 00
-    //   d_out = 2    : 02 00 00 00
-    //   is_trained   : 01
-    //   A.size = 4   : 04 00 00 00 00 00 00 00
-    //   A            : 1 0 0 1 as f32 LE
-    //   b.size = 0   : 00 00 00 00 00 00 00 00
-    //   have_bias    : 00
-    //   is_orthonorm : 01
+    // Golden fixture: identity 2x2 rotation. Matches upstream FAISS
+    // write_VectorTransform for `RandomRotationMatrix(2, 2)` after
+    // manual overwrite to identity.
+    //
+    //   fourcc 'rrot' : 72 72 6F 74
+    //   u8  have_bias : 00
+    //   u64 A.size = 4: 04 00 00 00 00 00 00 00
+    //   A (row-major) : 1.0 0.0 0.0 1.0 as f32 LE
+    //   u64 b.size = 0: 00 00 00 00 00 00 00 00
+    //   i32 d_in  = 2 : 02 00 00 00
+    //   i32 d_out = 2 : 02 00 00 00
+    //   u8 is_trained : 01
     final expected = Uint8List.fromList(<int>[
-      0x72, 0x72, 0x6F, 0x74,
-      0x02, 0x00, 0x00, 0x00,
-      0x02, 0x00, 0x00, 0x00,
-      0x01,
-      0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-      0x00, 0x00, 0x80, 0x3F, 0x00, 0x00, 0x00, 0x00,
-      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0x3F,
-      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-      0x00,
-      0x01,
+      0x72, 0x72, 0x6F, 0x74, // fourcc
+      0x00, // have_bias
+      0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // A.size
+      0x00, 0x00, 0x80, 0x3F, // 1.0
+      0x00, 0x00, 0x00, 0x00, // 0.0
+      0x00, 0x00, 0x00, 0x00, // 0.0
+      0x00, 0x00, 0x80, 0x3F, // 1.0
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // b.size = 0
+      0x02, 0x00, 0x00, 0x00, // d_in
+      0x02, 0x00, 0x00, 0x00, // d_out
+      0x01, // is_trained
     ]);
     final rrot = RandomRotationTransform(d: 2, seed: 1);
     // Overwrite the generated matrix with identity so bytes are
@@ -1352,7 +1348,7 @@ void main() {
     writeFaissTransform(w, rrot);
     final got = w.takeBytes();
     expect(got, equals(expected));
-    expect(got.length, equals(47));
+    expect(got.length, equals(46));
   });
 
   test('FAISS interop round-trips RandomRotationTransform matrix bytes', () {
@@ -1413,21 +1409,136 @@ void main() {
   });
 
   test('readFaissTransform rejects rrot with have_bias set', () {
-    // Craft a payload with have_bias = 1 and a non-empty b.
+    // Craft a payload with have_bias = 1 and a non-empty b. Matches
+    // the current FAISS layout: fourcc, have_bias, A, b, d_in, d_out,
+    // is_trained.
     final w = IoWriter();
     w.writeU32(FaissFourcc.randomRotation);
-    w.writeI32(2);
-    w.writeI32(2);
-    w.writeU8(1);
+    w.writeU8(1); // have_bias
     w.writeU64(4);
     w.writeF32List(Float32List.fromList([1.0, 0.0, 0.0, 1.0]));
     w.writeU64(2);
     w.writeF32List(Float32List.fromList([0.1, 0.2]));
-    w.writeU8(1); // have_bias
+    w.writeI32(2);
+    w.writeI32(2);
     w.writeU8(1);
     expect(
       () => readFaissTransform(IoReader(w.takeBytes())),
       throwsA(isA<UnsupportedError>()),
     );
+  });
+
+  test('writeFaissTransform emits exact FAISS layout for Pcam', () {
+    // Golden fixture for a trivial 2->1 PCA with mean=[0,0] and
+    // projection=[1,0], eigenvalues empty (constructor state).
+    // Matches upstream FAISS write_VectorTransform for `PCAMatrix(2,1)`.
+    //
+    //   fourcc 'Pcam'        : 50 63 61 6D
+    //   f32 eigen_power=0    : 00 00 00 00
+    //   f32 epsilon=0        : 00 00 00 00
+    //   u8  rand_rot=0       : 00
+    //   i32 balanced_bins=0  : 00 00 00 00
+    //   WVEC mean            : size 2 + f32*2 (0.0, 0.0)
+    //   WVEC eigenvalues     : size 0
+    //   WVEC PCAMat          : size 0
+    //   u8  have_bias=1      : 01
+    //   WVEC A               : size 2 + f32*2 (1.0, 0.0)
+    //   WVEC b               : size 1 + f32*1 (0.0)  == -A*mean
+    //   i32 d_in=2           : 02 00 00 00
+    //   i32 d_out=1          : 01 00 00 00
+    //   u8  is_trained=1     : 01
+    final pca = PCATransform(dIn: 2, dOut: 1);
+    pca.projection[0] = 1.0;
+    pca.projection[1] = 0.0;
+    pca.isTrained = true; // manually flip; skip Jacobi solver
+
+    final expected = Uint8List.fromList(<int>[
+      0x50, 0x63, 0x61, 0x6D, // fourcc
+      0x00, 0x00, 0x00, 0x00, // eigen_power
+      0x00, 0x00, 0x00, 0x00, // epsilon
+      0x00, // random_rotation
+      0x00, 0x00, 0x00, 0x00, // balanced_bins
+      0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // mean size = 2
+      0x00, 0x00, 0x00, 0x00, // mean[0]
+      0x00, 0x00, 0x00, 0x00, // mean[1]
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // eigenvalues size = 0
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // PCAMat size = 0
+      0x01, // have_bias
+      0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // A size = 2
+      0x00, 0x00, 0x80, 0x3F, // A[0] = 1.0
+      0x00, 0x00, 0x00, 0x00, // A[1] = 0.0
+      0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // b size = 1
+      0x00, 0x00, 0x00, 0x80, // b[0] = -0.0 (== -A*mean when mean=0)
+      0x02, 0x00, 0x00, 0x00, // d_in
+      0x01, 0x00, 0x00, 0x00, // d_out
+      0x01, // is_trained
+    ]);
+
+    final w = IoWriter();
+    writeFaissTransform(w, pca);
+    final got = w.takeBytes();
+    expect(got, equals(expected));
+  });
+
+  test('FAISS interop round-trips a trained PCATransform', () {
+    // Train a small PCA on synthetic data, round-trip via FAISS
+    // bytes, and confirm outputs match to float precision.
+    final pca = PCATransform(dIn: d, dOut: 4)..train(xs);
+    final input = List<Float32List>.generate(3, (i) {
+      final v = Float32List(d);
+      for (var j = 0; j < d; j++) {
+        v[j] = ((i + 1) * (j + 2)).toDouble();
+      }
+      return v;
+    });
+    final before = pca.apply(input);
+
+    final w = IoWriter();
+    writeFaissTransform(w, pca);
+    final loaded =
+        readFaissTransform(IoReader(w.takeBytes())) as PCATransform;
+
+    expect(loaded.dIn, equals(d));
+    expect(loaded.dOut, equals(4));
+    expect(loaded.isTrained, isTrue);
+    for (var i = 0; i < d; i++) {
+      expect(loaded.mean[i], closeTo(pca.mean[i], 1e-6));
+    }
+    for (var i = 0; i < d * 4; i++) {
+      expect(loaded.projection[i], closeTo(pca.projection[i], 1e-6));
+    }
+    final after = loaded.apply(input);
+    for (var i = 0; i < input.length; i++) {
+      for (var j = 0; j < 4; j++) {
+        expect(after[i][j], closeTo(before[i][j], 1e-5));
+      }
+    }
+  });
+
+  test('FAISS interop round-trips IndexPreTransform([PCA, L2Norm], Flat)', () {
+    final pt = IndexPreTransform(
+      chain: [
+        PCATransform(dIn: d, dOut: 8)..train(xs),
+        L2NormTransform(8),
+      ],
+      inner: IndexFlatL2(8),
+    );
+    pt.add(xs);
+    final before = pt.search(queries, k);
+
+    final bytes = writeFaissIndexToBytes(pt);
+    final loaded = readFaissIndexFromBytes(bytes) as IndexPreTransform;
+
+    expect(loaded.chain.length, equals(2));
+    expect(loaded.chain[0], isA<PCATransform>());
+    expect(loaded.chain[1], isA<L2NormTransform>());
+    expect(loaded.ntotal, equals(xs.length));
+
+    final after = loaded.search(queries, k);
+    for (var qi = 0; qi < nq; qi++) {
+      for (var j = 0; j < k; j++) {
+        expect(after.ids[qi][j], equals(before.ids[qi][j]));
+      }
+    }
   });
 }
