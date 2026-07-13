@@ -416,6 +416,68 @@ void main() {
     }
   }
 
+  // Pre-transforms — cheap preprocessors applied via IndexPreTransform.
+  print('\nPre-transforms:');
+  {
+    // Rotate then L2-normalize before feeding a Flat inner index.
+    final wrapped = IndexPreTransform(
+      chain: [
+        RandomRotationTransform(d: _d, seed: 7),
+        L2NormTransform(_d),
+      ],
+      inner: IndexFlatL2(_d),
+    )..add(xb);
+    final wrappedTimed = _timedSearch(wrapped, xq, _k);
+    print(
+      '  RandomRot+L2Norm→Flat  '
+      'search ${(wrappedTimed.wall.inMicroseconds / _nq).toStringAsFixed(1)} µs/q   '
+      'ntotal=${wrapped.ntotal}',
+    );
+
+    // Demonstrate the L2 ≡ IP-on-sphere identity: L2Norm chained onto
+    // IndexFlatIP yields the same top-k ids as a pure IndexFlatL2 on
+    // L2-normalized data.
+    final l2 = IndexFlatL2(_d)..add(L2NormTransform(_d).apply(xb));
+    final ipWrap = IndexPreTransform(
+      chain: [L2NormTransform(_d)],
+      inner: IndexFlatIP(_d),
+    )..add(xb);
+    final rA = l2.search(L2NormTransform(_d).apply(xq), _k);
+    final rB = ipWrap.search(xq, _k);
+    var identical = true;
+    for (var qi = 0; qi < _nq && identical; qi++) {
+      for (var j = 0; j < _k; j++) {
+        if (rA.ids[qi][j] != rB.ids[qi][j]) {
+          identical = false;
+          break;
+        }
+      }
+    }
+    print(
+      '  L2 ≡ IP on unit sphere: L2Norm+FlatIP vs FlatL2 top-$_k match: '
+      '${identical ? "OK" : "MISMATCH"}',
+    );
+
+    // Persistence round-trip.
+    final bytes = writeIndex(wrapped);
+    final loaded = readIndex(bytes) as IndexPreTransform;
+    final origRes = wrapped.search(xq.sublist(0, 5), _k);
+    final loadRes = loaded.search(xq.sublist(0, 5), _k);
+    var parity = true;
+    for (var qi = 0; qi < 5 && parity; qi++) {
+      for (var j = 0; j < _k; j++) {
+        if (origRes.ids[qi][j] != loadRes.ids[qi][j]) {
+          parity = false;
+          break;
+        }
+      }
+    }
+    print(
+      '  Persistence            ${(bytes.length / 1024).toStringAsFixed(1)} KiB   '
+      'chain=${loaded.chain.length}   parity: ${parity ? "OK" : "MISMATCH"}',
+    );
+  }
+
   print(
     '\nDone. Larger corpora and higher-recall settings tighten the picture.',
   );

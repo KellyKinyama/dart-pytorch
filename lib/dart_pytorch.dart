@@ -65,7 +65,12 @@ export 'core/vector_store/index_refine_flat.dart';
 export 'core/vector_store/index_binary.dart';
 export 'core/vector_store/index_binary_flat.dart';
 export 'core/vector_store/index_lsh.dart';
+export 'core/vector_store/vector_transform.dart';
+export 'core/vector_store/l2_norm_transform.dart';
+export 'core/vector_store/random_rotation_transform.dart';
+export 'core/vector_store/index_pre_transform.dart';
 export 'core/vector_store/index_io.dart';
+
 /// Trivial sanity function used by the smoke test.
 int calculate() {
   return 6 * 7;

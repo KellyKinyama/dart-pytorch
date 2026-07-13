@@ -544,4 +544,109 @@ void main() {
       }
     }
   });
+
+  // --- pre-transforms ----------------------------------------------------
+
+  test('L2NormTransform produces unit-length outputs', () {
+    final t = L2NormTransform(d);
+    final out = t.apply(xs.sublist(0, 5));
+    for (final row in out) {
+      var s = 0.0;
+      for (var j = 0; j < d; j++) {
+        s += row[j] * row[j];
+      }
+      expect(math.sqrt(s), closeTo(1.0, 1e-5));
+    }
+  });
+
+  test('RandomRotationTransform preserves L2 distances', () {
+    final t = RandomRotationTransform(d: d, seed: 7);
+    final a = xs.sublist(0, 4);
+    final b = t.apply(a);
+    // Pairwise distances should match up to float rounding.
+    for (var i = 0; i < 4; i++) {
+      for (var j = i + 1; j < 4; j++) {
+        var dOrig = 0.0;
+        var dNew = 0.0;
+        for (var c = 0; c < d; c++) {
+          final da = a[i][c] - a[j][c];
+          final db = b[i][c] - b[j][c];
+          dOrig += da * da;
+          dNew += db * db;
+        }
+        expect(dNew, closeTo(dOrig, 1e-3));
+      }
+    }
+  });
+
+  test('RandomRotationTransform.reverseTransform inverts apply', () {
+    final t = RandomRotationTransform(d: d, seed: 3);
+    final round = t.reverseTransform(t.apply(xs.sublist(0, 3)));
+    for (var i = 0; i < 3; i++) {
+      for (var j = 0; j < d; j++) {
+        expect(round[i][j], closeTo(xs[i][j], 1e-4));
+      }
+    }
+  });
+
+  test('IndexPreTransform proxies ntotal and delegates search', () {
+    final pt = IndexPreTransform(
+      chain: [L2NormTransform(d)],
+      inner: IndexFlatL2(d),
+    )..add(xs);
+    expect(pt.ntotal, equals(xs.length));
+    final r = pt.search(xs.sublist(0, 3), 1);
+    for (var i = 0; i < 3; i++) {
+      expect(r.ids[i][0], equals(i));
+    }
+  });
+
+  test('L2Norm + IndexFlatIP matches IndexFlatL2 on unit vectors', () {
+    // On the unit sphere, ‖x − y‖² = 2 − 2·<x, y>, so the L2 nearest
+    // neighbour is exactly the largest inner product. Wrapping an IP
+    // index in L2Norm therefore matches a plain L2 index on the same
+    // (post-normalization) data — a mathematical guarantee, not a
+    // recall approximation.
+    final flat = IndexFlatL2(d);
+    final wrapped = IndexPreTransform(
+      chain: [L2NormTransform(d)],
+      inner: IndexFlatIP(d),
+    );
+    // Feed both indexes the L2-normalized inputs so the underlying
+    // corpora are identical; the wrapper additionally normalizes
+    // queries on the search path.
+    final normed = L2NormTransform(d).apply(xs);
+    flat.add(normed);
+    wrapped.add(xs); // wrapper normalizes internally
+    final rFlat = flat.search(L2NormTransform(d).apply(queries), k);
+    final rWrap = wrapped.search(queries, k);
+    for (var qi = 0; qi < nq; qi++) {
+      for (var j = 0; j < k; j++) {
+        expect(rWrap.ids[qi][j], equals(rFlat.ids[qi][j]));
+      }
+    }
+  });
+
+  test('IndexPreTransform round-trips through bytes', () {
+    final pt = IndexPreTransform(
+      chain: [
+        RandomRotationTransform(d: d, seed: 42),
+        L2NormTransform(d),
+      ],
+      inner: IndexFlatL2(d),
+    )..add(xs);
+    final before = pt.search(queries, k);
+    final loaded = readIndex(writeIndex(pt)) as IndexPreTransform;
+    expect(loaded.chain.length, equals(2));
+    expect(loaded.chain[0], isA<RandomRotationTransform>());
+    expect(loaded.chain[1], isA<L2NormTransform>());
+    expect(loaded.ntotal, equals(xs.length));
+    final after = loaded.search(queries, k);
+    for (var qi = 0; qi < nq; qi++) {
+      for (var j = 0; j < k; j++) {
+        expect(after.ids[qi][j], equals(before.ids[qi][j]));
+        expect(after.distances[qi][j], closeTo(before.distances[qi][j], 1e-4));
+      }
+    }
+  });
 }

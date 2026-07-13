@@ -41,6 +41,7 @@ import 'index_scalar_quantizer.dart';
 import 'index_binary.dart';
 import 'index_binary_flat.dart';
 import 'index_lsh.dart';
+import 'index_pre_transform.dart';
 
 /// Discriminator values distinguishing each supported index type on
 /// disk. Never change existing values — they are the compatibility
@@ -56,6 +57,7 @@ class IndexKind {
   static const int refineFlat = 0x08;
   static const int lsh = 0x09;
   static const int binaryFlat = 0x0A;
+  static const int preTransform = 0x0B;
 }
 
 /// File-format magic and version.
@@ -231,6 +233,9 @@ void writeChild(IoWriter w, Index x) {
   } else if (x is IndexLSH) {
     w.writeU32(IndexKind.lsh);
     x.writeTo(w);
+  } else if (x is IndexPreTransform) {
+    w.writeU32(IndexKind.preTransform);
+    x.writeTo(w);
   } else {
     throw ArgumentError('writeIndex: unsupported index type ${x.runtimeType}');
   }
@@ -275,6 +280,8 @@ Index readChild(IoReader r) {
       return IndexRefineFlat.readFrom(r);
     case IndexKind.lsh:
       return IndexLSH.readFrom(r);
+    case IndexKind.preTransform:
+      return IndexPreTransform.readFrom(r);
     default:
       throw FormatException(
         'readIndex: unknown kind 0x${kind.toRadixString(16)}',
@@ -323,9 +330,7 @@ Uint8List writeBinaryIndex(IndexBinary x) {
     w.writeU32(IndexKind.binaryFlat);
     x.writeTo(w);
   } else {
-    throw ArgumentError(
-      'writeBinaryIndex: unsupported type ${x.runtimeType}',
-    );
+    throw ArgumentError('writeBinaryIndex: unsupported type ${x.runtimeType}');
   }
   return w.takeBytes();
 }
@@ -336,9 +341,7 @@ IndexBinary readBinaryIndex(Uint8List bytes) {
   for (var i = 0; i < _magicBytes.length; i++) {
     final b = r.readU8();
     if (b != _magicBytes[i]) {
-      throw FormatException(
-        'readBinaryIndex: bad magic byte at offset $i',
-      );
+      throw FormatException('readBinaryIndex: bad magic byte at offset $i');
     }
   }
   final version = r.readU32();
