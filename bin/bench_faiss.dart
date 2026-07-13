@@ -18,6 +18,9 @@
 ///   `--k  K`    neighbours per query (default 10)
 ///   `--seed S`  RNG seed (default 0)
 ///   `--csv P`   append CSV to path P (writes header if new)
+///   `--md  P`   write Markdown table to path P (overwrites)
+///   `--pareto`  restrict CSV / Markdown output to the Pareto
+///               frontier (recall-vs-latency)
 library;
 
 import 'dart:io';
@@ -163,11 +166,20 @@ int main(List<String> args) {
 
   stdout.write(formatBenchTable(results));
 
+  // Rows to hand off to CSV / Markdown exports. --pareto keeps only
+  // the recall-vs-latency frontier (dominated points dropped).
+  final exportRows = opts.pareto ? paretoFrontier(results) : results;
+  if (opts.pareto) {
+    stdout.writeln('\nPareto frontier (${exportRows.length} of '
+        '${results.length} rows):');
+    stdout.write(formatBenchTable(exportRows));
+  }
+
   if (opts.csvPath != null) {
     final file = File(opts.csvPath!);
     final existed = file.existsSync();
     final sink = file.openWrite(mode: FileMode.append);
-    final csv = toBenchCsv(results);
+    final csv = toBenchCsv(exportRows);
     // Skip the header row on append if the file already had content.
     if (existed && file.lengthSync() > 0) {
       final nl = csv.indexOf('\n');
@@ -177,6 +189,11 @@ int main(List<String> args) {
     }
     sink.close();
     stdout.writeln('wrote CSV → ${opts.csvPath}');
+  }
+
+  if (opts.mdPath != null) {
+    File(opts.mdPath!).writeAsStringSync(toBenchMarkdown(exportRows));
+    stdout.writeln('wrote Markdown → ${opts.mdPath}');
   }
 
   return 0;
@@ -224,6 +241,8 @@ class _Options {
     required this.k,
     required this.seed,
     required this.csvPath,
+    required this.mdPath,
+    required this.pareto,
   });
 
   final int nb;
@@ -232,6 +251,8 @@ class _Options {
   final int k;
   final int seed;
   final String? csvPath;
+  final String? mdPath;
+  final bool pareto;
 
   static _Options? parse(List<String> args) {
     var nb = 5000;
@@ -240,6 +261,8 @@ class _Options {
     var k = 10;
     var seed = 0;
     String? csvPath;
+    String? mdPath;
+    var pareto = false;
     for (var i = 0; i < args.length; i++) {
       final a = args[i];
       String next() {
@@ -268,6 +291,10 @@ class _Options {
             seed = int.parse(next());
           case '--csv':
             csvPath = next();
+          case '--md':
+            mdPath = next();
+          case '--pareto':
+            pareto = true;
           default:
             stderr.writeln('bench_faiss: unknown arg $a\n$_usage');
             return null;
@@ -277,7 +304,16 @@ class _Options {
         return null;
       }
     }
-    return _Options(nb: nb, nq: nq, d: d, k: k, seed: seed, csvPath: csvPath);
+    return _Options(
+      nb: nb,
+      nq: nq,
+      d: d,
+      k: k,
+      seed: seed,
+      csvPath: csvPath,
+      mdPath: mdPath,
+      pareto: pareto,
+    );
   }
 }
 
@@ -285,4 +321,5 @@ class _UsageError implements Exception {}
 
 const String _usage =
     'Usage: dart run bin/bench_faiss.dart '
-    '[--nb N] [--nq N] [--d D] [--k K] [--seed S] [--csv PATH]';
+    '[--nb N] [--nq N] [--d D] [--k K] [--seed S] [--csv PATH] '
+    '[--md PATH] [--pareto]';

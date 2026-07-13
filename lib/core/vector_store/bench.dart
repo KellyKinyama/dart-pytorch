@@ -277,6 +277,78 @@ String formatBenchTable(Iterable<BenchResult> rows) {
   return buf.toString();
 }
 
+/// Render a list of [BenchResult]s as a GitHub-flavoured Markdown
+/// table. Numeric columns are right-aligned via the `--:` header
+/// syntax; the label column is left-aligned. Pipe characters and
+/// backslashes in labels are escaped so pathological names cannot
+/// break the table.
+String toBenchMarkdown(Iterable<BenchResult> rows) {
+  final buf = StringBuffer(
+    '| label | recall | mean_us | p50_us | p95_us | p99_us | ntotal | nq | k |\n'
+    '| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n',
+  );
+  for (final r in rows) {
+    buf.write('| ');
+    buf.write(_mdEscape(r.label));
+    buf.write(' | ');
+    buf.write(r.recall.toStringAsFixed(3));
+    buf.write(' | ');
+    buf.write(r.meanUs.toStringAsFixed(1));
+    buf.write(' | ');
+    buf.write(r.p50Us.toStringAsFixed(1));
+    buf.write(' | ');
+    buf.write(r.p95Us.toStringAsFixed(1));
+    buf.write(' | ');
+    buf.write(r.p99Us.toStringAsFixed(1));
+    buf.write(' | ');
+    buf.write(r.ntotal);
+    buf.write(' | ');
+    buf.write(r.nq);
+    buf.write(' | ');
+    buf.write(r.k);
+    buf.write(' |\n');
+  }
+  return buf.toString();
+}
+
+/// Return the recall-vs-latency Pareto frontier of [rows]: the subset
+/// where no other row has both higher (or equal) recall AND lower (or
+/// equal) mean_us. The result is sorted by recall ascending; when two
+/// rows share the same recall, the one with the lower mean_us wins.
+///
+/// A row that ties another on both axes is kept if it is the first
+/// occurrence in insertion order (all others are considered dominated
+/// by the survivor).
+List<BenchResult> paretoFrontier(Iterable<BenchResult> rows) {
+  final input = rows.toList();
+  if (input.isEmpty) return const <BenchResult>[];
+  // Sort by recall descending, then mean_us ascending, so a single
+  // pass keeps rows whose latency is strictly better than the running
+  // minimum.
+  final sorted = List<BenchResult>.from(input)
+    ..sort((a, b) {
+      final c = b.recall.compareTo(a.recall);
+      if (c != 0) return c;
+      return a.meanUs.compareTo(b.meanUs);
+    });
+  final out = <BenchResult>[];
+  var bestUs = double.infinity;
+  double? lastRecall;
+  for (final r in sorted) {
+    // At equal recall, only the first (lowest mean_us) survives — the
+    // rest are dominated by that survivor.
+    if (r.recall == lastRecall) continue;
+    if (r.meanUs < bestUs) {
+      out.add(r);
+      bestUs = r.meanUs;
+      lastRecall = r.recall;
+    }
+  }
+  // Return in recall-ascending order to match the natural plotting
+  // direction (low → high).
+  return out.reversed.toList();
+}
+
 // ---------------------------------------------------------------------
 // Internals.
 // ---------------------------------------------------------------------
@@ -303,6 +375,18 @@ String _csvEscape(String s) {
     return '"${s.replaceAll('"', '""')}"';
   }
   return s;
+}
+
+/// Escape a string for embedding in a GitHub-flavoured Markdown table
+/// cell: backslash-escape pipes + backslashes, and collapse newlines
+/// to `<br>` so multi-line labels don't break the table.
+String _mdEscape(String s) {
+  final escaped = s
+      .replaceAll(r'\', r'\\')
+      .replaceAll('|', r'\|')
+      .replaceAll('\r\n', '<br>')
+      .replaceAll('\n', '<br>');
+  return escaped;
 }
 
 String _pad(String s, int w) {

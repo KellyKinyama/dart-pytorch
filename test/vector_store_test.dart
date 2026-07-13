@@ -2829,6 +2829,82 @@ void main() {
     expect(lines[1], startsWith('"x, ""hi"""'));
   });
 
+  test('toBenchMarkdown emits a right-aligned GFM table with escaped labels',
+      () {
+    final rows = <BenchResult>[
+      BenchResult(
+        label: 'a|b\\c',
+        nq: 1,
+        k: 1,
+        recall: 0.9,
+        meanUs: 12.5,
+        p50Us: 10.0,
+        p95Us: 20.0,
+        p99Us: 30.0,
+        ntotal: 5,
+      ),
+    ];
+    final md = toBenchMarkdown(rows);
+    final lines = md.trim().split('\n');
+    expect(lines, hasLength(3));
+    expect(lines[0], startsWith('| label |'));
+    // Header separator row uses `--:` for right-aligned numeric cols.
+    expect(lines[1], contains('---:'));
+    // Pipe + backslash are escaped in the label cell.
+    expect(lines[2], contains(r'a\|b\\c'));
+    expect(lines[2], endsWith('| 1 |'));
+  });
+
+  test('paretoFrontier drops dominated rows and returns recall-ascending', () {
+    BenchResult row(String label, double recall, double mean) => BenchResult(
+          label: label,
+          nq: 1,
+          k: 1,
+          recall: recall,
+          meanUs: mean,
+          p50Us: mean,
+          p95Us: mean,
+          p99Us: mean,
+          ntotal: 100,
+        );
+    final rows = <BenchResult>[
+      row('fast-lowrecall', 0.2, 5),
+      row('dominated', 0.3, 25), // dominated by (mid-mediocre 0.5 @ 10)
+      row('mid-mediocre', 0.5, 10),
+      row('slow-perfect', 1.0, 100),
+    ];
+    final frontier = paretoFrontier(rows);
+    expect(
+      frontier.map((r) => r.label),
+      equals(<String>['fast-lowrecall', 'mid-mediocre', 'slow-perfect']),
+    );
+  });
+
+  test('paretoFrontier keeps only the fastest row on recall ties', () {
+    BenchResult row(String label, double recall, double mean) => BenchResult(
+          label: label,
+          nq: 1,
+          k: 1,
+          recall: recall,
+          meanUs: mean,
+          p50Us: mean,
+          p95Us: mean,
+          p99Us: mean,
+          ntotal: 100,
+        );
+    final rows = <BenchResult>[
+      row('slow-recall1', 1.0, 100),
+      row('fast-recall1', 1.0, 50),
+    ];
+    final frontier = paretoFrontier(rows);
+    expect(frontier, hasLength(1));
+    expect(frontier.first.label, equals('fast-recall1'));
+  });
+
+  test('paretoFrontier handles empty input', () {
+    expect(paretoFrontier(<BenchResult>[]), isEmpty);
+  });
+
   test('benchIndex rejects mismatched truth', () {
     final flat = IndexFlatL2(d)..add(xs);
     // Shorter queries → mismatch with `truth.nq`.
