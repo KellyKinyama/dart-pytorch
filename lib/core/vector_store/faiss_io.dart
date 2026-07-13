@@ -32,6 +32,10 @@
 ///   `IndexBinaryFlat` coarse quantizer and per-cell packed code
 ///   storage (same `ilar` container as the float IVF families, with
 ///   `code_size` in bytes rather than fp32 dims).
+/// * `IndexHNSW`         — fourcc `IHNf` (IndexHNSWFlat), Malkov-style
+///   hierarchical graph with an inline `IndexFlat` storage sub-index.
+///   The port's per-node adjacency lists are converted to/from FAISS's
+///   flat `offsets` / `neighbors` CSR layout on write / read.
 /// * `L2NormTransform`   — fourcc `VNrm`, on-sphere normalization
 ///   (FAISS's `NormalizationTransform` with `norm = 2.0`).
 /// * `RandomRotationTransform` — fourcc `rrot`, a `LinearTransform`
@@ -81,6 +85,7 @@
 library;
 
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'index.dart';
@@ -88,6 +93,7 @@ import 'index_binary.dart';
 import 'index_binary_flat.dart';
 import 'index_binary_ivf.dart';
 import 'index_flat.dart';
+import 'index_hnsw.dart';
 import 'index_id_map.dart';
 import 'index_io.dart';
 import 'index_ivf_flat.dart';
@@ -338,6 +344,37 @@ class FaissFourcc {
   ///       (n * 8)         raw idx_t (int64) ids
   /// ```
   static final int indexBinaryIvf = of('IBwF');
+
+  /// `IHNf` — `IndexHNSWFlat`. Layout (after fourcc):
+  ///
+  /// ```
+  ///   [write_index_header]
+  ///   [write_HNSW]:
+  ///     WVEC f64 assign_probas             (per-level sampling weights,
+  ///                                         length = max_expected_level + 1)
+  ///     WVEC i32 cum_nneighbor_per_level   (prefix sums of per-layer slot
+  ///                                         budgets; [0, Mmax0, Mmax0 + Mmax,
+  ///                                         Mmax0 + 2*Mmax, ...])
+  ///     WVEC i32 levels                    (per-node top_layer + 1)
+  ///     WVEC u64 offsets                   (start of node's slot region in
+  ///                                         `neighbors`, length = ntotal + 1)
+  ///     WVEC i32 neighbors                 (flat neighbor array; unused
+  ///                                         slots are -1)
+  ///     i32 entry_point                    (storage id or -1 when empty)
+  ///     i32 max_level                      (== port's _topLevel)
+  ///     i32 efConstruction
+  ///     i32 efSearch
+  ///     i32 upper_beam                     (deprecated; always 1)
+  ///   write_index(storage)                 (recursive; IxF2/IxFI IndexFlat)
+  /// ```
+  ///
+  /// The port stores per-layer adjacency lists directly on each node,
+  /// while FAISS packs them into a CSR-ish `offsets` + `neighbors`
+  /// pair with per-layer slot budgets from `cum_nneighbor_per_level`.
+  /// This dispatch does the conversion in both directions: on write
+  /// each node's lists are padded with `-1` to the slot budget; on
+  /// read the `-1` sentinels are filtered back out.
+  static final int indexHnswFlat = of('IHNf');
 }
 
 /// FAISS `MetricType` enum values.
@@ -438,6 +475,47 @@ void _writeVectorF32(IoWriter w, Float32List xs) {
 Float32List _readVectorF32(IoReader r) {
   final n = r.readU64();
   return n == 0 ? Float32List(0) : r.readF32List(n);
+}
+
+/// FAISS `WRITEVECTOR` for `std::vector<double>`:
+///   size_t element_count (u64 LE)
+///   element_count * 8 raw bytes, each an f64 LE.
+///
+/// Used by HNSW's `assign_probas`.
+void _writeVectorF64(IoWriter w, List<double> xs) {
+  w.writeU64(xs.length);
+  for (final v in xs) {
+    w.writeF64(v);
+  }
+}
+
+List<double> _readVectorF64(IoReader r) {
+  final n = r.readU64();
+  final out = List<double>.filled(n, 0.0);
+  for (var i = 0; i < n; i++) {
+    out[i] = r.readF64();
+  }
+  return out;
+}
+
+/// FAISS `WRITEVECTOR` for `std::vector<int>` (32-bit).
+///
+/// Used by HNSW's `cum_nneighbor_per_level`, `levels`, and
+/// `neighbors` arrays (with a leading `u64` element count).
+void _writeVectorI32(IoWriter w, List<int> xs) {
+  w.writeU64(xs.length);
+  for (final v in xs) {
+    w.writeI32(v);
+  }
+}
+
+List<int> _readVectorI32(IoReader r) {
+  final n = r.readU64();
+  final out = List<int>.filled(n, 0);
+  for (var i = 0; i < n; i++) {
+    out[i] = r.readI32();
+  }
+  return out;
 }
 
 /// Writes the `LinearTransform` body block that follows the subtype
@@ -1194,6 +1272,216 @@ VectorTransform readFaissTransform(IoReader r) {
   );
 }
 
+// --- HNSW helpers -----------------------------------------------------------
+
+/// Recomputes FAISS's `assign_probas` table from `M` and `mL`.
+///
+/// Mirrors `HNSW::set_default_probas`: keep adding levels while the
+/// per-level probability exceeds `1e-9`, at which point the loop
+/// breaks. Also returns the parallel `cum_nneighbor_per_level` table
+/// so the port can size the neighbor slot buckets consistently.
+///
+/// Layer 0 gets `2 * M` slots and each upper layer gets `M` slots, so
+/// the cumulative table is `[0, 2M, 2M + M, 2M + 2M, ...]`. The
+/// returned tables always have `assign_probas.length + 1 ==
+/// cum_nneighbor_per_level.length`, matching FAISS's invariant.
+({List<double> assignProbas, List<int> cumNneighborPerLevel})
+_hnswDefaultProbas(int M, double mL) {
+  final assignProbas = <double>[];
+  final cumNneighborPerLevel = <int>[0];
+  var nn = 0;
+  for (var level = 0;; level++) {
+    final proba = math.exp(-level / mL) * (1 - math.exp(-1 / mL));
+    if (proba < 1e-9) break;
+    assignProbas.add(proba);
+    nn += level == 0 ? M * 2 : M;
+    cumNneighborPerLevel.add(nn);
+  }
+  return (
+    assignProbas: assignProbas,
+    cumNneighborPerLevel: cumNneighborPerLevel,
+  );
+}
+
+/// Converts the port's per-node adjacency lists into FAISS's flat
+/// CSR-ish HNSW payload and writes it to `w`. Does NOT emit the
+/// storage sub-index — the caller is responsible for that.
+void _writeHnsw(IoWriter w, IndexHNSW idx) {
+  final n = idx.ntotal;
+  final topLevel = idx.topLevel;
+  // Build cum_nneighbor_per_level long enough to cover every observed
+  // node level. `_hnswDefaultProbas` already gives us the FAISS-shaped
+  // table; extend it if this particular graph happens to be taller
+  // than the default probability tail.
+  final defaults = _hnswDefaultProbas(idx.M, 1.0 / math.log(idx.M));
+  final cum = <int>[...defaults.cumNneighborPerLevel];
+  final needed = math.max(topLevel + 1, 0);
+  while (cum.length < needed + 1) {
+    // Each additional level gets `M` slots (layer 0 already covered
+    // by the seed table).
+    cum.add(cum.last + idx.M);
+  }
+  // Levels array: FAISS stores `top_layer + 1`.
+  final levels = List<int>.filled(n, 0);
+  final offsets = List<int>.filled(n + 1, 0);
+  for (var i = 0; i < n; i++) {
+    levels[i] = idx.nodeLevel(i) + 1;
+    offsets[i + 1] = offsets[i] + cum[levels[i]];
+  }
+  // Neighbors: -1-filled slot buffer, then overwrite from adjacency
+  // lists.
+  final neighbors = List<int>.filled(offsets[n], -1);
+  for (var i = 0; i < n; i++) {
+    final base = offsets[i];
+    for (var l = 0; l <= idx.nodeLevel(i); l++) {
+      final layerStart = base + cum[l];
+      final layerEnd = base + cum[l + 1];
+      final adj = idx.nodeNeighbors(i, l);
+      if (adj.length > layerEnd - layerStart) {
+        throw StateError(
+          'HNSW node $i layer $l has ${adj.length} neighbors, '
+          'but slot budget is ${layerEnd - layerStart}',
+        );
+      }
+      for (var j = 0; j < adj.length; j++) {
+        neighbors[layerStart + j] = adj[j];
+      }
+    }
+  }
+  _writeVectorF64(w, defaults.assignProbas);
+  _writeVectorI32(w, cum);
+  _writeVectorI32(w, levels);
+  // `offsets` is a std::vector<size_t> in FAISS, which is u64 on 64-bit
+  // little-endian hosts (the only supported build).
+  w.writeU64(offsets.length);
+  for (final o in offsets) {
+    w.writeU64(o);
+  }
+  _writeVectorI32(w, neighbors);
+  w.writeI32(idx.entryPoint);
+  w.writeI32(topLevel);
+  w.writeI32(idx.efConstruction);
+  w.writeI32(idx.efSearch);
+  w.writeI32(1); // upper_beam (deprecated; always 1 in modern FAISS)
+}
+
+/// Decoded HNSW payload used to hydrate a fresh [IndexHNSW].
+class _HnswPayload {
+  _HnswPayload({
+    required this.M,
+    required this.efConstruction,
+    required this.efSearch,
+    required this.entryPoint,
+    required this.topLevel,
+    required this.nodeLevels,
+    required this.perNodePerLayerNeighbors,
+  });
+  final int M;
+  final int efConstruction;
+  final int efSearch;
+  final int entryPoint;
+  final int topLevel;
+  final List<int> nodeLevels;
+  final List<List<List<int>>> perNodePerLayerNeighbors;
+}
+
+/// Parses the FAISS HNSW payload from `r` and converts it back to the
+/// port's per-node adjacency representation.
+_HnswPayload _readHnsw(IoReader r, int ntotal) {
+  final assignProbas = _readVectorF64(r);
+  final cum = _readVectorI32(r);
+  if (cum.isEmpty || cum.first != 0) {
+    throw FormatException(
+      'IHNf: cum_nneighbor_per_level must start with 0 '
+      '(got ${cum.isEmpty ? "empty" : cum.first})',
+    );
+  }
+  if (assignProbas.length + 1 != cum.length) {
+    throw FormatException(
+      'IHNf: assign_probas length ${assignProbas.length} inconsistent '
+      'with cum_nneighbor_per_level length ${cum.length}',
+    );
+  }
+  // Recover `M` from the slot budgets. Layer 0 gets `2 * M`; if there's
+  // a layer 1, its per-layer budget is exactly `M`.
+  final int m0 = cum.length >= 2 ? cum[1] : 0;
+  final int mUpper = cum.length >= 3 ? cum[2] - cum[1] : (m0 ~/ 2);
+  final int M = mUpper > 0 ? mUpper : (m0 ~/ 2).clamp(1, 1 << 30);
+  final levels = _readVectorI32(r);
+  if (levels.length != ntotal) {
+    throw FormatException(
+      'IHNf: levels length ${levels.length} != ntotal $ntotal',
+    );
+  }
+  final offsetsCount = r.readU64();
+  if (offsetsCount != ntotal + 1) {
+    throw FormatException(
+      'IHNf: offsets length $offsetsCount != ntotal + 1 = ${ntotal + 1}',
+    );
+  }
+  final offsets = List<int>.generate(offsetsCount, (_) => r.readU64());
+  final neighbors = _readVectorI32(r);
+  if (offsets.isNotEmpty && offsets.last != neighbors.length) {
+    throw FormatException(
+      'IHNf: offsets tail ${offsets.last} != neighbors length '
+      '${neighbors.length}',
+    );
+  }
+  final entryPoint = r.readI32();
+  final maxLevel = r.readI32();
+  final efConstruction = r.readI32();
+  final efSearch = r.readI32();
+  final upperBeam = r.readI32();
+  if (upperBeam != 1) {
+    throw UnsupportedError(
+      'IHNf: only upper_beam=1 is supported, got $upperBeam',
+    );
+  }
+  // Rebuild per-node adjacency lists, filtering out `-1` sentinels.
+  final nodeLevels = List<int>.filled(ntotal, 0);
+  final perNodePerLayerNeighbors = List<List<List<int>>>.generate(
+    ntotal,
+    (_) => <List<int>>[],
+  );
+  for (var i = 0; i < ntotal; i++) {
+    final level = levels[i] - 1;
+    if (level < 0) {
+      throw FormatException(
+        'IHNf: levels[$i] = ${levels[i]} < 1',
+      );
+    }
+    nodeLevels[i] = level;
+    final layers = perNodePerLayerNeighbors[i];
+    final base = offsets[i];
+    for (var l = 0; l <= level; l++) {
+      if (l + 1 >= cum.length) {
+        throw FormatException(
+          'IHNf: node $i requests layer $l but cum table only has '
+          '${cum.length - 1} layers',
+        );
+      }
+      final layerStart = base + cum[l];
+      final layerEnd = base + cum[l + 1];
+      final adj = <int>[];
+      for (var j = layerStart; j < layerEnd; j++) {
+        final v = neighbors[j];
+        if (v < 0) break;
+        adj.add(v);
+      }
+      layers.add(adj);
+    }
+  }
+  return _HnswPayload(
+    M: M,
+    efConstruction: efConstruction,
+    efSearch: efSearch,
+    entryPoint: entryPoint,
+    topLevel: maxLevel,
+    nodeLevels: nodeLevels,
+    perNodePerLayerNeighbors: perNodePerLayerNeighbors,
+  );
+}
+
 /// Serializes [x] into FAISS binary format.
 ///
 /// Currently supports `IndexFlat`. Composite / approximate index
@@ -1360,6 +1648,24 @@ void writeFaissIndex(IoWriter w, Index x) {
       }
     }
     _writeVectorU8(w, codes);
+    return;
+  }
+  if (x is IndexHNSW) {
+    // IHNf layout: see [FaissFourcc.indexHnswFlat] for the full spec.
+    w.writeU32(FaissFourcc.indexHnswFlat);
+    _writeHeader(w, x);
+    _writeHnsw(w, x);
+    // Storage sub-index: rebuild an IndexFlat holding the raw vectors
+    // so we can reuse the existing IxF2/IxFI encoder path.
+    final storageIdx = IndexFlat(x.d, x.metric);
+    if (x.ntotal > 0) {
+      final rows = List<Float32List>.generate(x.ntotal, (i) {
+        return Float32List.sublistView(x.storage, i * x.d, (i + 1) * x.d);
+      });
+      storageIdx.add(rows);
+    }
+    storageIdx.isTrained = x.isTrained;
+    writeFaissIndex(w, storageIdx);
     return;
   }
   throw UnsupportedError(
@@ -1696,6 +2002,54 @@ Index readFaissIndex(IoReader r) {
     }
     final idx = IndexLSH(d: h.d, nbits: nbits);
     idx.ioSetProjectionAndCodes(body.a, codes, h.ntotal);
+    idx.isTrained = h.isTrained;
+    return idx;
+  }
+  if (tag == FaissFourcc.indexHnswFlat) {
+    // IHNf: header, HNSW graph payload, storage sub-index (IndexFlat).
+    final h = _readHeader(r);
+    final payload = _readHnsw(r, h.ntotal);
+    final storage = readFaissIndex(r);
+    if (storage is! IndexFlat) {
+      throw FormatException(
+        'IHNf: storage sub-index is ${storage.runtimeType}, '
+        'expected IndexFlat',
+      );
+    }
+    if (storage.d != h.d || storage.metric != h.metric) {
+      throw FormatException(
+        'IHNf: storage (d=${storage.d}, metric=${storage.metric}) '
+        'disagrees with header (d=${h.d}, metric=${h.metric})',
+      );
+    }
+    if (storage.ntotal != h.ntotal) {
+      throw FormatException(
+        'IHNf: storage ntotal ${storage.ntotal} != header ntotal '
+        '${h.ntotal}',
+      );
+    }
+    final idx = IndexHNSW(
+      d: h.d,
+      metric: h.metric,
+      M: payload.M,
+      efConstruction: payload.efConstruction,
+      efSearch: payload.efSearch,
+    );
+    final flatStorage = Float32List(h.ntotal * h.d);
+    for (var i = 0; i < h.ntotal; i++) {
+      final row = storage.reconstruct(i);
+      for (var j = 0; j < h.d; j++) {
+        flatStorage[i * h.d + j] = row[j];
+      }
+    }
+    idx.ioSetGraph(
+      newStorage: flatStorage,
+      nodeLevels: payload.nodeLevels,
+      perNodePerLayerNeighbors: payload.perNodePerLayerNeighbors,
+      newEntryPoint: payload.entryPoint,
+      newTopLevel: payload.topLevel,
+      newNtotal: h.ntotal,
+    );
     idx.isTrained = h.isTrained;
     return idx;
   }

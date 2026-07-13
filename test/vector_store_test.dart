@@ -1217,10 +1217,13 @@ void main() {
   });
 
   test('writeFaissIndex rejects unsupported index types', () {
-    // IndexHNSW interop (IHNf) is not yet wired up.
-    final hnsw = IndexHNSW(d: d)..add(xs);
+    // `IndexShards` interop (multi-shard fan-out) is not yet wired up
+    // — we use it here as a stand-in for "any Index subclass that
+    // isn't in the dispatch table".
+    final shards = IndexShards(shards: [IndexFlatL2(d), IndexFlatL2(d)])
+      ..add(xs);
     expect(
-      () => writeFaissIndexToBytes(hnsw),
+      () => writeFaissIndexToBytes(shards),
       throwsA(isA<UnsupportedError>()),
     );
   });
@@ -2424,6 +2427,98 @@ void main() {
     for (var c = 0; c < ivf.nlist; c++) {
       expect(loaded.listSize(c), equals(0));
     }
+  });
+
+  test('writeFaissIndex emits IHNf fourcc and correct header bytes', () {
+    final hnsw = IndexHNSW(d: d, M: 8, efConstruction: 40, efSearch: 32)
+      ..add(xs);
+    final bytes = writeFaissIndexToBytes(hnsw);
+    final tag =
+        bytes[0] | (bytes[1] << 8) | (bytes[2] << 16) | (bytes[3] << 24);
+    expect(FaissFourcc.toStr(tag), equals('IHNf'));
+    final dRead =
+        bytes[4] | (bytes[5] << 8) | (bytes[6] << 16) | (bytes[7] << 24);
+    expect(dRead, equals(d));
+    // is_trained at offset 32, metric (L2 = 1) at 33.
+    expect(bytes[32], equals(1));
+    expect(bytes[33], equals(1));
+  });
+
+  test('FAISS interop round-trips IndexHNSW byte-equal (graph + search)', () {
+    final orig = IndexHNSW(d: d, M: 8, efConstruction: 40, efSearch: 32)
+      ..add(xs);
+    final before = orig.search(queries, k);
+
+    final bytes = writeFaissIndexToBytes(orig);
+    final loaded = readFaissIndexFromBytes(bytes) as IndexHNSW;
+
+    expect(loaded.d, equals(d));
+    expect(loaded.M, equals(orig.M));
+    expect(loaded.efConstruction, equals(orig.efConstruction));
+    expect(loaded.efSearch, equals(orig.efSearch));
+    expect(loaded.ntotal, equals(orig.ntotal));
+    expect(loaded.entryPoint, equals(orig.entryPoint));
+    expect(loaded.topLevel, equals(orig.topLevel));
+    expect(loaded.isTrained, isTrue);
+
+    // Vector storage preserved byte-for-byte.
+    expect(loaded.storage, equals(orig.storage));
+
+    // Graph topology preserved.
+    for (var i = 0; i < orig.ntotal; i++) {
+      expect(loaded.nodeLevel(i), equals(orig.nodeLevel(i)));
+      for (var l = 0; l <= orig.nodeLevel(i); l++) {
+        expect(loaded.nodeNeighbors(i, l), equals(orig.nodeNeighbors(i, l)));
+      }
+    }
+
+    // Re-writing the loaded index must produce an identical byte blob.
+    final bytes2 = writeFaissIndexToBytes(loaded);
+    expect(bytes2, equals(bytes));
+
+    // Search results identical.
+    final after = loaded.search(queries, k);
+    for (var qi = 0; qi < nq; qi++) {
+      for (var j = 0; j < k; j++) {
+        expect(after.ids[qi][j], equals(before.ids[qi][j]));
+      }
+    }
+  });
+
+  test('FAISS interop round-trips an empty IndexHNSW (no add)', () {
+    final orig = IndexHNSW(d: d, M: 16);
+    final bytes = writeFaissIndexToBytes(orig);
+    final loaded = readFaissIndexFromBytes(bytes) as IndexHNSW;
+    expect(loaded.ntotal, equals(0));
+    expect(loaded.M, equals(16));
+    expect(loaded.entryPoint, equals(-1));
+    expect(loaded.topLevel, equals(-1));
+    // Re-emitting the empty index yields the same bytes.
+    expect(writeFaissIndexToBytes(loaded), equals(bytes));
+  });
+
+  test('readFaissIndex rejects IHNf with upper_beam != 1', () {
+    final hnsw = IndexHNSW(d: d, M: 8, efConstruction: 40, efSearch: 32)
+      ..add(xs);
+    final bytes = writeFaissIndexToBytes(hnsw);
+    // upper_beam is the LAST i32 of the HNSW payload (immediately
+    // before the storage sub-index fourcc). Walk from the tail: the
+    // storage IxF2 blob is (fourcc 4) + (index_header 33) +
+    // (WVEC u8 codes: 8 + ntotal * d * 4) bytes long.
+    final storageLen = 4 + 33 + 8 + xs.length * d * 4;
+    final upperBeamOffset = bytes.length - storageLen - 4;
+    // Sanity: original bytes hold `1` at that spot.
+    final origBeam =
+        bytes[upperBeamOffset] |
+        (bytes[upperBeamOffset + 1] << 8) |
+        (bytes[upperBeamOffset + 2] << 16) |
+        (bytes[upperBeamOffset + 3] << 24);
+    expect(origBeam, equals(1));
+    bytes[upperBeamOffset] = 2;
+    expect(
+      () => readFaissIndexFromBytes(bytes),
+      throwsA(isA<UnsupportedError>()),
+    );
   });
 }
 

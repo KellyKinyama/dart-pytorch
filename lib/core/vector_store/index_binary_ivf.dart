@@ -49,11 +49,8 @@ class IndexBinaryIVF extends IndexBinary {
   /// Read-only view of the packed code bytes for cell [listNo]
   /// (`listSize(listNo) * codeSize` bytes). Used by FAISS-format
   /// interop to emit `ilar` cell payloads without copying.
-  Uint8List invListCodes(int listNo) => Uint8List.sublistView(
-    _invCodes[listNo],
-    0,
-    _invSize[listNo] * codeSize,
-  );
+  Uint8List invListCodes(int listNo) =>
+      Uint8List.sublistView(_invCodes[listNo], 0, _invSize[listNo] * codeSize);
 
   /// Read-only copy of the id list for cell [listNo]
   /// (`listSize(listNo)` entries). Returns a fresh list to prevent
@@ -244,9 +241,7 @@ class IndexBinaryIVF extends IndexBinary {
       final have = _invSize[c];
       final needed = (have + 1) * codeSize;
       if (needed > _invCodes[c].length) {
-        var newCap = _invCodes[c].isEmpty
-            ? 4 * codeSize
-            : _invCodes[c].length;
+        var newCap = _invCodes[c].isEmpty ? 4 * codeSize : _invCodes[c].length;
         while (newCap < needed) {
           newCap *= 2;
         }

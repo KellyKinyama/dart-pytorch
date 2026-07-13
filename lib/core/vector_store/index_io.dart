@@ -104,6 +104,14 @@ class IoWriter {
     _b.add(_scratch.buffer.asUint8List(0, 4));
   }
 
+  /// Little-endian float64 (IEEE 754 binary64). Used by FAISS interop
+  /// where the C++ side declares fields as `double` (e.g. HNSW's
+  /// `assign_probas`).
+  void writeF64(double v) {
+    _scratch.setFloat64(0, v, Endian.little);
+    _b.add(_scratch.buffer.asUint8List(0, 8));
+  }
+
   /// Little-endian int64. Used by FAISS-format interop where the C++
   /// side declares fields as `idx_t` (= `int64_t`) and `size_t`.
   void writeI64(int v) {
@@ -168,6 +176,13 @@ class IoReader {
   double readF32() {
     final v = _view.getFloat32(_pos, Endian.little);
     _pos += 4;
+    return v;
+  }
+
+  /// Little-endian float64. Companion to [IoWriter.writeF64].
+  double readF64() {
+    final v = _view.getFloat64(_pos, Endian.little);
+    _pos += 8;
     return v;
   }
 

@@ -411,6 +411,91 @@ class IndexHNSW extends Index {
     idx._topLevel = topLevel;
     return idx;
   }
+
+  // --- FAISS interop hooks -----------------------------------------------
+  //
+  // These accessors expose the raw graph state so `faiss_io.dart` can
+  // translate between the port's per-node adjacency lists and FAISS's
+  // flat `offsets` + `neighbors` CSR layout.
+
+  /// Read-only view into the packed float32 storage (`ntotal * d` values).
+  Float32List get storage =>
+      Float32List.sublistView(_storage, 0, ntotal * d);
+
+  /// Current graph entry point (storage id or `-1` when empty).
+  int get entryPoint => _entryPoint;
+
+  /// Top populated layer index (or `-1` when empty).
+  int get topLevel => _topLevel;
+
+  /// Top layer of node `i` (equal to FAISS's `levels[i] - 1`).
+  int nodeLevel(int i) => _nodes[i].level;
+
+  /// Neighbor list of node `i` at layer `layer` (compact, no `-1` padding).
+  List<int> nodeNeighbors(int i, int layer) => _nodes[i].neighbors[layer];
+
+  /// Bulk hydration hook used by `readFaissIndex`. Replaces the graph +
+  /// storage in one shot after a fresh construction. Callers must pass:
+  ///
+  ///  * `newStorage`  — length `newNtotal * d`.
+  ///  * `nodeLevels`  — per-node top-layer indices (length `newNtotal`).
+  ///  * `perNodePerLayerNeighbors[i][l]` — compact neighbor id list for
+  ///    node `i` at layer `l`, with `l` ranging over `0..nodeLevels[i]`.
+  ///  * `newEntryPoint` / `newTopLevel` / `newNtotal` — top-level graph
+  ///    stats matching FAISS's `entry_point` / `max_level` / `ntotal`.
+  void ioSetGraph({
+    required Float32List newStorage,
+    required List<int> nodeLevels,
+    required List<List<List<int>>> perNodePerLayerNeighbors,
+    required int newEntryPoint,
+    required int newTopLevel,
+    required int newNtotal,
+  }) {
+    if (newStorage.length != newNtotal * d) {
+      throw ArgumentError(
+        'newStorage length ${newStorage.length} != newNtotal * d '
+        '(${newNtotal * d})',
+      );
+    }
+    if (nodeLevels.length != newNtotal) {
+      throw ArgumentError(
+        'nodeLevels length ${nodeLevels.length} != newNtotal $newNtotal',
+      );
+    }
+    if (perNodePerLayerNeighbors.length != newNtotal) {
+      throw ArgumentError(
+        'perNodePerLayerNeighbors length ${perNodePerLayerNeighbors.length}'
+        ' != newNtotal $newNtotal',
+      );
+    }
+    final fresh = Float32List(newNtotal * d);
+    for (var i = 0; i < newStorage.length; i++) {
+      fresh[i] = newStorage[i];
+    }
+    _storage = fresh;
+    _capacity = newNtotal;
+    _nodes
+      ..clear()
+      ..addAll(
+        List<_HnswNode>.generate(newNtotal, (i) {
+          final level = nodeLevels[i];
+          final layers = perNodePerLayerNeighbors[i];
+          if (layers.length != level + 1) {
+            throw ArgumentError(
+              'node $i: expected ${level + 1} layers, got ${layers.length}',
+            );
+          }
+          final node = _HnswNode(level);
+          for (var l = 0; l <= level; l++) {
+            node.neighbors[l].addAll(layers[l]);
+          }
+          return node;
+        }),
+      );
+    ntotal = newNtotal;
+    _entryPoint = newEntryPoint;
+    _topLevel = newTopLevel;
+  }
 }
 
 // -----------------------------------------------------------------------------
