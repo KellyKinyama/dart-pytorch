@@ -12,15 +12,22 @@
 ///     dart run bin/bench_faiss.dart --nb 20000 --d 128 --csv /tmp/bench.csv
 ///
 /// Flags:
-///   `--nb N`    database size (default 5000)
-///   `--nq N`    query count (default 200)
-///   `--d  D`    dimensionality (default 64)
-///   `--k  K`    neighbours per query (default 10)
-///   `--seed S`  RNG seed (default 0)
-///   `--csv P`   append CSV to path P (writes header if new)
-///   `--md  P`   write Markdown table to path P (overwrites)
-///   `--pareto`  restrict CSV / Markdown output to the Pareto
-///               frontier (recall-vs-latency)
+///   `--nb N`             database size (default 5000)
+///   `--nq N`             query count (default 200)
+///   `--d  D`             dimensionality (default 64)
+///   `--k  K`             neighbours per query (default 10)
+///   `--seed S`           RNG seed (default 0)
+///   `--csv P`            append CSV to path P (writes header if new)
+///   `--md  P`            write Markdown table to path P (overwrites)
+///   `--pareto`           restrict CSV / Markdown output to the Pareto
+///                        frontier (recall-vs-latency)
+///   `--tune-target T`    pick one built index to save as a tuned IxDT
+///                        blob. One of: ivfflat, ivfpq, ivfpq+rf, hnsw.
+///   `--tune-out P`       output path for the IxDT-wrapped tuned blob
+///                        (required with `--tune-target`)
+///   `--tune-recall F`    target min recall for `pickForRecall` (default
+///                        0.9); falls back to the highest-recall point
+///                        in the sweep when no candidate clears the bar
 library;
 
 import 'dart:io';
@@ -198,6 +205,20 @@ int main(List<String> args) {
     stdout.writeln('wrote Markdown → ${opts.mdPath}');
   }
 
+  if (opts.tuneTarget != null) {
+    final ok = _writeTunedBlob(
+      target: opts.tuneTarget!,
+      outPath: opts.tuneOut!,
+      minRecall: opts.tuneRecall,
+      results: results,
+      ivf: ivf,
+      ivfpq: ivfpq,
+      refined: refined,
+      hnsw: hnsw,
+    );
+    if (!ok) return 2;
+  }
+
   return 0;
 }
 
@@ -235,6 +256,131 @@ int _pickPqM(int d) {
   return 1;
 }
 
+/// Extract the sweep points that match [target] from the bench
+/// results, pick a winner via `OperatingPoints.pickForRecall(minRecall)`
+/// (falling back to the highest-recall point if the target isn't met),
+/// and write an IxDT-wrapped tuned blob to [outPath]. Prints a short
+/// summary. Returns `false` on error.
+bool _writeTunedBlob({
+  required String target,
+  required String outPath,
+  required double minRecall,
+  required List<BenchResult> results,
+  required IndexIVFFlat ivf,
+  required IndexIVFPQ ivfpq,
+  required IndexRefineFlat refined,
+  required IndexHNSW hnsw,
+}) {
+  final spec = _tuneSpecs[target];
+  if (spec == null) {
+    stderr.writeln(
+      'bench_faiss: --tune-target must be one of '
+      '${_tuneSpecs.keys.join(", ")} (got "$target")',
+    );
+    return false;
+  }
+
+  final points = <OperatingPoint>[];
+  for (final r in results) {
+    if (!r.label.startsWith(spec.labelPrefix)) continue;
+    final m = spec.paramPattern.firstMatch(r.label);
+    if (m == null) continue;
+    final value = int.parse(m.group(1)!);
+    points.add(
+      OperatingPoint(
+        paramValue: value,
+        paramLabel: '${spec.paramName}=$value',
+        recall: r.recall,
+        meanUs: r.meanUs,
+      ),
+    );
+  }
+  if (points.isEmpty) {
+    stderr.writeln(
+      'bench_faiss: no sweep rows matched target "$target" '
+      '(expected label prefix "${spec.labelPrefix}")',
+    );
+    return false;
+  }
+
+  final ops = OperatingPoints(points);
+  var chosen = ops.pickForRecall(minRecall);
+  final fellBack = chosen == null;
+  if (chosen == null) {
+    // Fallback: highest recall in the sweep, tie-break by smallest latency.
+    final sorted = List<OperatingPoint>.from(points)
+      ..sort((a, b) {
+        final c = b.recall.compareTo(a.recall);
+        return c != 0 ? c : a.meanUs.compareTo(b.meanUs);
+      });
+    chosen = sorted.first;
+  }
+
+  final meta = TuningMetadata.fromOperatingPoints(
+    points: ops,
+    metric: Metric.l2,
+    chosenParamValue: chosen.paramValue,
+  );
+
+  final inner = spec.pick(ivf, ivfpq, refined, hnsw);
+  saveTunedFaissIndex(outPath, inner, meta);
+
+  stdout.writeln(
+    'wrote tuned IxDT blob → $outPath\n'
+    '  target=$target  chosen=${chosen.paramLabel}  '
+    'recall=${chosen.recall.toStringAsFixed(3)}  '
+    'mean_us=${chosen.meanUs.toStringAsFixed(1)}'
+    '${fellBack ? "  (fallback: no point hit min_recall=$minRecall)" : ""}',
+  );
+  return true;
+}
+
+class _TuneSpec {
+  const _TuneSpec({
+    required this.labelPrefix,
+    required this.paramName,
+    required this.paramPattern,
+    required this.pick,
+  });
+  final String labelPrefix;
+  final String paramName;
+  final RegExp paramPattern;
+  final Index Function(
+    IndexIVFFlat,
+    IndexIVFPQ,
+    IndexRefineFlat,
+    IndexHNSW,
+  )
+  pick;
+}
+
+final Map<String, _TuneSpec> _tuneSpecs = <String, _TuneSpec>{
+  'ivfflat': _TuneSpec(
+    labelPrefix: 'IVFFlat',
+    paramName: 'nprobe',
+    paramPattern: RegExp(r'nprobe=\s*(\d+)'),
+    pick: (ivf, _, _, _) => ivf,
+  ),
+  'ivfpq': _TuneSpec(
+    labelPrefix: 'IVFPQ    ',
+    paramName: 'nprobe',
+    paramPattern: RegExp(r'nprobe=\s*(\d+)'),
+    pick: (_, ivfpq, _, _) => ivfpq,
+  ),
+  'ivfpq+rf': _TuneSpec(
+    labelPrefix: 'IVFPQ+RF',
+    paramName: 'nprobe',
+    paramPattern: RegExp(r'nprobe=\s*(\d+)'),
+    pick: (_, _, refined, _) => refined,
+  ),
+  'hnsw': _TuneSpec(
+    labelPrefix: 'HNSW',
+    paramName: 'efSearch',
+    paramPattern: RegExp(r'efSearch=\s*(\d+)'),
+    pick: (_, _, _, hnsw) => hnsw,
+  ),
+};
+
 class _Options {
   _Options({
     required this.nb,
@@ -245,6 +391,9 @@ class _Options {
     required this.csvPath,
     required this.mdPath,
     required this.pareto,
+    required this.tuneTarget,
+    required this.tuneOut,
+    required this.tuneRecall,
   });
 
   final int nb;
@@ -255,6 +404,9 @@ class _Options {
   final String? csvPath;
   final String? mdPath;
   final bool pareto;
+  final String? tuneTarget;
+  final String? tuneOut;
+  final double tuneRecall;
 
   static _Options? parse(List<String> args) {
     var nb = 5000;
@@ -265,6 +417,9 @@ class _Options {
     String? csvPath;
     String? mdPath;
     var pareto = false;
+    String? tuneTarget;
+    String? tuneOut;
+    var tuneRecall = 0.9;
     for (var i = 0; i < args.length; i++) {
       final a = args[i];
       String next() {
@@ -297,6 +452,12 @@ class _Options {
             mdPath = next();
           case '--pareto':
             pareto = true;
+          case '--tune-target':
+            tuneTarget = next().toLowerCase();
+          case '--tune-out':
+            tuneOut = next();
+          case '--tune-recall':
+            tuneRecall = double.parse(next());
           default:
             stderr.writeln('bench_faiss: unknown arg $a\n$_usage');
             return null;
@@ -305,6 +466,12 @@ class _Options {
         stderr.writeln(_usage);
         return null;
       }
+    }
+    if ((tuneTarget == null) != (tuneOut == null)) {
+      stderr.writeln(
+        'bench_faiss: --tune-target and --tune-out must be used together',
+      );
+      return null;
     }
     return _Options(
       nb: nb,
@@ -315,6 +482,9 @@ class _Options {
       csvPath: csvPath,
       mdPath: mdPath,
       pareto: pareto,
+      tuneTarget: tuneTarget,
+      tuneOut: tuneOut,
+      tuneRecall: tuneRecall,
     );
   }
 }
@@ -324,4 +494,6 @@ class _UsageError implements Exception {}
 const String _usage =
     'Usage: dart run bin/bench_faiss.dart '
     '[--nb N] [--nq N] [--d D] [--k K] [--seed S] [--csv PATH] '
-    '[--md PATH] [--pareto]';
+    '[--md PATH] [--pareto] '
+    '[--tune-target ivfflat|ivfpq|ivfpq+rf|hnsw --tune-out PATH '
+    '[--tune-recall F]]';
