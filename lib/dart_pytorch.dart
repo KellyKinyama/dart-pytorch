@@ -68,6 +68,7 @@ export 'core/vector_store/index_lsh.dart';
 export 'core/vector_store/vector_transform.dart';
 export 'core/vector_store/l2_norm_transform.dart';
 export 'core/vector_store/random_rotation_transform.dart';
+export 'core/vector_store/pca_transform.dart';
 export 'core/vector_store/index_pre_transform.dart';
 export 'core/vector_store/index_io.dart';
 

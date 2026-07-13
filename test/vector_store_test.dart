@@ -649,4 +649,98 @@ void main() {
       }
     }
   });
+
+  // --- PCA ---------------------------------------------------------------
+
+  test('PCATransform reduces dimension and centres output', () {
+    final pca = PCATransform(dIn: d, dOut: 4)..train(xs);
+    final out = pca.apply(xs);
+    expect(out.length, equals(xs.length));
+    expect(out.first.length, equals(4));
+    // Empirical mean of projected data should be ~zero.
+    final mean = Float64List(4);
+    for (final row in out) {
+      for (var j = 0; j < 4; j++) {
+        mean[j] += row[j];
+      }
+    }
+    for (var j = 0; j < 4; j++) {
+      expect(mean[j] / out.length, closeTo(0.0, 1e-3));
+    }
+  });
+
+  test('PCATransform eigenvalues are sorted descending', () {
+    final pca = PCATransform(dIn: d, dOut: 8)..train(xs);
+    for (var i = 0; i < 7; i++) {
+      expect(pca.eigenvalues[i], greaterThanOrEqualTo(pca.eigenvalues[i + 1]));
+    }
+    // Blob data has structure → leading eigenvalue is substantially
+    // larger than a random baseline.
+    expect(pca.eigenvalues[0], greaterThan(0.0));
+  });
+
+  test('PCA + Flat preserves top-1 recall on low-rank data', () {
+    // Construct data that lives on a 3-dimensional subspace of ℝ^d,
+    // plus tiny noise. PCA to dOut = 3 should keep all the signal and
+    // recover top-1 recall on independent queries.
+    final rng = math.Random(101);
+    final basis = List<Float32List>.generate(3, (_) {
+      final b = Float32List(d);
+      for (var j = 0; j < d; j++) {
+        b[j] = rng.nextDouble() * 2 - 1;
+      }
+      return b;
+    });
+    Float32List _mix(int seed) {
+      final r = math.Random(seed);
+      final coeffs = [r.nextDouble(), r.nextDouble(), r.nextDouble()];
+      final v = Float32List(d);
+      for (var j = 0; j < d; j++) {
+        v[j] =
+            coeffs[0] * basis[0][j] +
+            coeffs[1] * basis[1][j] +
+            coeffs[2] * basis[2][j] +
+            (r.nextDouble() - 0.5) * 0.001;
+      }
+      return v;
+    }
+
+    final data = List<Float32List>.generate(300, (i) => _mix(1000 + i));
+    final qs = List<Float32List>.generate(30, (i) => _mix(9000 + i));
+
+    final flat = IndexFlatL2(d)..add(data);
+    final gold = flat.search(qs, 1);
+
+    final pt = IndexPreTransform(
+      chain: [PCATransform(dIn: d, dOut: 3)],
+      inner: IndexFlatL2(3),
+    );
+    pt.train(data);
+    pt.add(data);
+    final r = pt.search(qs, 1);
+    var hit = 0;
+    for (var qi = 0; qi < qs.length; qi++) {
+      if (r.ids[qi][0] == gold.ids[qi][0]) hit++;
+    }
+    expect(hit / qs.length, greaterThan(0.9));
+  });
+
+  test('PCATransform round-trips through IndexPreTransform bytes', () {
+    final pt = IndexPreTransform(
+      chain: [PCATransform(dIn: d, dOut: 8)],
+      inner: IndexFlatL2(8),
+    );
+    pt.train(xs);
+    pt.add(xs);
+    final before = pt.search(queries, k);
+    final loaded = readIndex(writeIndex(pt)) as IndexPreTransform;
+    expect(loaded.chain.length, equals(1));
+    expect(loaded.chain[0], isA<PCATransform>());
+    final after = loaded.search(queries, k);
+    for (var qi = 0; qi < nq; qi++) {
+      for (var j = 0; j < k; j++) {
+        expect(after.ids[qi][j], equals(before.ids[qi][j]));
+      }
+    }
+  });
 }

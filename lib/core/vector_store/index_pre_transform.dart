@@ -17,13 +17,12 @@ import 'index_io.dart';
 import 'vector_transform.dart';
 import 'l2_norm_transform.dart';
 import 'random_rotation_transform.dart';
+import 'pca_transform.dart';
 
 class IndexPreTransform extends Index {
-  IndexPreTransform({
-    required List<VectorTransform> chain,
-    required this.inner,
-  }) : chain = List.unmodifiable(chain),
-       super(chain.isEmpty ? inner.d : chain.first.dIn, inner.metric) {
+  IndexPreTransform({required List<VectorTransform> chain, required this.inner})
+    : chain = List.unmodifiable(chain),
+      super(chain.isEmpty ? inner.d : chain.first.dIn, inner.metric) {
     _validateChain();
     // Aggregate isTrained: wrapper is trained iff every transform
     // AND the inner index is trained.
@@ -144,6 +143,9 @@ class IndexPreTransform extends Index {
           break;
         case TransformKind.randomRotation:
           chain.add(RandomRotationTransform.readFrom(r));
+          break;
+        case TransformKind.pca:
+          chain.add(PCATransform.readFrom(r));
           break;
         default:
           throw FormatException(

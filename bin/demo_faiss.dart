@@ -476,6 +476,29 @@ void main() {
       '  Persistence            ${(bytes.length / 1024).toStringAsFixed(1)} KiB   '
       'chain=${loaded.chain.length}   parity: ${parity ? "OK" : "MISMATCH"}',
     );
+
+    // PCA — reduce dimensionality then Flat-search in the smaller space.
+    // Full-rank PCA is a rotation (distances preserved); reduced-rank
+    // discards low-variance directions.
+    for (final dOut in [_d, _d ~/ 2, _d ~/ 4]) {
+      final pca = PCATransform(dIn: _d, dOut: dOut);
+      final pt = IndexPreTransform(chain: [pca], inner: IndexFlatL2(dOut));
+      final swT = Stopwatch()..start();
+      pt.train(xb);
+      swT.stop();
+      pt.add(xb);
+      final swS = Stopwatch()..start();
+      final r = pt.search(xq, _k);
+      swS.stop();
+      final recall = _recallAtK(r, truth, _k);
+      print(
+        '  PCA${dOut.toString().padLeft(3)}->Flat   '
+        'train ${swT.elapsed.inMilliseconds} ms   '
+        'search ${(swS.elapsedMicroseconds / _nq).toStringAsFixed(1)} µs/q   '
+        'recall@10 ${(recall * 100).toStringAsFixed(1)} %   '
+        'top eig ${pca.eigenvalues[0].toStringAsFixed(4)}',
+      );
+    }
   }
 
   print(

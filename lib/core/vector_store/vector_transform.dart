@@ -19,6 +19,7 @@ import 'index_io.dart';
 class TransformKind {
   static const int l2Norm = 0x01;
   static const int randomRotation = 0x02;
+  static const int pca = 0x03;
 }
 
 abstract class VectorTransform {
@@ -38,9 +39,7 @@ abstract class VectorTransform {
 
   /// Optional inverse. Throws by default.
   List<Float32List> reverseTransform(List<Float32List> xs) {
-    throw UnsupportedError(
-      '$runtimeType does not implement reverseTransform',
-    );
+    throw UnsupportedError('$runtimeType does not implement reverseTransform');
   }
 
   /// Serialize this transform (subkind + payload) into [w].
