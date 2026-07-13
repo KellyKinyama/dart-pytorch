@@ -1556,8 +1556,8 @@ void main() {
     //   i32 d = 16, i64 ntotal = 0, 2*i64 dummy=1<<20, u8 is_trained,
     //   i32 metric_type = 1 (L2)
     // Byte 4..7 = d.
-    final dRead = bytes[4] | (bytes[5] << 8) | (bytes[6] << 16) |
-        (bytes[7] << 24);
+    final dRead =
+        bytes[4] | (bytes[5] << 8) | (bytes[6] << 16) | (bytes[7] << 24);
     expect(dRead, equals(d));
     // is_trained at offset 4 + 4 + 8 + 8 + 8 = 32.
     expect(bytes[32], equals(1));
@@ -1664,6 +1664,126 @@ void main() {
     valid[valid.length - 4] = 0x2A; // 42
     expect(
       () => readFaissIndexFromBytes(valid),
+      throwsA(isA<UnsupportedError>()),
+    );
+  });
+
+  test('writeFaissIndex emits IxSQ fourcc and correct header bytes', () {
+    final sq = IndexScalarQuantizer(d)..train(xs);
+    final bytes = writeFaissIndexToBytes(sq);
+    // First 4 bytes = fourcc 'IxSQ'.
+    final tag =
+        bytes[0] | (bytes[1] << 8) | (bytes[2] << 16) | (bytes[3] << 24);
+    expect(FaissFourcc.toStr(tag), equals('IxSQ'));
+
+    // Header at offset 4: i32 d, i64 ntotal, 2*i64 dummy, u8 is_trained,
+    // i32 metric_type.
+    final dRead =
+        bytes[4] | (bytes[5] << 8) | (bytes[6] << 16) | (bytes[7] << 24);
+    expect(dRead, equals(d));
+    expect(bytes[32], equals(1)); // is_trained
+    expect(bytes[33], equals(1)); // metric = L2
+  });
+
+  test('FAISS interop round-trips a trained IndexScalarQuantizer (L2)', () {
+    final sq = IndexScalarQuantizer(d)..train(xs);
+    sq.add(xs);
+    final before = sq.search(queries, k);
+
+    final bytes = writeFaissIndexToBytes(sq);
+    final loaded = readFaissIndexFromBytes(bytes) as IndexScalarQuantizer;
+
+    expect(loaded.d, equals(d));
+    expect(loaded.metric, equals(Metric.l2));
+    expect(loaded.isTrained, isTrue);
+    expect(loaded.ntotal, equals(xs.length));
+
+    // vmin / scale byte-equality (scale round-trips via vdiff = scale*255).
+    for (var j = 0; j < d; j++) {
+      expect(loaded.vmin[j], equals(sq.vmin[j]));
+      expect(loaded.scale[j], equals(sq.scale[j]));
+    }
+    // Encoded codes byte-equality.
+    expect(loaded.codes, equals(sq.codes));
+
+    // Search results identical.
+    final after = loaded.search(queries, k);
+    for (var qi = 0; qi < nq; qi++) {
+      for (var j = 0; j < k; j++) {
+        expect(after.ids[qi][j], equals(before.ids[qi][j]));
+      }
+    }
+  });
+
+  test(
+    'FAISS interop round-trips a trained IndexScalarQuantizer (inner product)',
+    () {
+      final sq = IndexScalarQuantizer(d, metric: Metric.innerProduct)
+        ..train(xs);
+      sq.add(xs);
+      final before = sq.search(queries, k);
+
+      final bytes = writeFaissIndexToBytes(sq);
+      final tag =
+          bytes[0] | (bytes[1] << 8) | (bytes[2] << 16) | (bytes[3] << 24);
+      expect(FaissFourcc.toStr(tag), equals('IxSQ'));
+
+      final loaded = readFaissIndexFromBytes(bytes) as IndexScalarQuantizer;
+      expect(loaded.metric, equals(Metric.innerProduct));
+      expect(loaded.codes, equals(sq.codes));
+
+      final after = loaded.search(queries, k);
+      for (var qi = 0; qi < nq; qi++) {
+        for (var j = 0; j < k; j++) {
+          expect(after.ids[qi][j], equals(before.ids[qi][j]));
+        }
+      }
+    },
+  );
+
+  test(
+    'FAISS interop round-trips IndexPreTransform([PCA], IndexScalarQuantizer)',
+    () {
+      final pca = PCATransform(dIn: d, dOut: 8)..train(xs);
+      final inner = IndexScalarQuantizer(8)..train(pca.apply(xs));
+      final pt = IndexPreTransform(chain: [pca], inner: inner);
+      pt.add(xs);
+      final before = pt.search(queries, k);
+
+      final bytes = writeFaissIndexToBytes(pt);
+      final loaded = readFaissIndexFromBytes(bytes) as IndexPreTransform;
+
+      expect(loaded.chain.length, equals(1));
+      expect(loaded.chain[0], isA<PCATransform>());
+      expect(loaded.inner, isA<IndexScalarQuantizer>());
+      expect(loaded.ntotal, equals(xs.length));
+
+      final after = loaded.search(queries, k);
+      for (var qi = 0; qi < nq; qi++) {
+        for (var j = 0; j < k; j++) {
+          expect(after.ids[qi][j], equals(before.ids[qi][j]));
+        }
+      }
+    },
+  );
+
+  test('readFaissIndex rejects IxSQ with non-QT_8bit qtype', () {
+    // Write a valid IxSQ blob, then patch qtype (first i32 of the
+    // ScalarQuantizer block) from 0 to 1. Reader should throw
+    // UnsupportedError.
+    final sq = IndexScalarQuantizer(d)..train(xs);
+    sq.add(xs);
+    final bytes = writeFaissIndexToBytes(sq);
+
+    // Offset layout: fourcc(4) + header(4+8+8+8+1+4 = 33) = 37.
+    // So the qtype i32 starts at offset 37.
+    const qtypeOffset = 4 + 4 + 8 + 8 + 8 + 1 + 4;
+    bytes[qtypeOffset] = 0x01; // qtype = 1 (QT_4bit)
+    bytes[qtypeOffset + 1] = 0x00;
+    bytes[qtypeOffset + 2] = 0x00;
+    bytes[qtypeOffset + 3] = 0x00;
+    expect(
+      () => readFaissIndexFromBytes(bytes),
       throwsA(isA<UnsupportedError>()),
     );
   });

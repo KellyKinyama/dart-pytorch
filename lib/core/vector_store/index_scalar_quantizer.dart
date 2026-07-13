@@ -45,6 +45,24 @@ class IndexScalarQuantizer extends Index {
   Float32List get vmin => _vmin;
   Float32List get scale => _scale;
 
+  /// Read-only view of the currently used byte codes buffer (length
+  /// `ntotal * d`). Zero-copy; do not mutate.
+  Uint8List get codes => Uint8List.sublistView(_codes, 0, ntotal * d);
+
+  /// I/O hook: replace the codes buffer wholesale and set `ntotal`.
+  /// Used by `faiss_io.dart` when reading a persisted index.
+  void ioSetCodes(Uint8List codes, int newNtotal) {
+    if (codes.length != newNtotal * d) {
+      throw ArgumentError(
+        'IndexScalarQuantizer.ioSetCodes: got ${codes.length} bytes, '
+        'expected ${newNtotal * d} for ntotal=$newNtotal, d=$d',
+      );
+    }
+    _codes = Uint8List.fromList(codes);
+    _capacityCodes = _codes.length;
+    ntotal = newNtotal;
+  }
+
   @override
   void train(List<Float32List> xs) {
     if (xs.isEmpty) {

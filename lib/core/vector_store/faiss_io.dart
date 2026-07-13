@@ -12,6 +12,8 @@
 /// * `IndexIDMap`        — fourcc `IxMp`, wraps a sub-index + `i64` id table.
 /// * `IndexPreTransform` — fourcc `IxPT`, chain of transforms + inner.
 /// * `IndexPQ`           — fourcc `IxPq`, product-quantised flat index.
+/// * `IndexScalarQuantizer` — fourcc `IxSQ`, 8-bit per-dim scalar
+///   quantization (`QT_8bit` + `RS_minmax`).
 /// * `L2NormTransform`   — fourcc `VNrm`, on-sphere normalization
 ///   (FAISS's `NormalizationTransform` with `norm = 2.0`).
 /// * `RandomRotationTransform` — fourcc `rrot`, a `LinearTransform`
@@ -69,6 +71,7 @@ import 'index_id_map.dart';
 import 'index_io.dart';
 import 'index_pq.dart';
 import 'index_pre_transform.dart';
+import 'index_scalar_quantizer.dart';
 import 'l2_norm_transform.dart';
 import 'pca_transform.dart';
 import 'random_rotation_transform.dart';
@@ -163,6 +166,21 @@ class FaissFourcc {
   ///   i32 polysemous_ht         (0 outside polysemous mode)
   /// ```
   static final int indexPq = of('IxPq');
+
+  /// `IxSQ` — `IndexScalarQuantizer`. Layout (after fourcc):
+  ///
+  /// ```
+  ///   [write_index_header]
+  ///   [write_ScalarQuantizer]:
+  ///     i32 qtype        (0 = QT_8bit)
+  ///     i32 rangestat    (0 = RS_minmax)
+  ///     f32 rangestat_arg
+  ///     u64 d
+  ///     u64 code_size    (= d for QT_8bit)
+  ///     WVEC f32 trained (2*d floats: [vmin..., vdiff...])
+  ///   WVEC u8 codes      (ntotal * d bytes)
+  /// ```
+  static final int indexSq = of('IxSQ');
 }
 
 /// FAISS `MetricType` enum values.
@@ -386,6 +404,78 @@ ProductQuantizer _readProductQuantizer(IoReader r) {
   }
   pq.isTrained = true;
   return pq;
+}
+
+/// Serializes an [IndexScalarQuantizer] as FAISS's `write_ScalarQuantizer`
+/// block (the trained parameters, sans wrapper fourcc). Layout:
+///
+/// ```
+///   i32 qtype        (0 = QT_8bit)
+///   i32 rangestat    (0 = RS_minmax)
+///   f32 rangestat_arg
+///   u64 d
+///   u64 code_size    (= d for QT_8bit)
+///   WVEC f32 trained (2 * d floats: vmin[0..d-1] then vdiff[0..d-1])
+/// ```
+///
+/// Our port only supports the `(QT_8bit, RS_minmax)` combination — the
+/// only mode where our internal `(_vmin, _scale)` representation maps
+/// losslessly to FAISS's `(vmin, vdiff)`. `vdiff = _scale * 255`.
+void _writeScalarQuantizer(IoWriter w, IndexScalarQuantizer sq) {
+  w.writeI32(0); // qtype = QT_8bit
+  w.writeI32(0); // rangestat = RS_minmax
+  w.writeF32(0.0); // rangestat_arg (unused by RS_minmax in our port)
+  w.writeU64(sq.d);
+  w.writeU64(sq.d); // code_size == d for QT_8bit
+  final trained = Float32List(2 * sq.d);
+  for (var j = 0; j < sq.d; j++) {
+    trained[j] = sq.vmin[j];
+    trained[sq.d + j] = sq.scale[j] * 255.0;
+  }
+  _writeVectorF32(w, trained);
+}
+
+/// Parses FAISS's `write_ScalarQuantizer` payload and returns a
+/// populated [IndexScalarQuantizer] with `_vmin` and `_scale` set (but
+/// no codes / ntotal yet). The caller is responsible for reading the
+/// codes blob that follows.
+IndexScalarQuantizer _readScalarQuantizer(IoReader r, Metric metric) {
+  final qtype = r.readI32();
+  final rangestat = r.readI32();
+  r.readF32(); // rangestat_arg (unused by RS_minmax in our port)
+  final d = r.readU64();
+  final codeSize = r.readU64();
+  final trained = _readVectorF32(r);
+  if (qtype != 0) {
+    throw UnsupportedError(
+      'IxSQ: only QT_8bit (qtype=0) is supported, got qtype=$qtype.',
+    );
+  }
+  if (rangestat != 0) {
+    throw UnsupportedError(
+      'IxSQ: only RS_minmax (rangestat=0) is supported, '
+      'got rangestat=$rangestat.',
+    );
+  }
+  if (codeSize != d) {
+    throw FormatException(
+      'IxSQ: code_size ($codeSize) != d ($d) for QT_8bit.',
+    );
+  }
+  if (trained.length != 2 * d) {
+    throw FormatException(
+      'IxSQ: trained has ${trained.length} floats, expected ${2 * d} '
+      'for QT_8bit + RS_minmax.',
+    );
+  }
+  final sq = IndexScalarQuantizer(d, metric: metric);
+  for (var j = 0; j < d; j++) {
+    sq.vmin[j] = trained[j];
+    final vdiff = trained[d + j];
+    sq.scale[j] = vdiff == 0 ? 1.0 : vdiff / 255.0;
+  }
+  sq.isTrained = true;
+  return sq;
 }
 
 /// Serializes a [VectorTransform] using FAISS's `write_VectorTransform`
@@ -629,6 +719,18 @@ void writeFaissIndex(IoWriter w, Index x) {
     w.writeI32(0);
     return;
   }
+  if (x is IndexScalarQuantizer) {
+    // IxSQ layout:
+    //   fourcc('IxSQ')
+    //   write_index_header(this)
+    //   write_ScalarQuantizer(sq)
+    //   WVEC u8 codes             (ntotal * d bytes)
+    w.writeU32(FaissFourcc.indexSq);
+    _writeHeader(w, x);
+    _writeScalarQuantizer(w, x);
+    _writeVectorU8(w, x.codes);
+    return;
+  }
   throw UnsupportedError(
     'writeFaissIndex: ${x.runtimeType} not yet supported.',
   );
@@ -730,9 +832,7 @@ Index readFaissIndex(IoReader r) {
     final h = _readHeader(r);
     final pq = _readProductQuantizer(r);
     if (pq.d != h.d) {
-      throw FormatException(
-        'IxPq: PQ d (${pq.d}) != header d (${h.d})',
-      );
+      throw FormatException('IxPq: PQ d (${pq.d}) != header d (${h.d})');
     }
     final codes = _readVectorU8(r);
     final expected = h.ntotal * pq.m;
@@ -770,6 +870,24 @@ Index readFaissIndex(IoReader r) {
     idx.isTrained = h.isTrained;
     idx.ioSetCodes(codes, h.ntotal);
     return idx;
+  }
+  if (tag == FaissFourcc.indexSq) {
+    // IxSQ: header, ScalarQuantizer, codes.
+    final h = _readHeader(r);
+    final sq = _readScalarQuantizer(r, h.metric);
+    if (sq.d != h.d) {
+      throw FormatException('IxSQ: SQ d (${sq.d}) != header d (${h.d})');
+    }
+    final codes = _readVectorU8(r);
+    final expected = h.ntotal * h.d;
+    if (codes.length != expected) {
+      throw FormatException(
+        'IxSQ: codes length ${codes.length} != ntotal*d = $expected',
+      );
+    }
+    sq.isTrained = h.isTrained;
+    sq.ioSetCodes(codes, h.ntotal);
+    return sq;
   }
   throw FormatException(
     'Unsupported FAISS fourcc "${FaissFourcc.toStr(tag)}" '
