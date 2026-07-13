@@ -17,12 +17,13 @@
 ///   2 — one or more files could not be probed
 library;
 
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:dart_pytorch/dart_pytorch.dart';
 
 const String _usage =
-    'Usage: dart run bin/faiss_describe.dart <file> [<file> ...]';
+    'Usage: dart run bin/faiss_describe.dart [--json] <file> [<file> ...]';
 
 int main(List<String> args) {
   if (args.isEmpty || args.contains('-h') || args.contains('--help')) {
@@ -30,13 +31,124 @@ int main(List<String> args) {
     return args.isEmpty ? 1 : 0;
   }
 
+  var json = false;
+  final paths = <String>[];
+  for (final a in args) {
+    if (a == '--json') {
+      json = true;
+    } else {
+      paths.add(a);
+    }
+  }
+  if (paths.isEmpty) {
+    stderr.writeln('faiss_describe: no input files\n$_usage');
+    return 1;
+  }
+
+  if (json) return _mainJson(paths);
+
   var failures = 0;
-  for (var i = 0; i < args.length; i++) {
-    final path = args[i];
+  for (var i = 0; i < paths.length; i++) {
+    final path = paths[i];
     if (i > 0) stdout.writeln();
     if (!_describe(path)) failures++;
   }
   return failures == 0 ? 0 : 2;
+}
+
+/// Emit a single JSON array of per-file records — easy to pipe into
+/// jq or another tool. Files that fail to probe get an `error` field.
+int _mainJson(List<String> paths) {
+  var failures = 0;
+  final out = <Map<String, Object?>>[];
+  for (final path in paths) {
+    final rec = _probeToJson(path);
+    out.add(rec);
+    if (rec['error'] != null) failures++;
+  }
+  stdout.writeln(const JsonEncoder.withIndent('  ').convert(out));
+  return failures == 0 ? 0 : 2;
+}
+
+Map<String, Object?> _probeToJson(String path) {
+  final file = File(path);
+  if (!file.existsSync()) {
+    return {'path': path, 'error': 'no such file'};
+  }
+  final int size;
+  try {
+    size = file.lengthSync();
+  } on FileSystemException catch (e) {
+    return {'path': path, 'error': 'stat failed: ${e.message}'};
+  }
+  final FaissIndexInfo info;
+  try {
+    info = probeFaissIndexFile(path);
+  } on FormatException catch (e) {
+    return {'path': path, 'size_bytes': size, 'error': e.message};
+  } on FileSystemException catch (e) {
+    return {'path': path, 'size_bytes': size, 'error': e.message};
+  }
+  return {
+    'path': path,
+    'size_bytes': size,
+    ..._infoToJson(info),
+  };
+}
+
+Map<String, Object?> _infoToJson(FaissIndexInfo info) {
+  return {
+    'fourcc': info.fourccStr,
+    'fourcc_hex':
+        '0x${info.fourcc.toRadixString(16).padLeft(8, '0')}',
+    'kind': _kindTag(info.kind),
+    if (info.d != null) 'd': info.d,
+    if (info.codeSize != null) 'code_size': info.codeSize,
+    if (info.ntotal != null) 'ntotal': info.ntotal,
+    if (info.isTrained != null) 'is_trained': info.isTrained,
+    if (info.metric != null) 'metric': _metricTag(info.metric!),
+    if (info.tuning != null) 'tuning': _tuningToJson(info.tuning!),
+    if (info.inner != null) 'inner': _infoToJson(info.inner!),
+  };
+}
+
+Map<String, Object?> _tuningToJson(TuningMetadata meta) {
+  return {
+    'created_at': meta.createdAt.toIso8601String(),
+    'metric_hint': _metricTag(meta.metric),
+    'chosen_param_value': meta.chosenParamValue,
+    'points': [
+      for (final p in meta.points)
+        {
+          'param_value': p.paramValue,
+          'param_label': p.paramLabel,
+          'recall': p.recall,
+          'mean_us': p.meanUs,
+        },
+    ],
+  };
+}
+
+String _kindTag(FaissIndexKind kind) {
+  switch (kind) {
+    case FaissIndexKind.floatIndex:
+      return 'float_index';
+    case FaissIndexKind.binaryIndex:
+      return 'binary_index';
+    case FaissIndexKind.tunedWrapper:
+      return 'tuned_wrapper';
+    case FaissIndexKind.unknown:
+      return 'unknown';
+  }
+}
+
+String _metricTag(Metric m) {
+  switch (m) {
+    case Metric.l2:
+      return 'l2';
+    case Metric.innerProduct:
+      return 'inner_product';
+  }
 }
 
 /// Probes `path` and prints the result. Returns `true` on success.

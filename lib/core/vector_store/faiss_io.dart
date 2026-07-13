@@ -2946,6 +2946,56 @@ bool isTunedFaissBlob(Uint8List bytes) {
   return tag == _fourccIxDT;
 }
 
+/// Return the raw inner FAISS blob from an `IxDT`-wrapped byte
+/// buffer, discarding the tuning-metadata block. The result is
+/// byte-identical to what upstream FAISS would produce for the inner
+/// index; feed it back to [readFaissIndexFromBytes] or to
+/// `faiss::read_index` in the reference implementation.
+///
+/// Throws a [FormatException] when the leading fourcc is not `IxDT`
+/// or the wrapper header is truncated.
+Uint8List stripTuningWrapper(Uint8List bytes) {
+  if (bytes.length < 4) {
+    throw FormatException(
+      'stripTuningWrapper: blob is ${bytes.length} bytes, need at '
+      'least 4 for the fourcc',
+    );
+  }
+  final r = IoReader(bytes);
+  final tag = r.readU32();
+  if (tag != _fourccIxDT) {
+    throw FormatException(
+      'stripTuningWrapper: expected fourcc "IxDT" but got '
+      '"${FaissFourcc.toStr(tag)}" — this blob is not a tuned wrapper',
+    );
+  }
+  final version = r.readU32();
+  if (version != _ixDTVersion) {
+    throw FormatException(
+      'stripTuningWrapper: unsupported IxDT wrapper version $version '
+      '(this build handles version $_ixDTVersion)',
+    );
+  }
+  final tuningLen = r.readU64();
+  if (r.remaining < tuningLen) {
+    throw FormatException(
+      'stripTuningWrapper: IxDT tuning block declares $tuningLen '
+      'bytes but only ${r.remaining} bytes remain in the blob',
+    );
+  }
+  final innerStart = r.position + tuningLen;
+  return Uint8List.fromList(Uint8List.sublistView(bytes, innerStart));
+}
+
+/// File variant of [stripTuningWrapper]: read the `IxDT` file at
+/// [inPath], write the inner FAISS blob to [outPath]. The written
+/// file is loadable by both [loadFaissIndex] and upstream
+/// `faiss::read_index`.
+void stripTuningWrapperFile(String inPath, String outPath) {
+  final bytes = File(inPath).readAsBytesSync();
+  File(outPath).writeAsBytesSync(stripTuningWrapper(bytes));
+}
+
 Uint8List _writeTuningPayload(TuningMetadata meta) {
   final w = IoWriter();
   w.writeI64(meta.createdAt.microsecondsSinceEpoch);

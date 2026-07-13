@@ -3350,6 +3350,68 @@ void main() {
     expect(meta.createdAt.microsecondsSinceEpoch, equals(7));
   });
 
+  test('stripTuningWrapper recovers the exact inner FAISS blob', () {
+    final inner = IndexFlatL2(d)..add(xs);
+    final plain = writeFaissIndexToBytes(inner);
+    final meta = TuningMetadata(
+      createdAt: DateTime.fromMicrosecondsSinceEpoch(1),
+      metric: Metric.l2,
+      points: <OperatingPoint>[
+        OperatingPoint(
+          paramValue: 4,
+          paramLabel: 'nprobe=4',
+          recall: 0.7,
+          meanUs: 12.5,
+        ),
+      ],
+      chosenParamValue: 4,
+    );
+    final wrapped = writeTunedFaissIndexToBytes(inner, meta);
+    final stripped = stripTuningWrapper(wrapped);
+    expect(stripped, equals(plain));
+    // Stripped bytes are loadable by the regular FAISS reader.
+    final reloaded = readFaissIndexFromBytes(stripped);
+    expect(reloaded.d, equals(inner.d));
+    expect(reloaded.ntotal, equals(inner.ntotal));
+  });
+
+  test('stripTuningWrapper rejects a plain FAISS blob', () {
+    final inner = IndexFlatL2(d)..add(xs);
+    final plain = writeFaissIndexToBytes(inner);
+    expect(
+      () => stripTuningWrapper(plain),
+      throwsA(isA<FormatException>()),
+    );
+  });
+
+  test('stripTuningWrapperFile writes a plain FAISS file', () {
+    final inner = IndexFlatL2(d)..add(xs);
+    final meta = TuningMetadata(
+      createdAt: DateTime.fromMicrosecondsSinceEpoch(1),
+      metric: Metric.l2,
+      points: const <OperatingPoint>[],
+    );
+    final tmpIn = File(
+      '${Directory.systemTemp.path}/dart_pytorch_strip_in.faiss',
+    );
+    final tmpOut = File(
+      '${Directory.systemTemp.path}/dart_pytorch_strip_out.faiss',
+    );
+    try {
+      saveTunedFaissIndex(tmpIn.path, inner, meta);
+      stripTuningWrapperFile(tmpIn.path, tmpOut.path);
+      final reloaded = loadFaissIndex(tmpOut.path);
+      expect(reloaded.d, equals(inner.d));
+      expect(reloaded.ntotal, equals(inner.ntotal));
+      // Written file is byte-identical to a plain saveFaissIndex.
+      final expected = writeFaissIndexToBytes(inner);
+      expect(tmpOut.readAsBytesSync(), equals(expected));
+    } finally {
+      if (tmpIn.existsSync()) tmpIn.deleteSync();
+      if (tmpOut.existsSync()) tmpOut.deleteSync();
+    }
+  });
+
   // -----------------------------------------------------------------
   // GPU-backed flat search.
   // -----------------------------------------------------------------
