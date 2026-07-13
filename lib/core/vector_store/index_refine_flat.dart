@@ -140,4 +140,31 @@ class IndexRefineFlat extends Index {
     required this.refine,
     required this.kFactor,
   }) : super(base.d, base.metric);
+
+  /// I/O hook: builds an [IndexRefineFlat] wrapping already-loaded
+  /// sub-indexes, bypassing the normal constructor (which would
+  /// allocate a fresh empty refine). Used by `faiss_io.dart` to
+  /// rehydrate `IxRF` payloads.
+  static IndexRefineFlat ioLoad({
+    required Index base,
+    required IndexFlat refine,
+    required int kFactor,
+    required int ntotal,
+    required bool isTrained,
+  }) {
+    if (base.d != refine.d || base.metric != refine.metric) {
+      throw ArgumentError(
+        'IndexRefineFlat.ioLoad: base (d=${base.d}, metric=${base.metric}) '
+        'differs from refine (d=${refine.d}, metric=${refine.metric})',
+      );
+    }
+    final idx = IndexRefineFlat._forLoad(
+      base: base,
+      refine: refine,
+      kFactor: kFactor,
+    );
+    idx.ntotal = ntotal;
+    idx.isTrained = isTrained;
+    return idx;
+  }
 }

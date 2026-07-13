@@ -14,6 +14,8 @@
 /// * `IndexPQ`           — fourcc `IxPq`, product-quantised flat index.
 /// * `IndexScalarQuantizer` — fourcc `IxSQ`, 8-bit per-dim scalar
 ///   quantization (`QT_8bit` + `RS_minmax`).
+/// * `IndexRefineFlat`   — fourcc `IxRF`, base approximate index +
+///   exact fp32 refine store + `k_factor` candidate multiplier.
 /// * `L2NormTransform`   — fourcc `VNrm`, on-sphere normalization
 ///   (FAISS's `NormalizationTransform` with `norm = 2.0`).
 /// * `RandomRotationTransform` — fourcc `rrot`, a `LinearTransform`
@@ -71,6 +73,7 @@ import 'index_id_map.dart';
 import 'index_io.dart';
 import 'index_pq.dart';
 import 'index_pre_transform.dart';
+import 'index_refine_flat.dart';
 import 'index_scalar_quantizer.dart';
 import 'l2_norm_transform.dart';
 import 'pca_transform.dart';
@@ -181,6 +184,20 @@ class FaissFourcc {
   ///   WVEC u8 codes      (ntotal * d bytes)
   /// ```
   static final int indexSq = of('IxSQ');
+
+  /// `IxRF` — `IndexRefine` / `IndexRefineFlat`. Layout (after fourcc):
+  ///
+  /// ```
+  ///   [write_index_header]
+  ///   write_index(base_index)    (recursive)
+  ///   write_index(refine_index)  (recursive; upstream always IndexFlat)
+  ///   f32 k_factor               (candidate multiplier)
+  /// ```
+  ///
+  /// FAISS stores `k_factor` as a float; our port keeps it as an `int`,
+  /// so on write we cast to `f32` and on read we round to the nearest
+  /// integer.
+  static final int indexRefine = of('IxRF');
 }
 
 /// FAISS `MetricType` enum values.
@@ -458,9 +475,7 @@ IndexScalarQuantizer _readScalarQuantizer(IoReader r, Metric metric) {
     );
   }
   if (codeSize != d) {
-    throw FormatException(
-      'IxSQ: code_size ($codeSize) != d ($d) for QT_8bit.',
-    );
+    throw FormatException('IxSQ: code_size ($codeSize) != d ($d) for QT_8bit.');
   }
   if (trained.length != 2 * d) {
     throw FormatException(
@@ -731,6 +746,20 @@ void writeFaissIndex(IoWriter w, Index x) {
     _writeVectorU8(w, x.codes);
     return;
   }
+  if (x is IndexRefineFlat) {
+    // IxRF layout:
+    //   fourcc('IxRF')
+    //   write_index_header(this)
+    //   write_index(base_index)     [recursive]
+    //   write_index(refine_index)   [recursive; must be IndexFlat]
+    //   f32 k_factor
+    w.writeU32(FaissFourcc.indexRefine);
+    _writeHeader(w, x);
+    writeFaissIndex(w, x.base);
+    writeFaissIndex(w, x.refine);
+    w.writeF32(x.kFactor.toDouble());
+    return;
+  }
   throw UnsupportedError(
     'writeFaissIndex: ${x.runtimeType} not yet supported.',
   );
@@ -888,6 +917,31 @@ Index readFaissIndex(IoReader r) {
     sq.isTrained = h.isTrained;
     sq.ioSetCodes(codes, h.ntotal);
     return sq;
+  }
+  if (tag == FaissFourcc.indexRefine) {
+    // IxRF: header, base index, refine index (must be IndexFlat), k_factor.
+    final h = _readHeader(r);
+    final base = readFaissIndex(r);
+    final refine = readFaissIndex(r);
+    if (refine is! IndexFlat) {
+      throw FormatException(
+        'IxRF: refine sub-index is ${refine.runtimeType}, expected IndexFlat',
+      );
+    }
+    if (base.d != h.d || base.metric != h.metric) {
+      throw FormatException(
+        'IxRF: header (d=${h.d}, metric=${h.metric}) disagrees with '
+        'base (d=${base.d}, metric=${base.metric})',
+      );
+    }
+    final kFactor = r.readF32();
+    return IndexRefineFlat.ioLoad(
+      base: base,
+      refine: refine,
+      kFactor: kFactor.round(),
+      ntotal: h.ntotal,
+      isTrained: h.isTrained,
+    );
   }
   throw FormatException(
     'Unsupported FAISS fourcc "${FaissFourcc.toStr(tag)}" '
