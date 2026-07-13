@@ -23,6 +23,7 @@ import 'dart:typed_data';
 
 import 'bench.dart';
 import 'index.dart';
+import 'index_flat.dart';
 import 'index_hnsw.dart';
 import 'index_ivf_flat.dart';
 import 'index_ivf_pq.dart';
@@ -202,6 +203,179 @@ OperatingPoints autoTuneEfSearch({
   return points;
 }
 
+/// Result of an [autoTuneM] sweep.
+///
+/// Because each `m` value requires a fresh k-means-trained PQ (m is
+/// baked into the codebooks), the sweep can't mutate a single index
+/// in place — it builds one [IndexIVFPQ] per candidate and returns the
+/// winning [chosen] alongside the full set of [points] and every
+/// [built] index (so callers can pick a runner-up without paying the
+/// build cost again).
+class TuneMResult {
+  TuneMResult({
+    required this.points,
+    required this.built,
+    required this.chosen,
+    required this.chosenIndex,
+  });
+
+  /// One point per candidate `m`.
+  final OperatingPoints points;
+
+  /// All built indexes, keyed by `m`. Includes those that produced
+  /// [OperatingPoint]s; disposal is the caller's responsibility.
+  final Map<int, IndexIVFPQ> built;
+
+  /// The best point under the selection rule passed to [autoTuneM],
+  /// or `null` when no candidate cleared the recall floor.
+  final OperatingPoint? chosen;
+
+  /// The [IndexIVFPQ] behind [chosen], or `null` when [chosen] is
+  /// `null`.
+  final IndexIVFPQ? chosenIndex;
+}
+
+/// Sweep the PQ subquantiser count `m` for an [IndexIVFPQ] built from
+/// the given source vectors. Each candidate `m` triggers a fresh
+/// train + add on a new [IndexIVFPQ], so this is markedly more
+/// expensive than [autoTuneNprobe] — expect O(len(values)) k-means
+/// runs plus O(len(values)) full-corpus PQ encoding passes.
+///
+/// * [values] — candidate `m`s. Values that do not divide `d` are
+///   skipped with a warning printed to stderr-equivalent (dropped from
+///   the result silently — callers that care should validate up
+///   front).
+/// * [nlist] — shared across all candidates (same coarse quantizer
+///   configuration). Defaults to `ceil(sqrt(ntotal))`.
+/// * [nprobe] — search-time cells to probe. Defaults to
+///   `min(nlist, 8)`. Held constant across the sweep so `m` is the
+///   only varying axis in the recall table.
+/// * [minRecall] — when set, [TuneMResult.chosen] is the point with
+///   the smallest `m` (i.e. best compression) that clears the floor.
+///   When unset, [TuneMResult.chosen] falls back to the highest-`m`
+///   candidate (the one most likely to have the strongest recall).
+TuneMResult autoTuneM({
+  required List<Float32List> sourceVectors,
+  required int d,
+  required Metric metric,
+  required List<Float32List> queries,
+  required int k,
+  required SearchResult truth,
+  required List<int> values,
+  int nbits = 8,
+  int? nlist,
+  int? nprobe,
+  int kmeansIters = 20,
+  int seed = 1234,
+  double? minRecall,
+  BenchOptions options = const BenchOptions(),
+}) {
+  if (sourceVectors.isEmpty) {
+    throw ArgumentError('autoTuneM: sourceVectors is empty');
+  }
+  final k0 = nlist ?? _autoNlist(sourceVectors.length);
+  final p0 = nprobe ?? (k0 < 8 ? k0 : 8);
+
+  final built = <int, IndexIVFPQ>{};
+  final rows = <OperatingPoint>[];
+  for (final m in values) {
+    if (m < 1 || d % m != 0) continue; // skip invalid divisors
+    final ivfpq = IndexIVFPQ(
+      d: d,
+      nlist: k0,
+      m: m,
+      nbits: nbits,
+      metric: metric,
+      nprobe: p0,
+      kmeansIters: kmeansIters,
+      seed: seed,
+    )
+      ..train(sourceVectors)
+      ..add(sourceVectors);
+    built[m] = ivfpq;
+    final r = benchIndex(
+      index: ivfpq,
+      queries: queries,
+      k: k,
+      truth: truth,
+      label: 'm=$m',
+      options: options,
+    );
+    rows.add(
+      OperatingPoint(
+        paramValue: m,
+        paramLabel: 'm=$m',
+        recall: r.recall,
+        meanUs: r.meanUs,
+      ),
+    );
+  }
+
+  final points = OperatingPoints(rows);
+  OperatingPoint? chosen;
+  if (minRecall != null) {
+    // Smallest m (best compression) that clears the recall floor.
+    OperatingPoint? best;
+    for (final p in points.points) {
+      if (p.recall >= minRecall) {
+        if (best == null || p.paramValue < best.paramValue) {
+          best = p;
+        }
+      }
+    }
+    chosen = best;
+  } else if (rows.isNotEmpty) {
+    // Fall back to the largest `m` (typically strongest recall).
+    chosen = rows.reduce((a, b) => a.paramValue >= b.paramValue ? a : b);
+  }
+  final chosenIndex = chosen == null ? null : built[chosen.paramValue];
+  return TuneMResult(
+    points: points,
+    built: built,
+    chosen: chosen,
+    chosenIndex: chosenIndex,
+  );
+}
+
+/// Convenience: same as [autoTuneM] but takes an already-populated
+/// [IndexFlat] as the source (matching the [flatToIvfPq] convention).
+TuneMResult autoTuneMFromFlat({
+  required IndexFlat source,
+  required List<Float32List> queries,
+  required int k,
+  required SearchResult truth,
+  required List<int> values,
+  int nbits = 8,
+  int? nlist,
+  int? nprobe,
+  int kmeansIters = 20,
+  int seed = 1234,
+  double? minRecall,
+  BenchOptions options = const BenchOptions(),
+}) {
+  // Materialise the flat's storage as a plain vector list.
+  final xs = <Float32List>[
+    for (var i = 0; i < source.ntotal; i++)
+      Float32List.fromList(source.reconstruct(i)),
+  ];
+  return autoTuneM(
+    sourceVectors: xs,
+    d: source.d,
+    metric: source.metric,
+    queries: queries,
+    k: k,
+    truth: truth,
+    values: values,
+    nbits: nbits,
+    nlist: nlist,
+    nprobe: nprobe,
+    kmeansIters: kmeansIters,
+    seed: seed,
+    minRecall: minRecall,
+    options: options,
+  );
+}
+
 // ---------------------------------------------------------------------
 // Internals.
 // ---------------------------------------------------------------------
@@ -235,4 +409,16 @@ int _nprobeNlist(Index target) {
     if (base is IndexIVFPQ) return base.nlist;
   }
   throw ArgumentError('autoTuneNprobe: no nlist for ${target.runtimeType}');
+}
+
+/// `ceil(sqrt(ntotal))` clamped to `[1, ntotal]` — matches
+/// `index_convert.dart`'s default IVF-cell-count heuristic so
+/// [autoTuneM] and [flatToIvfPq] agree on defaults.
+int _autoNlist(int ntotal) {
+  if (ntotal <= 1) return 1;
+  var k = 1;
+  while (k * k < ntotal) {
+    k++;
+  }
+  return k > ntotal ? ntotal : k;
 }

@@ -3039,6 +3039,68 @@ void main() {
     );
   });
 
+  test('autoTuneM sweeps PQ subquantiser counts and returns a winner', () {
+    // d = 16 → divisors ≤ d: {1,2,4,8,16}. Include an invalid 5 to
+    // exercise the skip-non-divisor branch.
+    final result = autoTuneMFromFlat(
+      source: IndexFlatL2(d)..add(xs),
+      queries: queries,
+      k: k,
+      truth: truth,
+      values: const <int>[2, 4, 5, 8],
+      nlist: 8,
+      nprobe: 8,
+      options: const BenchOptions(warmup: 0, repeats: 1),
+    );
+    // 5 must be skipped; remaining {2,4,8} all appear.
+    expect(result.points.points.map((p) => p.paramValue),
+        equals(<int>[2, 4, 8]));
+    expect(result.built.keys, unorderedEquals(<int>[2, 4, 8]));
+    // With no recall floor, chosen is the largest m (m=8).
+    expect(result.chosen, isNotNull);
+    expect(result.chosen!.paramValue, equals(8));
+    expect(result.chosenIndex, same(result.built[8]));
+  });
+
+  test('autoTuneM with minRecall picks the smallest m that clears the bar',
+      () {
+    final flat = IndexFlatL2(d)..add(xs);
+    // Compare against an IVFFlat truth so the recall floor is
+    // achievable by the coarsest m. Truth stays as the exact flat.
+    final result = autoTuneM(
+      sourceVectors: List<Float32List>.generate(
+        xs.length,
+        (i) => Float32List.fromList(flat.reconstruct(i)),
+      ),
+      d: d,
+      metric: Metric.l2,
+      queries: queries,
+      k: k,
+      truth: truth,
+      values: const <int>[2, 4, 8],
+      nlist: 8,
+      nprobe: 8,
+      minRecall: 0.0, // trivially satisfied → smallest m wins
+      options: const BenchOptions(warmup: 0, repeats: 1),
+    );
+    expect(result.chosen!.paramValue, equals(2));
+  });
+
+  test('autoTuneM rejects empty sources', () {
+    expect(
+      () => autoTuneM(
+        sourceVectors: const <Float32List>[],
+        d: d,
+        metric: Metric.l2,
+        queries: queries,
+        k: k,
+        truth: truth,
+        values: const <int>[2],
+      ),
+      throwsA(isA<ArgumentError>()),
+    );
+  });
+
   // -----------------------------------------------------------------
   // GPU-backed flat search.
   // -----------------------------------------------------------------
