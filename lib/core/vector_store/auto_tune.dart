@@ -280,18 +280,19 @@ TuneMResult autoTuneM({
   final rows = <OperatingPoint>[];
   for (final m in values) {
     if (m < 1 || d % m != 0) continue; // skip invalid divisors
-    final ivfpq = IndexIVFPQ(
-      d: d,
-      nlist: k0,
-      m: m,
-      nbits: nbits,
-      metric: metric,
-      nprobe: p0,
-      kmeansIters: kmeansIters,
-      seed: seed,
-    )
-      ..train(sourceVectors)
-      ..add(sourceVectors);
+    final ivfpq =
+        IndexIVFPQ(
+            d: d,
+            nlist: k0,
+            m: m,
+            nbits: nbits,
+            metric: metric,
+            nprobe: p0,
+            kmeansIters: kmeansIters,
+            seed: seed,
+          )
+          ..train(sourceVectors)
+          ..add(sourceVectors);
     built[m] = ivfpq;
     final r = benchIndex(
       index: ivfpq,

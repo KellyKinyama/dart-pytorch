@@ -2829,44 +2829,46 @@ void main() {
     expect(lines[1], startsWith('"x, ""hi"""'));
   });
 
-  test('toBenchMarkdown emits a right-aligned GFM table with escaped labels',
-      () {
-    final rows = <BenchResult>[
-      BenchResult(
-        label: 'a|b\\c',
-        nq: 1,
-        k: 1,
-        recall: 0.9,
-        meanUs: 12.5,
-        p50Us: 10.0,
-        p95Us: 20.0,
-        p99Us: 30.0,
-        ntotal: 5,
-      ),
-    ];
-    final md = toBenchMarkdown(rows);
-    final lines = md.trim().split('\n');
-    expect(lines, hasLength(3));
-    expect(lines[0], startsWith('| label |'));
-    // Header separator row uses `--:` for right-aligned numeric cols.
-    expect(lines[1], contains('---:'));
-    // Pipe + backslash are escaped in the label cell.
-    expect(lines[2], contains(r'a\|b\\c'));
-    expect(lines[2], endsWith('| 1 |'));
-  });
+  test(
+    'toBenchMarkdown emits a right-aligned GFM table with escaped labels',
+    () {
+      final rows = <BenchResult>[
+        BenchResult(
+          label: 'a|b\\c',
+          nq: 1,
+          k: 1,
+          recall: 0.9,
+          meanUs: 12.5,
+          p50Us: 10.0,
+          p95Us: 20.0,
+          p99Us: 30.0,
+          ntotal: 5,
+        ),
+      ];
+      final md = toBenchMarkdown(rows);
+      final lines = md.trim().split('\n');
+      expect(lines, hasLength(3));
+      expect(lines[0], startsWith('| label |'));
+      // Header separator row uses `--:` for right-aligned numeric cols.
+      expect(lines[1], contains('---:'));
+      // Pipe + backslash are escaped in the label cell.
+      expect(lines[2], contains(r'a\|b\\c'));
+      expect(lines[2], endsWith('| 1 |'));
+    },
+  );
 
   test('paretoFrontier drops dominated rows and returns recall-ascending', () {
     BenchResult row(String label, double recall, double mean) => BenchResult(
-          label: label,
-          nq: 1,
-          k: 1,
-          recall: recall,
-          meanUs: mean,
-          p50Us: mean,
-          p95Us: mean,
-          p99Us: mean,
-          ntotal: 100,
-        );
+      label: label,
+      nq: 1,
+      k: 1,
+      recall: recall,
+      meanUs: mean,
+      p50Us: mean,
+      p95Us: mean,
+      p99Us: mean,
+      ntotal: 100,
+    );
     final rows = <BenchResult>[
       row('fast-lowrecall', 0.2, 5),
       row('dominated', 0.3, 25), // dominated by (mid-mediocre 0.5 @ 10)
@@ -2882,16 +2884,16 @@ void main() {
 
   test('paretoFrontier keeps only the fastest row on recall ties', () {
     BenchResult row(String label, double recall, double mean) => BenchResult(
-          label: label,
-          nq: 1,
-          k: 1,
-          recall: recall,
-          meanUs: mean,
-          p50Us: mean,
-          p95Us: mean,
-          p99Us: mean,
-          ntotal: 100,
-        );
+      label: label,
+      nq: 1,
+      k: 1,
+      recall: recall,
+      meanUs: mean,
+      p50Us: mean,
+      p95Us: mean,
+      p99Us: mean,
+      ntotal: 100,
+    );
     final rows = <BenchResult>[
       row('slow-recall1', 1.0, 100),
       row('fast-recall1', 1.0, 50),
@@ -3129,8 +3131,10 @@ void main() {
       options: const BenchOptions(warmup: 0, repeats: 1),
     );
     // 5 must be skipped; remaining {2,4,8} all appear.
-    expect(result.points.points.map((p) => p.paramValue),
-        equals(<int>[2, 4, 8]));
+    expect(
+      result.points.points.map((p) => p.paramValue),
+      equals(<int>[2, 4, 8]),
+    );
     expect(result.built.keys, unorderedEquals(<int>[2, 4, 8]));
     // With no recall floor, chosen is the largest m (m=8).
     expect(result.chosen, isNotNull);
@@ -3138,8 +3142,7 @@ void main() {
     expect(result.chosenIndex, same(result.built[8]));
   });
 
-  test('autoTuneM with minRecall picks the smallest m that clears the bar',
-      () {
+  test('autoTuneM with minRecall picks the smallest m that clears the bar', () {
     final flat = IndexFlatL2(d)..add(xs);
     // Compare against an IVFFlat truth so the recall floor is
     // achievable by the coarsest m. Truth stays as the exact flat.
@@ -3254,10 +3257,97 @@ void main() {
     );
     final wrapped = writeTunedFaissIndexToBytes(inner, meta);
     // Inner blob is appended verbatim at the tail of the wrapper.
-    expect(
-      wrapped.sublist(wrapped.length - plain.length),
-      equals(plain),
+    expect(wrapped.sublist(wrapped.length - plain.length), equals(plain));
+  });
+
+  test('probeFaissIndex recognizes IxDT and unwraps inner metadata', () {
+    final inner = IndexFlatL2(d)..add(xs);
+    final meta = TuningMetadata(
+      createdAt: DateTime.fromMicrosecondsSinceEpoch(1_700_000_000_000_000),
+      metric: Metric.l2,
+      points: <OperatingPoint>[
+        OperatingPoint(
+          paramValue: 4,
+          paramLabel: 'nprobe=4',
+          recall: 0.5,
+          meanUs: 20.0,
+        ),
+      ],
+      chosenParamValue: 4,
     );
+    final wrapped = writeTunedFaissIndexToBytes(inner, meta);
+    final info = probeFaissIndex(wrapped);
+    expect(info.kind, equals(FaissIndexKind.tunedWrapper));
+    expect(info.fourccStr, equals('IxDT'));
+    expect(info.tuning, isNotNull);
+    expect(info.tuning!.chosenParamValue, equals(4));
+    expect(info.tuning!.points, hasLength(1));
+    // Convenience: top-level fields mirror the inner probe.
+    expect(info.inner, isNotNull);
+    expect(info.inner!.kind, equals(FaissIndexKind.floatIndex));
+    expect(info.inner!.fourccStr, equals('IxF2'));
+    expect(info.d, equals(inner.d));
+    expect(info.ntotal, equals(inner.ntotal));
+    expect(info.metric, equals(Metric.l2));
+  });
+
+  test('probeFaissIndex on a plain FAISS blob leaves tuning/inner null', () {
+    final inner = IndexFlatL2(d)..add(xs);
+    final bytes = writeFaissIndexToBytes(inner);
+    final info = probeFaissIndex(bytes);
+    expect(info.kind, equals(FaissIndexKind.floatIndex));
+    expect(info.tuning, isNull);
+    expect(info.inner, isNull);
+  });
+
+  test('probeFaissIndexFile handles IxDT wrapper files end-to-end', () {
+    final inner = IndexFlatL2(d)..add(xs);
+    final meta = TuningMetadata(
+      createdAt: DateTime.fromMicrosecondsSinceEpoch(42),
+      metric: Metric.l2,
+      points: const <OperatingPoint>[],
+      chosenParamValue: 8,
+    );
+    final tmp = File(
+      '${Directory.systemTemp.path}/dart_pytorch_ixdt_probe.faiss',
+    );
+    try {
+      saveTunedFaissIndex(tmp.path, inner, meta);
+      final info = probeFaissIndexFile(tmp.path);
+      expect(info.kind, equals(FaissIndexKind.tunedWrapper));
+      expect(info.tuning!.chosenParamValue, equals(8));
+      expect(info.inner!.ntotal, equals(inner.ntotal));
+    } finally {
+      if (tmp.existsSync()) tmp.deleteSync();
+    }
+  });
+
+  test('TuningMetadata.fromOperatingPoints snapshots the sweep', () {
+    final points = OperatingPoints(<OperatingPoint>[
+      OperatingPoint(
+        paramValue: 1,
+        paramLabel: 'nprobe=1',
+        recall: 0.3,
+        meanUs: 5.0,
+      ),
+      OperatingPoint(
+        paramValue: 8,
+        paramLabel: 'nprobe=8',
+        recall: 0.95,
+        meanUs: 40.0,
+      ),
+    ]);
+    final meta = TuningMetadata.fromOperatingPoints(
+      points: points,
+      metric: Metric.l2,
+      chosenParamValue: 8,
+      createdAt: DateTime.fromMicrosecondsSinceEpoch(7),
+    );
+    expect(meta.points, hasLength(2));
+    expect(meta.points.first.paramLabel, equals('nprobe=1'));
+    expect(meta.chosenParamValue, equals(8));
+    expect(meta.metric, equals(Metric.l2));
+    expect(meta.createdAt.microsecondsSinceEpoch, equals(7));
   });
 
   // -----------------------------------------------------------------

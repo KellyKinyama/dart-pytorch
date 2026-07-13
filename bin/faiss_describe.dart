@@ -80,6 +80,13 @@ bool _describe(String path) {
     return true;
   }
 
+  if (info.kind == FaissIndexKind.tunedWrapper) {
+    _describeTuning(info.tuning!);
+    stdout.writeln('  inner index :');
+    _describeInner(info.inner!);
+    return true;
+  }
+
   stdout.writeln(
     '  d           : ${info.d}'
     '${info.kind == FaissIndexKind.binaryIndex ? ' bits' : ''}',
@@ -93,12 +100,62 @@ bool _describe(String path) {
   return true;
 }
 
+void _describeTuning(TuningMetadata meta) {
+  stdout.writeln('  tuning      :');
+  stdout.writeln('    created_at   : ${meta.createdAt.toIso8601String()}');
+  stdout.writeln('    metric hint  : ${_metricEnumLabel(meta.metric)}');
+  stdout.writeln('    points       : ${meta.points.length}');
+  final chosen = meta.chosenParamValue;
+  if (chosen != null) {
+    stdout.writeln('    chosen param : $chosen');
+  } else {
+    stdout.writeln('    chosen param : (none)');
+  }
+  for (final p in meta.points) {
+    stdout.writeln(
+      '      - ${p.paramLabel.padRight(16)}  '
+      'recall=${p.recall.toStringAsFixed(3)}  '
+      'mean_us=${p.meanUs.toStringAsFixed(1)}',
+    );
+  }
+}
+
+void _describeInner(FaissIndexInfo inner) {
+  stdout.writeln(
+    '    fourcc     : ${inner.fourccStr}  '
+    '(0x${inner.fourcc.toRadixString(16).padLeft(8, '0')})',
+  );
+  stdout.writeln('    kind       : ${_kindLabel(inner.kind)}');
+  if (inner.kind == FaissIndexKind.unknown) return;
+  stdout.writeln(
+    '    d          : ${inner.d}'
+    '${inner.kind == FaissIndexKind.binaryIndex ? ' bits' : ''}',
+  );
+  if (inner.codeSize != null) {
+    stdout.writeln('    code_size  : ${inner.codeSize} bytes/vector');
+  }
+  stdout.writeln('    ntotal     : ${inner.ntotal}');
+  stdout.writeln('    is_trained : ${inner.isTrained}');
+  stdout.writeln('    metric     : ${_metricLabel(inner)}');
+}
+
+String _metricEnumLabel(Metric m) {
+  switch (m) {
+    case Metric.l2:
+      return 'L2';
+    case Metric.innerProduct:
+      return 'inner product';
+  }
+}
+
 String _kindLabel(FaissIndexKind kind) {
   switch (kind) {
     case FaissIndexKind.floatIndex:
       return 'float index';
     case FaissIndexKind.binaryIndex:
       return 'binary index';
+    case FaissIndexKind.tunedWrapper:
+      return 'tuned wrapper (IxDT + inner FAISS blob)';
     case FaissIndexKind.unknown:
       return 'unknown';
   }

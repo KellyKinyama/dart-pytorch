@@ -2120,6 +2120,14 @@ enum FaissIndexKind {
   /// [readFaissBinaryIndex].
   binaryIndex,
 
+  /// Port-specific `IxDT` wrapper (see [writeTunedFaissIndexToBytes])
+  /// that carries an [OperatingPoints] sweep alongside an inner
+  /// FAISS blob. When [probeFaissIndex] returns this kind, the
+  /// returned [FaissIndexInfo] populates both [FaissIndexInfo.tuning]
+  /// and [FaissIndexInfo.inner]; the top-level `d`/`ntotal`/`metric`/
+  /// `isTrained` are copied from the inner probe as a convenience.
+  tunedWrapper,
+
   /// Fourcc is not in the port's known-index table. Only the raw
   /// fourcc bytes are populated on the returned [FaissIndexInfo] —
   /// the header layout is unknown, so `d` / `ntotal` / etc. are left
@@ -2143,6 +2151,8 @@ class FaissIndexInfo {
     this.metric,
     this.isTrained,
     this.codeSize,
+    this.tuning,
+    this.inner,
   });
 
   /// Raw little-endian u32 fourcc read from the first 4 bytes.
@@ -2176,11 +2186,22 @@ class FaissIndexInfo {
   /// binary indexes; `null` for float indexes.
   final int? codeSize;
 
+  /// Tuning metadata decoded from the `IxDT` wrapper. Populated only
+  /// when [kind] is [FaissIndexKind.tunedWrapper]; `null` for all
+  /// other kinds.
+  final TuningMetadata? tuning;
+
+  /// One-level probe of the inner FAISS blob carried by the `IxDT`
+  /// wrapper. Populated only when [kind] is
+  /// [FaissIndexKind.tunedWrapper]; `null` for all other kinds.
+  final FaissIndexInfo? inner;
+
   @override
   String toString() =>
       'FaissIndexInfo(fourcc=$fourccStr, kind=$kind, '
       'd=$d, ntotal=$ntotal, metric=$metric, isTrained=$isTrained'
-      '${codeSize != null ? ", codeSize=$codeSize" : ""})';
+      '${codeSize != null ? ", codeSize=$codeSize" : ""}'
+      '${tuning != null ? ", tuning=$tuning" : ""})';
 }
 
 bool _isKnownFloatFourcc(int tag) {
@@ -2242,6 +2263,13 @@ FaissIndexInfo probeFaissIndex(Uint8List bytes) {
   final r = IoReader(bytes);
   final tag = r.readU32();
   final tagStr = FaissFourcc.toStr(tag);
+  if (tag == _fourccIxDT) {
+    // Unwrap the port-specific tuning wrapper and probe the inner blob
+    // one level down. The wrapper itself doesn't have a FAISS-style
+    // header, so top-level d/ntotal/etc. are propagated from the
+    // inner probe.
+    return _probeTunedWrapper(bytes, r);
+  }
   if (_isKnownFloatFourcc(tag)) {
     // Float header is 33 bytes: i32 d, i64 ntotal, 2 * i64 dummy,
     // u8 is_trained, i32 metric.
@@ -2294,11 +2322,32 @@ FaissIndexInfo probeFaissIndex(Uint8List bytes) {
 /// 37 bytes of [path] (enough to cover both float and binary headers)
 /// — significantly cheaper than [loadFaissIndex] for inspection use
 /// cases that only need the top-level metadata.
+///
+/// For `IxDT` tuning-wrapper files the reader falls back to loading
+/// the full file, since the tuning payload length — and therefore the
+/// offset of the inner blob — is not known until the wrapper header
+/// is decoded. Wrapped files are typically small, so this stays cheap
+/// in practice.
 FaissIndexInfo probeFaissIndexFile(String path) {
   final f = File(path);
   final raf = f.openSync();
   try {
     final len = raf.lengthSync();
+    if (len >= 4) {
+      final head = Uint8List(4);
+      raf.readIntoSync(head);
+      final tag = head[0] |
+          (head[1] << 8) |
+          (head[2] << 16) |
+          (head[3] << 24);
+      if (tag == _fourccIxDT) {
+        raf.setPositionSync(0);
+        final full = Uint8List(len);
+        raf.readIntoSync(full);
+        return probeFaissIndex(full);
+      }
+      raf.setPositionSync(0);
+    }
     // 4-byte fourcc + up to 33-byte float header = 37 bytes.
     final want = len < 37 ? len : 37;
     final buf = Uint8List(want);
@@ -2307,6 +2356,50 @@ FaissIndexInfo probeFaissIndexFile(String path) {
   } finally {
     raf.closeSync();
   }
+}
+
+/// Decodes the `IxDT` wrapper header at the current reader position
+/// (immediately after the 4-byte fourcc) and returns a
+/// [FaissIndexInfo] with the tuning metadata + inner probe attached.
+FaissIndexInfo _probeTunedWrapper(Uint8List bytes, IoReader r) {
+  final tagStr = FaissFourcc.toStr(_fourccIxDT);
+  if (r.remaining < 4 + 8) {
+    throw FormatException(
+      'probeFaissIndex: IxDT wrapper header truncated — need at least '
+      '4 (version) + 8 (tuningLen) bytes after the fourcc',
+    );
+  }
+  final version = r.readU32();
+  if (version != _ixDTVersion) {
+    throw FormatException(
+      'probeFaissIndex: unsupported IxDT wrapper version $version '
+      '(this build handles version $_ixDTVersion)',
+    );
+  }
+  final tuningLen = r.readU64();
+  if (r.remaining < tuningLen) {
+    throw FormatException(
+      'probeFaissIndex: IxDT tuning block declares $tuningLen bytes '
+      'but only ${r.remaining} bytes remain in the blob',
+    );
+  }
+  final tuningBytes = r.readBytes(tuningLen);
+  final meta = _readTuningPayload(tuningBytes);
+  final innerStart = r.position;
+  final innerBytes = Uint8List.sublistView(bytes, innerStart);
+  final inner = probeFaissIndex(innerBytes);
+  return FaissIndexInfo._(
+    fourcc: _fourccIxDT,
+    fourccStr: tagStr,
+    kind: FaissIndexKind.tunedWrapper,
+    d: inner.d,
+    ntotal: inner.ntotal,
+    metric: inner.metric,
+    isTrained: inner.isTrained,
+    codeSize: inner.codeSize,
+    tuning: meta,
+    inner: inner,
+  );
 }
 
 // -----------------------------------------------------------------------------
@@ -2714,6 +2807,41 @@ class TuningMetadata {
     required this.points,
     this.chosenParamValue,
   });
+
+  /// Convenience: snapshot the [OperatingPoints] returned by
+  /// [autoTuneNprobe] or [autoTuneEfSearch] into a persistable block.
+  /// [chosenParamValue] usually comes from
+  /// `OperatingPoints.pickForRecall(...)?.paramValue` or
+  /// `OperatingPoints.pickForLatency(...)?.paramValue`.
+  factory TuningMetadata.fromOperatingPoints({
+    required OperatingPoints points,
+    required Metric metric,
+    int? chosenParamValue,
+    DateTime? createdAt,
+  }) {
+    return TuningMetadata(
+      createdAt: createdAt ?? DateTime.now(),
+      metric: metric,
+      points: List<OperatingPoint>.from(points.points),
+      chosenParamValue: chosenParamValue,
+    );
+  }
+
+  /// Convenience: snapshot the outcome of [autoTuneM]. The chosen
+  /// `paramValue` here is the winning subquantiser count `m` when
+  /// [TuneMResult.chosen] is non-null.
+  factory TuningMetadata.fromTuneMResult({
+    required TuneMResult result,
+    required Metric metric,
+    DateTime? createdAt,
+  }) {
+    return TuningMetadata(
+      createdAt: createdAt ?? DateTime.now(),
+      metric: metric,
+      points: List<OperatingPoint>.from(result.points.points),
+      chosenParamValue: result.chosen?.paramValue,
+    );
+  }
 
   /// When the tuning sweep was recorded.
   final DateTime createdAt;

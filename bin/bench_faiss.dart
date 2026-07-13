@@ -170,8 +170,10 @@ int main(List<String> args) {
   // the recall-vs-latency frontier (dominated points dropped).
   final exportRows = opts.pareto ? paretoFrontier(results) : results;
   if (opts.pareto) {
-    stdout.writeln('\nPareto frontier (${exportRows.length} of '
-        '${results.length} rows):');
+    stdout.writeln(
+      '\nPareto frontier (${exportRows.length} of '
+      '${results.length} rows):',
+    );
     stdout.write(formatBenchTable(exportRows));
   }
 
