@@ -2866,6 +2866,202 @@ void main() {
       throwsA(isA<ArgumentError>()),
     );
   });
+
+  // -----------------------------------------------------------------
+  // Auto-tuner.
+  // -----------------------------------------------------------------
+
+  test('OperatingPoints.pareto drops dominated points', () {
+    final points = OperatingPoints(<OperatingPoint>[
+      // fast + low recall
+      const OperatingPoint(
+        paramValue: 1,
+        paramLabel: 'nprobe=1',
+        recall: 0.2,
+        meanUs: 10.0,
+      ),
+      // dominated: worse recall than (2,0.5,20) at similar cost
+      const OperatingPoint(
+        paramValue: 2,
+        paramLabel: 'nprobe=2',
+        recall: 0.3,
+        meanUs: 25.0,
+      ),
+      const OperatingPoint(
+        paramValue: 4,
+        paramLabel: 'nprobe=4',
+        recall: 0.5,
+        meanUs: 20.0,
+      ),
+      const OperatingPoint(
+        paramValue: 8,
+        paramLabel: 'nprobe=8',
+        recall: 0.9,
+        meanUs: 60.0,
+      ),
+    ]);
+    final frontier = points.pareto();
+    // (nprobe=2) is strictly dominated by (nprobe=4).
+    expect(frontier.map((p) => p.paramValue), containsAll(<int>[1, 4, 8]));
+    expect(
+      frontier.map((p) => p.paramValue),
+      isNot(contains(2)),
+    );
+  });
+
+  test('OperatingPoints.pickForRecall picks the fastest point >= floor', () {
+    final points = OperatingPoints(<OperatingPoint>[
+      const OperatingPoint(
+        paramValue: 1,
+        paramLabel: 'nprobe=1',
+        recall: 0.5,
+        meanUs: 5.0,
+      ),
+      const OperatingPoint(
+        paramValue: 8,
+        paramLabel: 'nprobe=8',
+        recall: 0.9,
+        meanUs: 30.0,
+      ),
+      const OperatingPoint(
+        paramValue: 32,
+        paramLabel: 'nprobe=32',
+        recall: 0.99,
+        meanUs: 90.0,
+      ),
+    ]);
+    expect(points.pickForRecall(0.85)!.paramValue, equals(8));
+    expect(points.pickForRecall(0.95)!.paramValue, equals(32));
+    expect(points.pickForRecall(0.999), isNull);
+  });
+
+  test('OperatingPoints.pickForLatency picks the highest recall within budget',
+      () {
+    final points = OperatingPoints(<OperatingPoint>[
+      const OperatingPoint(
+        paramValue: 1,
+        paramLabel: 'nprobe=1',
+        recall: 0.5,
+        meanUs: 5.0,
+      ),
+      const OperatingPoint(
+        paramValue: 8,
+        paramLabel: 'nprobe=8',
+        recall: 0.9,
+        meanUs: 30.0,
+      ),
+      const OperatingPoint(
+        paramValue: 32,
+        paramLabel: 'nprobe=32',
+        recall: 0.99,
+        meanUs: 90.0,
+      ),
+    ]);
+    expect(points.pickForLatency(50.0)!.paramValue, equals(8));
+    expect(points.pickForLatency(4.0), isNull);
+  });
+
+  test('autoTuneNprobe sweeps IVFFlat and applies the chosen value', () {
+    final flat = IndexFlatL2(d)..add(xs);
+    final ivf = flatToIvfFlat(flat, nlist: 16, nprobe: 1);
+    final points = autoTuneNprobe(
+      target: ivf,
+      queries: queries,
+      k: k,
+      truth: truth,
+      values: const <int>[1, 4, 16],
+      minRecall: 0.99,
+      options: const BenchOptions(warmup: 0, repeats: 1),
+    );
+    // With nlist=16, nprobe=16 must give perfect recall.
+    expect(points.points, hasLength(3));
+    expect(points.points.last.recall, equals(1.0));
+    // Applied value = fastest that met the floor. Must be one of
+    // the swept values that actually cleared 0.99.
+    final chosen = points.pickForRecall(0.99);
+    expect(chosen, isNotNull);
+    expect(ivf.nprobe, equals(chosen!.paramValue));
+  });
+
+  test('autoTuneNprobe deduplicates clamped values', () {
+    final flat = IndexFlatL2(d)..add(xs);
+    final ivf = flatToIvfFlat(flat, nlist: 4, nprobe: 1);
+    final points = autoTuneNprobe(
+      target: ivf,
+      queries: queries,
+      k: k,
+      truth: truth,
+      // 8, 16, 64 all clamp to nlist=4.
+      values: const <int>[1, 2, 8, 16, 64],
+      options: const BenchOptions(warmup: 0, repeats: 1),
+    );
+    // 1, 2, 4 remain after clamp + dedupe.
+    expect(points.points.map((p) => p.paramValue), equals(<int>[1, 2, 4]));
+  });
+
+  test('autoTuneEfSearch sweeps HNSW and returns monotone recall', () {
+    final flat = IndexFlatL2(d)..add(xs);
+    final hnsw = flatToHnsw(flat, m: 16, efConstruction: 80);
+    final points = autoTuneEfSearch(
+      target: hnsw,
+      queries: queries,
+      k: k,
+      truth: truth,
+      values: const <int>[8, 32, 128],
+      options: const BenchOptions(warmup: 0, repeats: 1),
+    );
+    expect(points.points, hasLength(3));
+    // efSearch monotone non-decreasing in recall.
+    for (var i = 1; i < points.points.length; i++) {
+      expect(
+        points.points[i].recall,
+        greaterThanOrEqualTo(points.points[i - 1].recall - 1e-9),
+      );
+    }
+    // Last (largest efSearch) applied.
+    expect(hnsw.efSearch, equals(128));
+  });
+
+  test('autoTuneNprobe supports IVFPQ wrapped in IndexRefineFlat', () {
+    final flat = IndexFlatL2(d)..add(xs);
+    final ivfpq = flatToIvfPq(flat, m: 4, nlist: 8, nprobe: 1);
+    final refined = wrapWithRefine(ivfpq, flat, kFactor: 4);
+    final points = autoTuneNprobe(
+      target: refined,
+      queries: queries,
+      k: k,
+      truth: truth,
+      values: const <int>[1, 4, 8],
+      applyBest: false,
+      options: const BenchOptions(warmup: 0, repeats: 1),
+    );
+    expect(points.points, hasLength(3));
+    // Ensure the tuner actually swept the wrapped IVFPQ's nprobe by
+    // running an explicit apply and checking it got poked.
+    autoTuneNprobe(
+      target: refined,
+      queries: queries,
+      k: k,
+      truth: truth,
+      values: const <int>[8],
+      minRecall: 0.0, // trivially satisfied → applies value=8
+      options: const BenchOptions(warmup: 0, repeats: 1),
+    );
+    expect(ivfpq.nprobe, equals(8));
+  });
+
+  test('autoTuneNprobe rejects an unwrappable target', () {
+    final flat = IndexFlatL2(d)..add(xs);
+    expect(
+      () => autoTuneNprobe(
+        target: flat,
+        queries: queries,
+        k: k,
+        truth: truth,
+      ),
+      throwsA(isA<ArgumentError>()),
+    );
+  });
 }
 
 /// Stub `IndexBinary` subtype used only by the "rejects unsupported"
