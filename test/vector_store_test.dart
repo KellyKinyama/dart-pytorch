@@ -3062,6 +3062,95 @@ void main() {
       throwsA(isA<ArgumentError>()),
     );
   });
+
+  // -----------------------------------------------------------------
+  // GPU-backed flat search.
+  // -----------------------------------------------------------------
+
+  test('GpuIndexFlat matches IndexFlatL2 top-1 for a small corpus (fallback)',
+      () {
+    // Small size → wrapper transparently defers to CPU search.
+    final gpu = GpuIndexFlat.l2(d)..add(xs);
+    final flat = IndexFlatL2(d)..add(xs);
+    final g = gpu.search(queries, k);
+    final f = flat.search(queries, k);
+    for (var qi = 0; qi < queries.length; qi++) {
+      expect(g.ids[qi][0], equals(f.ids[qi][0]));
+      expect(g.distances[qi][0], closeTo(f.distances[qi][0], 1e-3));
+    }
+  });
+
+  test('GpuIndexFlat.l2 matches IndexFlatL2 at a size that clears the '
+      'CPU-fallback threshold', () {
+    // Bump the workload past gpuIndexFlatMinDot (2^18) so the GPU
+    // matmul path is exercised: nq * ntotal * d ~= 640k for n=4096.
+    const bigN = 4096;
+    const bigNq = 20;
+    final big = _sampleBlobs(n: bigN, d: d, seed: 7);
+    final bigQ = _sampleBlobs(n: bigNq, d: d, seed: 8);
+    final gpu = GpuIndexFlat.l2(d)..add(big);
+    final flat = IndexFlatL2(d)..add(big);
+    final g = gpu.search(bigQ, k);
+    final f = flat.search(bigQ, k);
+    // Top-1 must agree exactly (ties aside). Compare as a multiset —
+    // rounding may reorder within-tie neighbours.
+    for (var qi = 0; qi < bigNq; qi++) {
+      expect(g.ids[qi][0], equals(f.ids[qi][0]));
+      // Top-k id sets should overlap heavily.
+      final gs = g.ids[qi].toSet();
+      final fs = f.ids[qi].toSet();
+      final overlap = gs.intersection(fs).length;
+      expect(overlap, greaterThanOrEqualTo(k - 1));
+      // Squared L2 recovered via identity must match to within
+      // fp32 accumulated rounding tolerance.
+      expect(g.distances[qi][0], closeTo(f.distances[qi][0], 1e-2));
+    }
+  });
+
+  test('GpuIndexFlat.ip matches IndexFlatIP for inner-product ranking', () {
+    const bigN = 4096;
+    const bigNq = 10;
+    final big = _sampleBlobs(n: bigN, d: d, seed: 9);
+    final bigQ = _sampleBlobs(n: bigNq, d: d, seed: 10);
+    final gpu = GpuIndexFlat.ip(d)..add(big);
+    final flat = IndexFlatIP(d)..add(big);
+    final g = gpu.search(bigQ, k);
+    final f = flat.search(bigQ, k);
+    for (var qi = 0; qi < bigNq; qi++) {
+      expect(g.ids[qi][0], equals(f.ids[qi][0]));
+      expect(g.distances[qi][0], closeTo(f.distances[qi][0], 1e-2));
+    }
+  });
+
+  test('GpuIndexFlat invalidates its DB cache on add', () {
+    final gpu = GpuIndexFlat.l2(d)..add(xs);
+    gpu.warmup();
+    // Adding a new vector then searching for it must return that
+    // vector as the nearest neighbour (id == old ntotal).
+    final newVec = Float32List(d);
+    for (var j = 0; j < d; j++) {
+      newVec[j] = 99.0;
+    }
+    final oldNtotal = gpu.ntotal;
+    gpu.add(<Float32List>[newVec]);
+    expect(gpu.ntotal, equals(oldNtotal + 1));
+    final r = gpu.search(<Float32List>[newVec], 1);
+    expect(r.ids[0][0], equals(oldNtotal));
+    expect(r.distances[0][0], closeTo(0.0, 1e-3));
+  });
+
+  test('GpuIndexFlat.wrap adopts an existing IndexFlat', () {
+    final flat = IndexFlatL2(d)..add(xs);
+    final gpu = GpuIndexFlat.wrap(flat);
+    expect(gpu.d, equals(d));
+    expect(gpu.ntotal, equals(xs.length));
+    final r = gpu.search(queries.sublist(0, 2), 1);
+    // Wrap must not change the ranking.
+    final baseline = flat.search(queries.sublist(0, 2), 1);
+    for (var qi = 0; qi < 2; qi++) {
+      expect(r.ids[qi][0], equals(baseline.ids[qi][0]));
+    }
+  });
 }
 
 /// Stub `IndexBinary` subtype used only by the "rejects unsupported"

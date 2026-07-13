@@ -77,6 +77,7 @@ export 'core/vector_store/index_factory.dart';
 export 'core/vector_store/index_convert.dart';
 export 'core/vector_store/bench.dart';
 export 'core/vector_store/auto_tune.dart';
+export 'core/vector_store/gpu_index_flat.dart';
 export 'core/vector_store/index_io.dart';
 export 'core/vector_store/faiss_io.dart';
 
