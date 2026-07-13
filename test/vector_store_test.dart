@@ -2755,6 +2755,117 @@ void main() {
       throwsA(isA<ArgumentError>()),
     );
   });
+
+  // -----------------------------------------------------------------
+  // Bench harness.
+  // -----------------------------------------------------------------
+
+  test('benchIndex reports recall@k = 1.0 for the flat baseline', () {
+    final flat = IndexFlatL2(d)..add(xs);
+    final r = benchIndex(
+      index: flat,
+      queries: queries,
+      k: k,
+      truth: truth,
+      label: 'flat',
+      options: const BenchOptions(warmup: 0, repeats: 1, perQuery: false),
+    );
+    expect(r.label, equals('flat'));
+    expect(r.nq, equals(queries.length));
+    expect(r.k, equals(k));
+    expect(r.ntotal, equals(xs.length));
+    expect(r.recall, equals(1.0));
+    expect(r.meanUs, greaterThanOrEqualTo(0.0));
+  });
+
+  test('benchIndex tracks recall degradation on IVFFlat with nprobe=1', () {
+    final flat = IndexFlatL2(d)..add(xs);
+    final ivf = flatToIvfFlat(flat, nlist: 16, nprobe: 1);
+    final r = benchIndex(
+      index: ivf,
+      queries: queries,
+      k: k,
+      truth: truth,
+      label: 'ivf-np1',
+      options: const BenchOptions(warmup: 0, repeats: 1),
+    );
+    // nprobe=1 with nlist=16 should NOT match flat recall.
+    expect(r.recall, lessThan(1.0));
+    expect(r.recall, greaterThan(0.0));
+  });
+
+  test('benchIndexSweep returns one row per configured value', () {
+    final flat = IndexFlatL2(d)..add(xs);
+    final ivf = flatToIvfFlat(flat, nlist: 16, nprobe: 1);
+    final rows = benchIndexSweep<int>(
+      index: ivf,
+      queries: queries,
+      k: k,
+      truth: truth,
+      values: <int>[1, 4, 16],
+      configure: (np) {
+        ivf.nprobe = np;
+        return 'ivf-np=$np';
+      },
+      options: const BenchOptions(warmup: 0, repeats: 1),
+    );
+    expect(rows, hasLength(3));
+    expect(rows[0].label, equals('ivf-np=1'));
+    expect(rows[2].label, equals('ivf-np=16'));
+    // Recall is monotone non-decreasing in nprobe.
+    expect(rows[1].recall, greaterThanOrEqualTo(rows[0].recall));
+    expect(rows[2].recall, greaterThanOrEqualTo(rows[1].recall));
+    // At nprobe == nlist, recall must be 1.0.
+    expect(rows[2].recall, equals(1.0));
+  });
+
+  test('toBenchCsv produces RFC-4180 compliant rows with a header', () {
+    final row = BenchResult(
+      label: 'x, "hi"',
+      nq: 10,
+      k: 5,
+      recall: 0.5,
+      meanUs: 12.0,
+      p50Us: 10.0,
+      p95Us: 20.0,
+      p99Us: 25.0,
+      ntotal: 100,
+    );
+    final csv = toBenchCsv(<BenchResult>[row]);
+    final lines = csv.trim().split('\n');
+    expect(lines, hasLength(2));
+    expect(
+      lines[0],
+      equals('label,ntotal,nq,k,recall,mean_us,p50_us,p95_us,p99_us'),
+    );
+    // Commas + quotes escaped per RFC 4180.
+    expect(lines[1], startsWith('"x, ""hi"""'));
+  });
+
+  test('benchIndex rejects mismatched truth', () {
+    final flat = IndexFlatL2(d)..add(xs);
+    // Shorter queries → mismatch with `truth.nq`.
+    final short = queries.sublist(0, 3);
+    expect(
+      () => benchIndex(
+        index: flat,
+        queries: short,
+        k: k,
+        truth: truth,
+      ),
+      throwsA(isA<ArgumentError>()),
+    );
+    // Ask for larger k than truth has.
+    expect(
+      () => benchIndex(
+        index: flat,
+        queries: queries,
+        k: truth.k + 1,
+        truth: truth,
+      ),
+      throwsA(isA<ArgumentError>()),
+    );
+  });
 }
 
 /// Stub `IndexBinary` subtype used only by the "rejects unsupported"
