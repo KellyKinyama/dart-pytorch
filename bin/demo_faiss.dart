@@ -501,6 +501,36 @@ void main() {
     }
   }
 
+  // IndexFactory — build compositions from a compact string.
+  print('\nIndexFactory:');
+  {
+    final descriptions = <String>[
+      'Flat',
+      'IVF64,Flat',
+      'PCA32,IVF64,Flat',
+      'L2Norm,IVF128,PQ8',
+      'L2Norm,LSH128',
+      'HNSW32',
+    ];
+    for (final desc in descriptions) {
+      final idx = indexFactory(_d, desc);
+      // Train + add uniformly (harmless for indexes that don't need training).
+      idx.train(xb);
+      idx.add(xb);
+      // Bump nprobe for IVF variants so results are non-trivial.
+      final inner = idx is IndexPreTransform ? idx.inner : idx;
+      if (inner is IndexIVFFlat) inner.nprobe = 8;
+      if (inner is IndexIVFPQ) inner.nprobe = 8;
+      final t = _timedSearch(idx, xq, _k);
+      final rec = _recallAtK(t.result, truth, _k);
+      print(
+        '  ${desc.padRight(24)}'
+        'search ${(t.wall.inMicroseconds / _nq).toStringAsFixed(1).padLeft(7)} µs/q   '
+        'recall@10 ${(rec * 100).toStringAsFixed(1).padLeft(5)} %',
+      );
+    }
+  }
+
   print(
     '\nDone. Larger corpora and higher-recall settings tighten the picture.',
   );

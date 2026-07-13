@@ -743,4 +743,82 @@ void main() {
       }
     }
   });
+
+  // --- IndexFactory -----------------------------------------------------
+
+  test('indexFactory builds bare Flat', () {
+    final idx = indexFactory(d, 'Flat');
+    expect(idx, isA<IndexFlat>());
+    expect(idx.d, equals(d));
+    idx.add(xs);
+    final r = idx.search(xs.sublist(0, 3), 1);
+    for (var i = 0; i < 3; i++) {
+      expect(r.ids[i][0], equals(i));
+    }
+  });
+
+  test('indexFactory parses IVF<nlist>,Flat', () {
+    final idx = indexFactory(d, 'IVF8,Flat');
+    expect(idx, isA<IndexIVFFlat>());
+    (idx as IndexIVFFlat)
+      ..train(xs)
+      ..add(xs);
+    idx.nprobe = 8;
+    final r = idx.search(queries, k);
+    expect(_recall(r, truth, k), equals(1.0));
+  });
+
+  test('indexFactory parses IVF<nlist>,PQ<m>', () {
+    final idx = indexFactory(d, 'IVF8,PQ4');
+    expect(idx, isA<IndexIVFPQ>());
+    expect(idx.d, equals(d));
+  });
+
+  test('indexFactory parses HNSW<M>', () {
+    final idx = indexFactory(d, 'HNSW16');
+    expect(idx, isA<IndexHNSW>());
+    expect((idx as IndexHNSW).M, equals(16));
+  });
+
+  test('indexFactory parses LSH<nbits>', () {
+    final idx = indexFactory(d, 'LSH64');
+    expect(idx, isA<IndexLSH>());
+    expect((idx as IndexLSH).nbits, equals(64));
+  });
+
+  test('indexFactory wraps with pre-transforms', () {
+    final idx = indexFactory(d, 'L2Norm,PCA8,Flat');
+    expect(idx, isA<IndexPreTransform>());
+    final pt = idx as IndexPreTransform;
+    expect(pt.chain.length, equals(2));
+    expect(pt.chain[0], isA<L2NormTransform>());
+    expect(pt.chain[1], isA<PCATransform>());
+    expect(pt.inner.d, equals(8));
+  });
+
+  test('indexFactory end-to-end: L2Norm,IVF8,Flat searches correctly', () {
+    final idx = indexFactory(d, 'L2Norm,IVF8,Flat') as IndexPreTransform;
+    idx.train(xs);
+    idx.add(xs);
+    (idx.inner as IndexIVFFlat).nprobe = 8;
+    final r = idx.search(xs.sublist(0, 3), 1);
+    for (var i = 0; i < 3; i++) {
+      expect(r.ids[i][0], equals(i));
+    }
+  });
+
+  test('indexFactory rejects unknown specifiers', () {
+    expect(
+      () => indexFactory(d, 'Nope'),
+      throwsA(isA<FormatException>()),
+    );
+    expect(
+      () => indexFactory(d, 'IVF16'),
+      throwsA(isA<FormatException>()),
+    );
+    expect(
+      () => indexFactory(d, ''),
+      throwsA(isA<FormatException>()),
+    );
+  });
 }
