@@ -21,11 +21,12 @@ import 'dart:typed_data';
 
 import 'index.dart';
 import 'index_flat.dart';
+import 'index_io.dart';
 
 class IndexRefineFlat extends Index {
   IndexRefineFlat(this.base, {this.kFactor = 4})
-      : refine = IndexFlat(base.d, base.metric),
-        super(base.d, base.metric) {
+    : refine = IndexFlat(base.d, base.metric),
+      super(base.d, base.metric) {
     isTrained = base.isTrained;
   }
 
@@ -90,4 +91,53 @@ class IndexRefineFlat extends Index {
     }
     return SearchResult(distances, ids);
   }
+
+  // --- persistence --------------------------------------------------------
+
+  void writeTo(IoWriter w) {
+    w.writeU32(d);
+    w.writeU32(metricToU32(metric));
+    w.writeU32(ntotal);
+    w.writeU8(isTrained ? 1 : 0);
+    w.writeU32(kFactor);
+    writeChild(w, base);
+    writeChild(w, refine);
+  }
+
+  static IndexRefineFlat readFrom(IoReader r) {
+    final d = r.readU32();
+    final metric = metricFromU32(r.readU32());
+    final ntotal = r.readU32();
+    final isTrained = r.readU8() != 0;
+    final kFactor = r.readU32();
+    final base = readChild(r);
+    final refineAny = readChild(r);
+    if (refineAny is! IndexFlat) {
+      throw FormatException(
+        'IndexRefineFlat: embedded refine is ${refineAny.runtimeType}, '
+        'expected IndexFlat',
+      );
+    }
+    if (base.d != d || base.metric != metric) {
+      throw FormatException(
+        'IndexRefineFlat: header (d=$d, metric=$metric) disagrees with '
+        'base (d=${base.d}, metric=${base.metric})',
+      );
+    }
+    // Bypass the constructor so we can plug in loaded children directly.
+    final idx = IndexRefineFlat._forLoad(
+      base: base,
+      refine: refineAny,
+      kFactor: kFactor,
+    );
+    idx.ntotal = ntotal;
+    idx.isTrained = isTrained;
+    return idx;
+  }
+
+  IndexRefineFlat._forLoad({
+    required this.base,
+    required this.refine,
+    required this.kFactor,
+  }) : super(base.d, base.metric);
 }

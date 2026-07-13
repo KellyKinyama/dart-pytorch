@@ -9,11 +9,11 @@
 /// Run:
 ///   dart run bin/demo_faiss.dart
 
+import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:dart_pytorch/dart_pytorch.dart';
-
 const int _d = 64;
 const int _nb = 5000;
 const int _nq = 100;
@@ -225,9 +225,7 @@ void main() {
         final row = Int32List(truth.k);
         for (var j = 0; j < truth.k; j++) {
           final internal = truth.ids[qi][j];
-          row[j] = internal >= 0 && internal < ids.length
-              ? ids[internal]
-              : -1;
+          row[j] = internal >= 0 && internal < ids.length ? ids[internal] : -1;
         }
         return row;
       }),
@@ -238,6 +236,63 @@ void main() {
       t.wall,
       _recallAtK(t.result, translatedTruth, _k),
     );
+  }
+
+  // Persistence — save every kind of index to a temp file, reload, and
+  // verify the top-10 search result is byte-identical.
+  print('\nPersistence round-trip:');
+  {
+    final tmpDir = Directory.systemTemp.createTempSync('faiss_demo_');
+    try {
+      final samples = <String, Index>{
+        'Flat.bin': IndexFlatL2(_d)..add(xb),
+        'IVFFlat.bin': (IndexIVFFlat(d: _d, nlist: 64, nprobe: 8)
+          ..train(xb)
+          ..add(xb)),
+        'PQ.bin': (IndexPQ(d: _d, m: 8)
+          ..train(xb)
+          ..add(xb)),
+        'IVFPQ.bin': (IndexIVFPQ(d: _d, nlist: 64, m: 8, nprobe: 8)
+          ..train(xb)
+          ..add(xb)),
+        'HNSW.bin': IndexHNSW(
+          d: _d,
+          M: 16,
+          efConstruction: 100,
+          efSearch: 32,
+        )..add(xb),
+        'SQ8.bin': (IndexScalarQuantizer(_d)
+          ..train(xb)
+          ..add(xb)),
+      };
+      for (final entry in samples.entries) {
+        final path = '${tmpDir.path}/${entry.key}';
+        final orig = entry.value;
+        final blob = writeIndex(orig);
+        File(path).writeAsBytesSync(blob);
+        final onDisk = File(path).lengthSync();
+        final loaded = readIndex(File(path).readAsBytesSync());
+        final origResult = orig.search(xq, _k);
+        final loadedResult = loaded.search(xq, _k);
+        var ok = true;
+        for (var qi = 0; qi < _nq && ok; qi++) {
+          for (var j = 0; j < _k; j++) {
+            if (origResult.ids[qi][j] != loadedResult.ids[qi][j]) {
+              ok = false;
+              break;
+            }
+          }
+        }
+        final sizeKb = (onDisk / 1024).toStringAsFixed(1);
+        print(
+          '  ${entry.key.padRight(14)}'
+          '${sizeKb.padLeft(8)} KiB on disk   '
+          'search parity: ${ok ? "OK" : "MISMATCH"}',
+        );
+      }
+    } finally {
+      tmpDir.deleteSync(recursive: true);
+    }
   }
 
   print(

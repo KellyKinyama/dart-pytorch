@@ -13,6 +13,7 @@ library;
 import 'dart:typed_data';
 
 import 'index.dart';
+import 'index_io.dart';
 import 'kmeans.dart';
 
 /// Product quantizer.
@@ -177,6 +178,32 @@ class ProductQuantizer {
     }
     return lut;
   }
+
+  // --- persistence --------------------------------------------------------
+
+  /// Write the PQ's isTrained flag + codebooks. Hyperparameters
+  /// (`d`, `m`, `nbits`, seed, iters) are the caller's responsibility.
+  void writeTo(IoWriter w) {
+    w.writeU8(isTrained ? 1 : 0);
+    if (isTrained) {
+      for (var sub = 0; sub < m; sub++) {
+        for (var c = 0; c < ksub; c++) {
+          w.writeF32List(_codebooks[sub][c]);
+        }
+      }
+    }
+  }
+
+  void readFrom(IoReader r) {
+    isTrained = r.readU8() != 0;
+    if (isTrained) {
+      for (var sub = 0; sub < m; sub++) {
+        for (var c = 0; c < ksub; c++) {
+          _codebooks[sub][c] = r.readF32List(dsub);
+        }
+      }
+    }
+  }
 }
 
 /// Flat PQ index — every vector stored as an `m`-byte code, searched
@@ -263,5 +290,49 @@ class IndexPQ extends Index {
       ids[qi] = sorted.ids;
     }
     return SearchResult(distances, ids);
+  }
+
+  // --- persistence --------------------------------------------------------
+
+  void writeTo(IoWriter w) {
+    w.writeU32(d);
+    w.writeU32(metricToU32(metric));
+    w.writeU32(ntotal);
+    w.writeU8(isTrained ? 1 : 0);
+    w.writeU32(m);
+    w.writeU32(pq.nbits);
+    w.writeU32(pq.kmeansIters);
+    w.writeU32(pq.seed);
+    pq.writeTo(w);
+    if (ntotal > 0) {
+      w.writeU8List(Uint8List.sublistView(_codes, 0, ntotal * m));
+    }
+  }
+
+  static IndexPQ readFrom(IoReader r) {
+    final d = r.readU32();
+    final metric = metricFromU32(r.readU32());
+    final ntotal = r.readU32();
+    final isTrained = r.readU8() != 0;
+    final m = r.readU32();
+    final nbits = r.readU32();
+    final kmeansIters = r.readU32();
+    final seed = r.readU32();
+    final idx = IndexPQ(
+      d: d,
+      m: m,
+      nbits: nbits,
+      metric: metric,
+      kmeansIters: kmeansIters,
+      seed: seed,
+    );
+    idx.pq.readFrom(r);
+    if (ntotal > 0) {
+      idx._codes = r.readU8List(ntotal * m);
+      idx._capacityCodes = ntotal * m;
+    }
+    idx.ntotal = ntotal;
+    idx.isTrained = isTrained;
+    return idx;
   }
 }

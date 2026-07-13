@@ -23,12 +23,13 @@ library;
 import 'dart:typed_data';
 
 import 'index.dart';
+import 'index_io.dart';
 
 class IndexScalarQuantizer extends Index {
   IndexScalarQuantizer(int d, {Metric metric = Metric.l2})
-      : _vmin = Float32List(d),
-        _scale = Float32List(d),
-        super(d, metric) {
+    : _vmin = Float32List(d),
+      _scale = Float32List(d),
+      super(d, metric) {
     isTrained = false;
   }
 
@@ -80,8 +81,8 @@ class IndexScalarQuantizer extends Index {
         codes[base + j] = q < 0
             ? 0
             : q > 255
-                ? 255
-                : q;
+            ? 255
+            : q;
       }
     }
     return codes;
@@ -127,7 +128,8 @@ class IndexScalarQuantizer extends Index {
 
   @override
   SearchResult search(List<Float32List> queries, int k) {
-    if (!isTrained) throw StateError('IndexScalarQuantizer.search before train()');
+    if (!isTrained)
+      throw StateError('IndexScalarQuantizer.search before train()');
     final nq = queries.length;
     final distances = List<Float32List>.generate(nq, (_) => Float32List(k));
     final ids = List<Int32List>.generate(nq, (_) => Int32List(k));
@@ -160,5 +162,40 @@ class IndexScalarQuantizer extends Index {
       ids[qi] = sorted.ids;
     }
     return SearchResult(distances, ids);
+  }
+
+  // --- persistence --------------------------------------------------------
+
+  void writeTo(IoWriter w) {
+    w.writeU32(d);
+    w.writeU32(metricToU32(metric));
+    w.writeU32(ntotal);
+    w.writeU8(isTrained ? 1 : 0);
+    w.writeF32List(_vmin);
+    w.writeF32List(_scale);
+    if (ntotal > 0) {
+      w.writeU8List(Uint8List.sublistView(_codes, 0, ntotal * d));
+    }
+  }
+
+  static IndexScalarQuantizer readFrom(IoReader r) {
+    final d = r.readU32();
+    final metric = metricFromU32(r.readU32());
+    final ntotal = r.readU32();
+    final isTrained = r.readU8() != 0;
+    final idx = IndexScalarQuantizer(d, metric: metric);
+    final vmin = r.readF32List(d);
+    final scale = r.readF32List(d);
+    for (var j = 0; j < d; j++) {
+      idx._vmin[j] = vmin[j];
+      idx._scale[j] = scale[j];
+    }
+    if (ntotal > 0) {
+      idx._codes = r.readU8List(ntotal * d);
+      idx._capacityCodes = ntotal * d;
+    }
+    idx.ntotal = ntotal;
+    idx.isTrained = isTrained;
+    return idx;
   }
 }

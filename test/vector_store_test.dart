@@ -198,4 +198,106 @@ void main() {
     // Re-ranking never decreases recall (up to the candidate pool).
     expect(refinedRecall, greaterThanOrEqualTo(baseRecall));
   });
+
+  // --- persistence round-trip --------------------------------------------
+
+  bool _sameResult(SearchResult a, SearchResult b) {
+    if (a.nq != b.nq || a.k != b.k) return false;
+    for (var qi = 0; qi < a.nq; qi++) {
+      for (var j = 0; j < a.k; j++) {
+        if (a.ids[qi][j] != b.ids[qi][j]) return false;
+        if ((a.distances[qi][j] - b.distances[qi][j]).abs() > 1e-4) {
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+
+  test('IndexFlat round-trips through bytes', () {
+    final orig = IndexFlatL2(d)..add(xs);
+    final before = orig.search(queries, k);
+    final blob = writeIndex(orig);
+    final loaded = readIndex(blob);
+    expect(loaded, isA<IndexFlat>());
+    expect(loaded.ntotal, equals(orig.ntotal));
+    expect(_sameResult(loaded.search(queries, k), before), isTrue);
+  });
+
+  test('IndexIVFFlat round-trips through bytes', () {
+    final orig = IndexIVFFlat(d: d, nlist: 8, nprobe: 4)
+      ..train(xs)
+      ..add(xs);
+    final before = orig.search(queries, k);
+    final loaded = readIndex(writeIndex(orig)) as IndexIVFFlat;
+    expect(loaded.nlist, equals(orig.nlist));
+    expect(loaded.nprobe, equals(orig.nprobe));
+    expect(_sameResult(loaded.search(queries, k), before), isTrue);
+  });
+
+  test('IndexPQ round-trips through bytes', () {
+    final orig = IndexPQ(d: d, m: 4)
+      ..train(xs)
+      ..add(xs);
+    final before = orig.search(queries, k);
+    final loaded = readIndex(writeIndex(orig)) as IndexPQ;
+    expect(loaded.m, equals(orig.m));
+    expect(_sameResult(loaded.search(queries, k), before), isTrue);
+  });
+
+  test('IndexIVFPQ round-trips through bytes', () {
+    final orig = IndexIVFPQ(d: d, nlist: 8, m: 4, nprobe: 4)
+      ..train(xs)
+      ..add(xs);
+    final before = orig.search(queries, k);
+    final loaded = readIndex(writeIndex(orig)) as IndexIVFPQ;
+    expect(loaded.nlist, equals(orig.nlist));
+    expect(_sameResult(loaded.search(queries, k), before), isTrue);
+  });
+
+  test('IndexHNSW round-trips through bytes', () {
+    final orig = IndexHNSW(d: d, M: 8, efConstruction: 40, efSearch: 32)
+      ..add(xs);
+    final before = orig.search(queries, k);
+    final loaded = readIndex(writeIndex(orig)) as IndexHNSW;
+    expect(loaded.ntotal, equals(orig.ntotal));
+    expect(_sameResult(loaded.search(queries, k), before), isTrue);
+  });
+
+  test('IndexIDMap round-trips ids and search results', () {
+    final idmap = IndexIDMap(IndexFlatL2(d));
+    final ids = List<int>.generate(n, (i) => 5000 + i);
+    idmap.addWithIds(xs, ids);
+    final before = idmap.search(queries, k);
+    final loaded = readIndex(writeIndex(idmap)) as IndexIDMap;
+    expect(loaded.idOf(0), equals(5000));
+    expect(_sameResult(loaded.search(queries, k), before), isTrue);
+  });
+
+  test('IndexScalarQuantizer round-trips through bytes', () {
+    final sq = IndexScalarQuantizer(d)
+      ..train(xs)
+      ..add(xs);
+    final before = sq.search(queries, k);
+    final loaded = readIndex(writeIndex(sq)) as IndexScalarQuantizer;
+    expect(_sameResult(loaded.search(queries, k), before), isTrue);
+  });
+
+  test('IndexRefineFlat round-trips through bytes', () {
+    final refined = IndexRefineFlat(
+      IndexIVFPQ(d: d, nlist: 8, m: 4, nprobe: 4),
+      kFactor: 4,
+    );
+    refined.train(xs);
+    refined.add(xs);
+    final before = refined.search(queries, k);
+    final loaded = readIndex(writeIndex(refined)) as IndexRefineFlat;
+    expect(loaded.kFactor, equals(4));
+    expect(_sameResult(loaded.search(queries, k), before), isTrue);
+  });
+
+  test('readIndex rejects bad magic', () {
+    final blob = Uint8List.fromList(List<int>.filled(64, 0));
+    expect(() => readIndex(blob), throwsA(isA<FormatException>()));
+  });
 }

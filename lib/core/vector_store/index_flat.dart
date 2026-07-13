@@ -7,6 +7,7 @@ library;
 import 'dart:typed_data';
 
 import 'index.dart';
+import 'index_io.dart';
 
 /// Brute-force exact k-NN over raw float32 vectors.
 ///
@@ -93,6 +94,34 @@ class IndexFlat extends Index {
       ids[qi] = sorted.ids;
     }
     return SearchResult(distances, ids);
+  }
+
+  // --- persistence --------------------------------------------------------
+
+  /// Writes the common header + raw fp32 storage.
+  void writeTo(IoWriter w) {
+    w.writeU32(d);
+    w.writeU32(metricToU32(metric));
+    w.writeU32(ntotal);
+    w.writeU8(isTrained ? 1 : 0);
+    if (ntotal > 0) {
+      final view = Float32List.sublistView(_storage, 0, ntotal * d);
+      w.writeF32List(view);
+    }
+  }
+
+  static IndexFlat readFrom(IoReader r) {
+    final d = r.readU32();
+    final metric = metricFromU32(r.readU32());
+    final ntotal = r.readU32();
+    final isTrained = r.readU8() != 0;
+    final storage = ntotal == 0 ? Float32List(0) : r.readF32List(ntotal * d);
+    final idx = IndexFlat(d, metric);
+    idx._storage = storage;
+    idx._capacity = ntotal;
+    idx.ntotal = ntotal;
+    idx.isTrained = isTrained;
+    return idx;
   }
 }
 

@@ -19,6 +19,7 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'index.dart';
+import 'index_io.dart';
 
 /// Node metadata: level + per-layer adjacency lists.
 class _HnswNode {
@@ -339,11 +340,81 @@ class IndexHNSW extends Index {
     }
     return SearchResult(distances, ids);
   }
+
+  // --- persistence --------------------------------------------------------
+
+  void writeTo(IoWriter w) {
+    w.writeU32(d);
+    w.writeU32(metricToU32(metric));
+    w.writeU32(ntotal);
+    w.writeU8(isTrained ? 1 : 0);
+    w.writeU32(M);
+    w.writeU32(efConstruction);
+    w.writeU32(efSearch);
+    w.writeU32(seed);
+    w.writeI32(_entryPoint);
+    w.writeI32(_topLevel);
+    if (ntotal > 0) {
+      w.writeF32List(Float32List.sublistView(_storage, 0, ntotal * d));
+    }
+    for (var i = 0; i < ntotal; i++) {
+      final node = _nodes[i];
+      w.writeU32(node.level);
+      for (var l = 0; l <= node.level; l++) {
+        final layer = node.neighbors[l];
+        w.writeU32(layer.length);
+        for (final nb in layer) {
+          w.writeI32(nb);
+        }
+      }
+    }
+  }
+
+  static IndexHNSW readFrom(IoReader r) {
+    final d = r.readU32();
+    final metric = metricFromU32(r.readU32());
+    final ntotal = r.readU32();
+    final isTrained = r.readU8() != 0;
+    final M = r.readU32();
+    final efConstruction = r.readU32();
+    final efSearch = r.readU32();
+    final seed = r.readU32();
+    final entryPoint = r.readI32();
+    final topLevel = r.readI32();
+    final idx = IndexHNSW(
+      d: d,
+      metric: metric,
+      M: M,
+      efConstruction: efConstruction,
+      efSearch: efSearch,
+      seed: seed,
+    );
+    if (ntotal > 0) {
+      idx._storage = r.readF32List(ntotal * d);
+      idx._capacity = ntotal;
+    }
+    for (var i = 0; i < ntotal; i++) {
+      final level = r.readU32();
+      final node = _HnswNode(level);
+      for (var l = 0; l <= level; l++) {
+        final len = r.readU32();
+        final layer = node.neighbors[l];
+        for (var j = 0; j < len; j++) {
+          layer.add(r.readI32());
+        }
+      }
+      idx._nodes.add(node);
+    }
+    idx.ntotal = ntotal;
+    idx.isTrained = isTrained;
+    idx._entryPoint = entryPoint;
+    idx._topLevel = topLevel;
+    return idx;
+  }
 }
 
 // -----------------------------------------------------------------------------
 // Small binary heaps used only inside HNSW.
-
 class _BeamResult {
   _BeamResult(this.ids, this.dists);
   final List<int> ids;

@@ -10,6 +10,7 @@ import 'dart:typed_data';
 
 import 'index.dart';
 import 'index_flat.dart';
+import 'index_io.dart';
 import 'kmeans.dart';
 
 class IndexIVFFlat extends Index {
@@ -136,4 +137,82 @@ class IndexIVFFlat extends Index {
 
   /// For debugging: number of vectors in each cell.
   List<int> listSizes() => _invLists.map((l) => l.length).toList();
+
+  // --- persistence --------------------------------------------------------
+
+  void writeTo(IoWriter w) {
+    w.writeU32(d);
+    w.writeU32(metricToU32(metric));
+    w.writeU32(ntotal);
+    w.writeU8(isTrained ? 1 : 0);
+    w.writeU32(nlist);
+    w.writeU32(nprobe);
+    w.writeU32(kmeansIters);
+    w.writeU32(seed);
+    // Embed the coarse quantizer as a self-contained child blob.
+    writeChild(w, quantizer);
+    // Raw storage (may be empty when untrained).
+    if (ntotal > 0) {
+      w.writeF32List(Float32List.sublistView(_storage, 0, ntotal * d));
+    }
+    // Inverted lists.
+    for (var c = 0; c < nlist; c++) {
+      final list = _invLists[c];
+      w.writeU32(list.length);
+      for (final id in list) {
+        w.writeI32(id);
+      }
+    }
+  }
+
+  static IndexIVFFlat readFrom(IoReader r) {
+    final d = r.readU32();
+    final metric = metricFromU32(r.readU32());
+    final ntotal = r.readU32();
+    final isTrained = r.readU8() != 0;
+    final nlist = r.readU32();
+    final nprobe = r.readU32();
+    final kmeansIters = r.readU32();
+    final seed = r.readU32();
+    final quantizerAny = readChild(r);
+    if (quantizerAny is! IndexFlat) {
+      throw FormatException(
+        'IndexIVFFlat: embedded quantizer is ${quantizerAny.runtimeType}, '
+        'expected IndexFlat',
+      );
+    }
+    final idx = IndexIVFFlat(
+      d: d,
+      nlist: nlist,
+      metric: metric,
+      nprobe: nprobe,
+      kmeansIters: kmeansIters,
+      seed: seed,
+    );
+    // The constructor built a fresh quantizer; swap in the loaded one.
+    idx._replaceQuantizer(quantizerAny);
+    if (ntotal > 0) {
+      idx._storage = r.readF32List(ntotal * d);
+      idx._capacity = ntotal;
+    }
+    for (var c = 0; c < nlist; c++) {
+      final len = r.readU32();
+      final list = idx._invLists[c];
+      for (var i = 0; i < len; i++) {
+        list.add(r.readI32());
+      }
+    }
+    idx.ntotal = ntotal;
+    idx.isTrained = isTrained;
+    return idx;
+  }
+
+  void _replaceQuantizer(IndexFlat q) {
+    // Copy the loaded quantizer's centroids into our own so that the
+    // `final` field remains untouched (constructor built an empty one).
+    if (q.ntotal > 0) {
+      final rows = List<Float32List>.generate(q.ntotal, (i) => q.reconstruct(i));
+      quantizer.add(rows);
+    }
+  }
 }

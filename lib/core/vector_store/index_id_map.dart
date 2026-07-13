@@ -10,6 +10,7 @@ library;
 import 'dart:typed_data';
 
 import 'index.dart';
+import 'index_io.dart';
 
 class IndexIDMap extends Index {
   IndexIDMap(this.inner) : super(inner.d, inner.metric) {
@@ -90,5 +91,44 @@ class IndexIDMap extends Index {
       }
     }
     return r;
+  }
+
+  // --- persistence --------------------------------------------------------
+
+  void writeTo(IoWriter w) {
+    w.writeU32(d);
+    w.writeU32(metricToU32(metric));
+    w.writeU32(ntotal);
+    w.writeU8(isTrained ? 1 : 0);
+    writeChild(w, inner);
+    w.writeU32(_extIds.length);
+    for (final id in _extIds) {
+      w.writeI32(id);
+    }
+  }
+
+  static IndexIDMap readFrom(IoReader r) {
+    // Common header (d, metric, ntotal, isTrained) — we mostly ignore
+    // these because the wrapped inner index carries authoritative
+    // values, but validate d/metric for sanity.
+    final d = r.readU32();
+    final metric = metricFromU32(r.readU32());
+    final ntotal = r.readU32();
+    final isTrained = r.readU8() != 0;
+    final inner = readChild(r);
+    if (inner.d != d || inner.metric != metric) {
+      throw FormatException(
+        'IndexIDMap: header (d=$d, metric=$metric) disagrees with '
+        'inner (d=${inner.d}, metric=${inner.metric})',
+      );
+    }
+    final idx = IndexIDMap(inner);
+    final n = r.readU32();
+    for (var i = 0; i < n; i++) {
+      idx._extIds.add(r.readI32());
+    }
+    idx.ntotal = ntotal;
+    idx.isTrained = isTrained;
+    return idx;
   }
 }
