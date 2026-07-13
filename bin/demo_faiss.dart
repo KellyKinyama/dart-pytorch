@@ -147,12 +147,7 @@ void main() {
     final buildT = sw.elapsed;
     sw.stop();
     final t = _timedSearch(ivfpq, xq, _k);
-    _report(
-      'IVFPQ nprobe=8',
-      buildT,
-      t.wall,
-      _recallAtK(t.result, truth, _k),
-    );
+    _report('IVFPQ nprobe=8', buildT, t.wall, _recallAtK(t.result, truth, _k));
   }
 
   // HNSW
@@ -163,12 +158,7 @@ void main() {
     final buildT = sw.elapsed;
     sw.stop();
     final t = _timedSearch(hnsw, xq, _k);
-    _report(
-      'HNSW ef=32',
-      buildT,
-      t.wall,
-      _recallAtK(t.result, truth, _k),
-    );
+    _report('HNSW ef=32', buildT, t.wall, _recallAtK(t.result, truth, _k));
   }
   {
     final hnsw = IndexHNSW(d: _d, M: 16, efConstruction: 100, efSearch: 128);
@@ -177,13 +167,80 @@ void main() {
     final buildT = sw.elapsed;
     sw.stop();
     final t = _timedSearch(hnsw, xq, _k);
+    _report('HNSW ef=128', buildT, t.wall, _recallAtK(t.result, truth, _k));
+  }
+
+  // Scalar Quantizer — 4× compression versus flat, tiny recall loss.
+  {
+    final sq = IndexScalarQuantizer(_d);
+    sw = Stopwatch()..start();
+    sq.train(xb);
+    sq.add(xb);
+    final buildT = sw.elapsed;
+    sw.stop();
+    final t = _timedSearch(sq, xq, _k);
+    _report('SQ8', buildT, t.wall, _recallAtK(t.result, truth, _k));
+  }
+
+  // Refine-Flat wrapper: IVFPQ candidates rescored by exact fp32.
+  {
+    final refined = IndexRefineFlat(
+      IndexIVFPQ(d: _d, nlist: 64, m: 8, nprobe: 8),
+      kFactor: 8,
+    );
+    sw = Stopwatch()..start();
+    refined.train(xb);
+    refined.add(xb);
+    final buildT = sw.elapsed;
+    sw.stop();
+    final t = _timedSearch(refined, xq, _k);
     _report(
-      'HNSW ef=128',
+      'IVFPQ+RefineFlat',
       buildT,
       t.wall,
       _recallAtK(t.result, truth, _k),
     );
   }
 
-  print('\nDone. Larger corpora and higher-recall settings tighten the picture.');
+  // IDMap around HNSW — round-trip custom int32 ids.
+  {
+    final ids = List<int>.generate(_nb, (i) => 100000 + i * 3);
+    final idmap = IndexIDMap(
+      IndexHNSW(d: _d, M: 16, efConstruction: 100, efSearch: 64),
+    );
+    sw = Stopwatch()..start();
+    idmap.addWithIds(xb, ids);
+    final buildT = sw.elapsed;
+    sw.stop();
+    final t = _timedSearch(idmap, xq, _k);
+    // Sanity: first result for query 0 should be the id we assigned to xb[0].
+    print(
+      '  IDMap sanity: query 0 → id ${t.result.ids[0][0]} '
+      '(expected ${ids[0]})',
+    );
+    // Recall in external-id space: translate truth to external ids first.
+    final translatedTruth = SearchResult(
+      truth.distances,
+      List<Int32List>.generate(truth.nq, (qi) {
+        final row = Int32List(truth.k);
+        for (var j = 0; j < truth.k; j++) {
+          final internal = truth.ids[qi][j];
+          row[j] = internal >= 0 && internal < ids.length
+              ? ids[internal]
+              : -1;
+        }
+        return row;
+      }),
+    );
+    _report(
+      'IDMap(HNSW)',
+      buildT,
+      t.wall,
+      _recallAtK(t.result, translatedTruth, _k),
+    );
+  }
+
+  print(
+    '\nDone. Larger corpora and higher-recall settings tighten the picture.',
+  );
 }

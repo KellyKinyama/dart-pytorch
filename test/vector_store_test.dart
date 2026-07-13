@@ -151,4 +151,51 @@ void main() {
     final r = hnsw.search(queries, k);
     expect(_recall(r, truth, k), greaterThan(0.9));
   });
+
+  test('IndexIDMap round-trips custom ids', () {
+    final idmap = IndexIDMap(IndexFlatL2(d));
+    final ids = List<int>.generate(n, (i) => 1000000 + i * 7);
+    idmap.addWithIds(xs, ids);
+    final r = idmap.search(xs.sublist(0, 3), 1);
+    for (var i = 0; i < 3; i++) {
+      expect(r.ids[i][0], equals(ids[i]));
+    }
+  });
+
+  test('IndexIDMap rejects ids outside int32', () {
+    final idmap = IndexIDMap(IndexFlatL2(d));
+    expect(
+      () => idmap.addWithIds(xs.sublist(0, 1), [1 << 40]),
+      throwsA(isA<ArgumentError>()),
+    );
+  });
+
+  test('IndexScalarQuantizer preserves top-k with small recall loss', () {
+    final sq = IndexScalarQuantizer(d)
+      ..train(xs)
+      ..add(xs);
+    final r = sq.search(queries, k);
+    // SQ8 typically stays above 90 % on blob-like data.
+    expect(_recall(r, truth, k), greaterThan(0.85));
+  });
+
+  test('IndexRefineFlat lifts IVFPQ back to near-flat recall', () {
+    // Baseline: standalone IVFPQ with the same hyperparameters.
+    final ivfpq = IndexIVFPQ(d: d, nlist: 8, m: 4, nprobe: 4)
+      ..train(xs)
+      ..add(xs);
+    final baseRecall = _recall(ivfpq.search(queries, k), truth, k);
+
+    // Refined wrapper: build a fresh inner index, add through the wrapper.
+    final refined = IndexRefineFlat(
+      IndexIVFPQ(d: d, nlist: 8, m: 4, nprobe: 4),
+      kFactor: 8,
+    );
+    refined.train(xs);
+    refined.add(xs);
+    final refinedRecall = _recall(refined.search(queries, k), truth, k);
+
+    // Re-ranking never decreases recall (up to the candidate pool).
+    expect(refinedRecall, greaterThanOrEqualTo(baseRecall));
+  });
 }
