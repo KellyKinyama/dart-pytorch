@@ -557,6 +557,7 @@ void main() {
       }
       return c;
     }
+
     final train = List<Uint8List>.generate(50, (_) => rnd());
     final ivf = IndexBinaryIVF(codeSize: codeSize, nlist: 4)..train(train);
     ivf.add(List.generate(20, (_) => rnd()));
@@ -898,5 +899,108 @@ void main() {
     expect(() => indexFactory(d, 'Nope'), throwsA(isA<FormatException>()));
     expect(() => indexFactory(d, 'IVF16'), throwsA(isA<FormatException>()));
     expect(() => indexFactory(d, ''), throwsA(isA<FormatException>()));
+  });
+
+  // --- IndexShards / IndexReplicas -------------------------------------
+
+  test('IndexShards partitions add across shards round-robin', () {
+    final shards = IndexShards(
+      shards: [IndexFlatL2(d), IndexFlatL2(d), IndexFlatL2(d)],
+    );
+    shards.add(xs);
+    expect(shards.ntotal, equals(xs.length));
+    // Round-robin: shard 0 holds ceil(n/3), shard 1 ceil((n-1)/3), etc.
+    final sizes = [
+      shards.shards[0].ntotal,
+      shards.shards[1].ntotal,
+      shards.shards[2].ntotal,
+    ];
+    expect(sizes.reduce((a, b) => a + b), equals(xs.length));
+    // Sizes within 1 of each other.
+    final maxS = sizes.reduce((a, b) => a > b ? a : b);
+    final minS = sizes.reduce((a, b) => a < b ? a : b);
+    expect(maxS - minS, lessThanOrEqualTo(1));
+  });
+
+  test('IndexShards search matches monolithic Flat', () {
+    final mono = IndexFlatL2(d)..add(xs);
+    final gold = mono.search(queries, k);
+    final shards = IndexShards(
+      shards: [IndexFlatL2(d), IndexFlatL2(d), IndexFlatL2(d), IndexFlatL2(d)],
+    )..add(xs);
+    final r = shards.search(queries, k);
+    // Top-1 must match; deeper ranks can tie-break differently.
+    for (var qi = 0; qi < nq; qi++) {
+      expect(r.ids[qi][0], equals(gold.ids[qi][0]));
+      expect(r.distances[qi][0], closeTo(gold.distances[qi][0], 1e-5));
+    }
+    // And recall@k against the monolithic gold set must be 100 %.
+    expect(_recall(r, gold, k), equals(1.0));
+  });
+
+  test('IndexShards forwards train to trainable shards', () {
+    final shards = IndexShards(
+      shards: [
+        IndexIVFFlat(d: d, nlist: 4),
+        IndexIVFFlat(d: d, nlist: 4),
+      ],
+    );
+    expect(shards.isTrained, isFalse);
+    shards.train(xs);
+    expect(shards.isTrained, isTrue);
+    shards.add(xs);
+    // Bump nprobe so ivf.search returns k results.
+    (shards.shards[0] as IndexIVFFlat).nprobe = 4;
+    (shards.shards[1] as IndexIVFFlat).nprobe = 4;
+    final r = shards.search(queries, k);
+    expect(r.ids[0][0], greaterThanOrEqualTo(0));
+  });
+
+  test('IndexShards round-trips through bytes', () {
+    final shards = IndexShards(shards: [IndexFlatL2(d), IndexFlatL2(d)])
+      ..add(xs);
+    final before = shards.search(queries, k);
+    final loaded = readIndex(writeIndex(shards)) as IndexShards;
+    expect(loaded.nshards, equals(2));
+    expect(loaded.ntotal, equals(xs.length));
+    final after = loaded.search(queries, k);
+    for (var qi = 0; qi < nq; qi++) {
+      for (var j = 0; j < k; j++) {
+        expect(after.ids[qi][j], equals(before.ids[qi][j]));
+      }
+    }
+  });
+
+  test('IndexReplicas broadcasts add and search delegates to one replica', () {
+    final rep = IndexReplicas(
+      replicas: [IndexFlatL2(d), IndexFlatL2(d), IndexFlatL2(d)],
+    )..add(xs);
+    expect(rep.ntotal, equals(xs.length));
+    for (final r in rep.replicas) {
+      expect(r.ntotal, equals(xs.length));
+    }
+    // Search results are identical to any one replica.
+    final gold = rep.replicas[0].search(queries, k);
+    final r0 = rep.search(queries, k);
+    for (var qi = 0; qi < nq; qi++) {
+      for (var j = 0; j < k; j++) {
+        expect(r0.ids[qi][j], equals(gold.ids[qi][j]));
+      }
+    }
+  });
+
+  test('IndexReplicas round-trips through bytes', () {
+    final rep = IndexReplicas(replicas: [IndexFlatL2(d), IndexFlatL2(d)])
+      ..add(xs);
+    final before = rep.search(queries, k);
+    final loaded = readIndex(writeIndex(rep)) as IndexReplicas;
+    expect(loaded.nreplicas, equals(2));
+    expect(loaded.ntotal, equals(xs.length));
+    final after = loaded.search(queries, k);
+    for (var qi = 0; qi < nq; qi++) {
+      for (var j = 0; j < k; j++) {
+        expect(after.ids[qi][j], equals(before.ids[qi][j]));
+      }
+    }
   });
 }

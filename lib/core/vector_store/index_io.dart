@@ -43,6 +43,8 @@ import 'index_binary_flat.dart';
 import 'index_binary_ivf.dart';
 import 'index_lsh.dart';
 import 'index_pre_transform.dart';
+import 'index_shards.dart';
+import 'index_replicas.dart';
 
 /// Discriminator values distinguishing each supported index type on
 /// disk. Never change existing values — they are the compatibility
@@ -60,6 +62,8 @@ class IndexKind {
   static const int binaryFlat = 0x0A;
   static const int preTransform = 0x0B;
   static const int binaryIVF = 0x0C;
+  static const int shards = 0x0D;
+  static const int replicas = 0x0E;
 }
 
 /// File-format magic and version.
@@ -238,6 +242,12 @@ void writeChild(IoWriter w, Index x) {
   } else if (x is IndexPreTransform) {
     w.writeU32(IndexKind.preTransform);
     x.writeTo(w);
+  } else if (x is IndexShards) {
+    w.writeU32(IndexKind.shards);
+    x.writeTo(w);
+  } else if (x is IndexReplicas) {
+    w.writeU32(IndexKind.replicas);
+    x.writeTo(w);
   } else {
     throw ArgumentError('writeIndex: unsupported index type ${x.runtimeType}');
   }
@@ -284,6 +294,10 @@ Index readChild(IoReader r) {
       return IndexLSH.readFrom(r);
     case IndexKind.preTransform:
       return IndexPreTransform.readFrom(r);
+    case IndexKind.shards:
+      return IndexShards.readFrom(r);
+    case IndexKind.replicas:
+      return IndexReplicas.readFrom(r);
     default:
       throw FormatException(
         'readIndex: unknown kind 0x${kind.toRadixString(16)}',

@@ -71,6 +71,8 @@ export 'core/vector_store/l2_norm_transform.dart';
 export 'core/vector_store/random_rotation_transform.dart';
 export 'core/vector_store/pca_transform.dart';
 export 'core/vector_store/index_pre_transform.dart';
+export 'core/vector_store/index_shards.dart';
+export 'core/vector_store/index_replicas.dart';
 export 'core/vector_store/index_factory.dart';
 export 'core/vector_store/index_io.dart';
 

@@ -60,7 +60,10 @@ class IndexBinaryIVF extends IndexBinary {
     while (chosen.length < nlist) {
       chosen.add(rng.nextInt(xs.length));
     }
-    final centroids = List<Uint8List>.generate(nlist, (_) => Uint8List(codeSize));
+    final centroids = List<Uint8List>.generate(
+      nlist,
+      (_) => Uint8List(codeSize),
+    );
     final chosenList = chosen.toList(growable: false);
     for (var c = 0; c < nlist; c++) {
       final src = xs[chosenList[c]];
@@ -192,7 +195,9 @@ class IndexBinaryIVF extends IndexBinary {
       final have = _invSize[c];
       final needed = (have + 1) * codeSize;
       if (needed > _invCodes[c].length) {
-        var newCap = _invCodes[c].length == 0 ? 4 * codeSize : _invCodes[c].length;
+        var newCap = _invCodes[c].length == 0
+            ? 4 * codeSize
+            : _invCodes[c].length;
         while (newCap < needed) {
           newCap *= 2;
         }
@@ -266,9 +271,7 @@ class IndexBinaryIVF extends IndexBinary {
         w.writeU32(_invLists[c][i]);
       }
       if (size > 0) {
-        w.writeU8List(
-          Uint8List.sublistView(_invCodes[c], 0, size * codeSize),
-        );
+        w.writeU8List(Uint8List.sublistView(_invCodes[c], 0, size * codeSize));
       }
     }
   }

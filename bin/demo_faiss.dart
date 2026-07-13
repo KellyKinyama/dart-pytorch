@@ -403,11 +403,7 @@ void main() {
     //      cells. Only nprobe cells are scanned per query. Recall
     //      approaches BinaryFlat as nprobe grows.
     for (final nprobe in [1, 4, 16]) {
-      final ivf = IndexBinaryIVF(
-        codeSize: codeSize,
-        nlist: 32,
-        nprobe: nprobe,
-      );
+      final ivf = IndexBinaryIVF(codeSize: codeSize, nlist: 32, nprobe: nprobe);
       ivf.train(bcodes);
       ivf.add(bcodes);
       sw = Stopwatch()..start();
@@ -532,8 +528,7 @@ void main() {
   }
 
   // IndexFactory — build compositions from a compact string.
-  print('\nIndexFactory:');
-  {
+  print('\nIndexFactory:');  {
     final descriptions = <String>[
       'Flat',
       'IVF64,Flat',
@@ -559,6 +554,36 @@ void main() {
         'recall@10 ${(rec * 100).toStringAsFixed(1).padLeft(5)} %',
       );
     }
+  }
+
+  // Shards & Replicas — horizontal composition primitives.
+  print('\nShards & Replicas:');
+  {
+    // 4-way sharded Flat vs monolithic Flat: identical recall,
+    // ~1/n_shards work per shard (but same total on one core).
+    for (final nshards in [1, 2, 4, 8]) {
+      final sh = IndexShards(
+        shards: List<Index>.generate(nshards, (_) => IndexFlatL2(_d)),
+      )..add(xb);
+      final t = _timedSearch(sh, xq, _k);
+      final rec = _recallAtK(t.result, truth, _k);
+      print(
+        '  Shards x${nshards.toString().padRight(2)} of Flat  '
+        'search ${(t.wall.inMicroseconds / _nq).toStringAsFixed(1).padLeft(7)} µs/q   '
+        'recall@10 ${(rec * 100).toStringAsFixed(1).padLeft(5)} %',
+      );
+    }
+    // 3 replicas of Flat: single-threaded search should match one Flat.
+    final rep = IndexReplicas(
+      replicas: [IndexFlatL2(_d), IndexFlatL2(_d), IndexFlatL2(_d)],
+    )..add(xb);
+    final t = _timedSearch(rep, xq, _k);
+    final rec = _recallAtK(t.result, truth, _k);
+    print(
+      '  Replicas x3 of Flat     '
+      'search ${(t.wall.inMicroseconds / _nq).toStringAsFixed(1).padLeft(7)} µs/q   '
+      'recall@10 ${(rec * 100).toStringAsFixed(1).padLeft(5)} %',
+    );
   }
 
   print(
