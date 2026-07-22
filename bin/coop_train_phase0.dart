@@ -20,6 +20,10 @@
 ///   --local-steps=K    local Adam steps per round per replica (default: 30)
 ///   --seed=N           RNG seed (default: 42)
 ///   --device=cpu|gpu   default cpu
+///   --arch=gpt|aft     transformer family (default: gpt).
+///                       gpt = attention-based `GPT`.
+///                       aft = attention-free `AFTLanguageModel`
+///                             (CPU-only in this library).
 ///   --model=tiny|small default tiny (~50k params)
 ///   --corpus=toy|shakespeare  default toy (built-in, self-contained)
 library;
@@ -35,6 +39,7 @@ class _Config {
   int localSteps = 30;
   int seed = 42;
   Device device = Device.CPU;
+  Arch arch = Arch.gpt;
   String model = 'tiny';
   String corpus = 'toy';
 }
@@ -58,6 +63,13 @@ _Config _parseArgs(List<String> args) {
         c.seed = int.parse(v);
       case 'device':
         c.device = v.toLowerCase() == 'gpu' ? Device.GPU : Device.CPU;
+      case 'arch':
+        try {
+          c.arch = parseArch(v);
+        } on ArgumentError catch (e) {
+          stderr.writeln('coop_train_phase0: $e');
+          exit(2);
+        }
       case 'model':
         c.model = v;
       case 'corpus':
@@ -68,38 +80,6 @@ _Config _parseArgs(List<String> args) {
     }
   }
   return c;
-}
-
-GPTConfig _modelConfig(_Config cfg, int vocabSize) {
-  switch (cfg.model) {
-    case 'tiny':
-      return GPTConfig(
-        vocabSize: vocabSize,
-        maxCtx: 32,
-        embedDim: 32,
-        numLayers: 2,
-        numHeads: 4,
-        dropoutP: 0.0,
-        tieWeights: true,
-        device: cfg.device,
-        seed: cfg.seed,
-      );
-    case 'small':
-      return GPTConfig(
-        vocabSize: vocabSize,
-        maxCtx: 64,
-        embedDim: 128,
-        numLayers: 4,
-        numHeads: 8,
-        dropoutP: 0.0,
-        tieWeights: true,
-        device: cfg.device,
-        seed: cfg.seed,
-      );
-    default:
-      stderr.writeln('coop_train_phase0: unknown --model=${cfg.model}');
-      exit(2);
-  }
 }
 
 String _loadCorpus(String kind) {
@@ -123,7 +103,7 @@ String _loadCorpus(String kind) {
 }
 
 double _evalLoss(
-  GPT gpt,
+  CoopLM lm,
   List<double> ids,
   int blockSize,
   math.Random rng, {
@@ -133,7 +113,7 @@ double _evalLoss(
   var total = 0.0;
   for (var i = 0; i < steps; i++) {
     final (x, y) = sampleWindow(ids, blockSize, rng, device: device);
-    final loss = gpt(x).crossEntropy(y).mean();
+    final loss = lm(x).crossEntropy(y).mean();
     total += loss.toList()[0];
   }
   return total / steps;
@@ -143,8 +123,8 @@ void main(List<String> args) {
   final cfg = _parseArgs(args);
   print(
     'coop_train_phase0: ${cfg.replicas} replicas x ${cfg.rounds} rounds '
-    'x ${cfg.localSteps} local steps, model=${cfg.model}, '
-    'device=${cfg.device}, corpus=${cfg.corpus}',
+    'x ${cfg.localSteps} local steps, arch=${archToString(cfg.arch)}, '
+    'model=${cfg.model}, device=${cfg.device}, corpus=${cfg.corpus}',
   );
 
   // ---- Corpus + vocab ----
@@ -154,39 +134,53 @@ void main(List<String> args) {
   print('Corpus: ${text.length} chars, vocab=${vocab.size}');
 
   // ---- Instantiate replicas ----
-  final gptConfig = _modelConfig(cfg, vocab.size);
-  final replicas = <GPT>[];
+  CoopLM makeLM(int seedOffset) => buildCoopLM(
+    arch: cfg.arch,
+    modelSize: cfg.model,
+    vocabSize: vocab.size,
+    device: cfg.device,
+    seed: cfg.seed + seedOffset,
+  );
+
+  final replicas = <CoopLM>[];
   final opts = <Adam>[];
   final shards = <List<double>>[];
   for (var r = 0; r < cfg.replicas; r++) {
-    replicas.add(GPT(gptConfig));
-    opts.add(Adam(replicas[r].parameters(), lr: 3e-3));
+    // All replicas share the same seed so their param SHAPES match
+    // exactly (byte-identical DPTC header) and averageCheckpoints
+    // will accept them. Seeds differ across the fleet only in the
+    // sampleWindow RNGs below.
+    replicas.add(makeLM(0));
+    opts.add(Adam(replicas[r].module.parameters(), lr: 3e-3));
     shards.add(shardSlice(ids, r, cfg.replicas));
     print(
       '  replica $r: ${shards[r].length} tokens '
-      '(${replicas[r].parameters().fold<int>(0, (a, p) => a + p.length)} '
-      'scalars)',
+      '(${replicas[r].scalarCount} scalars)',
     );
   }
 
   // Give every replica the same initial parameters (average of the
-  // freshly-initialised replicas). Otherwise each replica has a
-  // different random init and we cannot compare "same-start" runs.
+  // freshly-initialised replicas). With identical seeds this is a
+  // no-op numerically, but it also validates the DPTC round-trip
+  // before we start training.
   {
-    final ckpts = [for (final g in replicas) Checkpoint.saveBytes(g)];
+    final ckpts = [for (final r in replicas) Checkpoint.saveBytes(r.module)];
     final avg = averageCheckpoints(ckpts);
-    for (final g in replicas) {
-      Checkpoint.loadIntoBytes(g, avg);
+    for (final r in replicas) {
+      Checkpoint.loadIntoBytes(r.module, avg);
     }
     print('Replicas synced to a common initial checkpoint');
   }
 
   // ---- Baseline: single replica trained on all data, same total steps ----
-  final baseline = GPT(gptConfig);
-  Checkpoint.loadIntoBytes(baseline, Checkpoint.saveBytes(replicas[0]));
-  final baseOpt = Adam(baseline.parameters(), lr: 3e-3);
+  final baseline = makeLM(0);
+  Checkpoint.loadIntoBytes(
+    baseline.module,
+    Checkpoint.saveBytes(replicas[0].module),
+  );
+  final baseOpt = Adam(baseline.module.parameters(), lr: 3e-3);
   final baseRng = math.Random(cfg.seed + 999);
-  final blockSize = gptConfig.maxCtx - 1;
+  final blockSize = baseline.maxLen - 1;
 
   // ---- Cooperative training ----
   final rngs = [
@@ -216,7 +210,7 @@ void main(List<String> args) {
         );
         final loss = replicas[r](x).crossEntropy(y).mean();
         loss.backward();
-        clipGradNorm(replicas[r].parameters(), 1.0);
+        clipGradNorm(replicas[r].module.parameters(), 1.0);
         opts[r].step();
       }
     }
@@ -228,22 +222,22 @@ void main(List<String> args) {
       final (x, y) = sampleWindow(ids, blockSize, baseRng, device: cfg.device);
       final loss = baseline(x).crossEntropy(y).mean();
       loss.backward();
-      clipGradNorm(baseline.parameters(), 1.0);
+      clipGradNorm(baseline.module.parameters(), 1.0);
       baseOpt.step();
     }
 
     // Average the replica checkpoints and adopt in every replica.
-    final ckpts = [for (final g in replicas) Checkpoint.saveBytes(g)];
+    final ckpts = [for (final r in replicas) Checkpoint.saveBytes(r.module)];
     final avg = averageCheckpoints(ckpts);
-    for (final g in replicas) {
-      Checkpoint.loadIntoBytes(g, avg);
+    for (final r in replicas) {
+      Checkpoint.loadIntoBytes(r.module, avg);
     }
 
     // Evaluate each replica *just after* the parameter sync (so they
     // all show the same number), and evaluate the baseline.
     final perReplicaLoss = <double>[
-      for (final g in replicas)
-        _evalLoss(g, ids, blockSize, evalRng, device: cfg.device),
+      for (final r in replicas)
+        _evalLoss(r, ids, blockSize, evalRng, device: cfg.device),
     ];
     final avgLoss = perReplicaLoss.reduce((a, b) => a + b) / cfg.replicas;
     final baseLoss = _evalLoss(

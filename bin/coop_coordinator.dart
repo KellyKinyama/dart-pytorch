@@ -29,6 +29,9 @@
 ///   --port=N          bind port (default 8080)
 ///   --host=HOST       bind host (default 127.0.0.1; use 0.0.0.0 for LAN)
 ///   --target=N        min updates to trigger an averaging round (default 2)
+///   --arch=gpt|aft    transformer family (default: gpt).
+///                      Advertised to workers via GET /config; workers
+///                      whose --arch doesn't match will refuse to join.
 ///   --model=tiny|small
 ///   --corpus=toy|shakespeare
 ///   --seed=N          initial-weights seed (default 42)
@@ -50,6 +53,7 @@ class _CoordConfig {
   String host = '127.0.0.1';
   int target = 2;
   int seed = 42;
+  Arch arch = Arch.gpt;
   String model = 'tiny';
   String corpus = 'toy';
   Device device = Device.CPU;
@@ -72,6 +76,13 @@ _CoordConfig _parseArgs(List<String> args) {
         c.target = int.parse(v);
       case 'seed':
         c.seed = int.parse(v);
+      case 'arch':
+        try {
+          c.arch = parseArch(v);
+        } on ArgumentError catch (e) {
+          stderr.writeln('coop_coordinator: $e');
+          exit(2);
+        }
       case 'model':
         c.model = v;
       case 'corpus':
@@ -84,38 +95,6 @@ _CoordConfig _parseArgs(List<String> args) {
     }
   }
   return c;
-}
-
-GPTConfig _makeGptConfig(String model, int vocabSize, Device device, int seed) {
-  switch (model) {
-    case 'tiny':
-      return GPTConfig(
-        vocabSize: vocabSize,
-        maxCtx: 32,
-        embedDim: 32,
-        numLayers: 2,
-        numHeads: 4,
-        dropoutP: 0.0,
-        tieWeights: true,
-        device: device,
-        seed: seed,
-      );
-    case 'small':
-      return GPTConfig(
-        vocabSize: vocabSize,
-        maxCtx: 64,
-        embedDim: 128,
-        numLayers: 4,
-        numHeads: 8,
-        dropoutP: 0.0,
-        tieWeights: true,
-        device: device,
-        seed: seed,
-      );
-    default:
-      stderr.writeln('coop_coordinator: unknown --model=$model');
-      exit(2);
-  }
 }
 
 String _loadCorpus(String kind) {
@@ -149,39 +128,44 @@ Future<void> main(List<String> args) async {
   final cfg = _parseArgs(args);
   final text = _loadCorpus(cfg.corpus);
   final vocab = CharVocab.fromText(text);
-  final gptCfg = _makeGptConfig(cfg.model, vocab.size, cfg.device, cfg.seed);
 
-  // Initial global model.
-  final gpt = GPT(gptCfg);
-  var globalBytes = Checkpoint.saveBytes(gpt);
+  // Initial global model. Everything downstream (validation of
+  // incoming submissions, param count in the log) goes through the
+  // CoopLM wrapper so the same code path serves both --arch=gpt and
+  // --arch=aft.
+  final globalLM = buildCoopLM(
+    arch: cfg.arch,
+    modelSize: cfg.model,
+    vocabSize: vocab.size,
+    device: cfg.device,
+    seed: cfg.seed,
+  );
+  var globalBytes = Checkpoint.saveBytes(globalLM.module);
   var round = 0;
   final workersSeen = <String>{};
   final queue = <_Submission>[];
 
   final configJson = jsonEncode({
     'version': 1,
+    'arch': archToString(cfg.arch),
     'model': cfg.model,
     'corpus': cfg.corpus,
     'vocab': vocab.itos,
-    'gptConfig': {
-      'vocabSize': gptCfg.vocabSize,
-      'maxCtx': gptCfg.maxCtx,
-      'embedDim': gptCfg.embedDim,
-      'numLayers': gptCfg.numLayers,
-      'numHeads': gptCfg.numHeads,
-      'tieWeights': gptCfg.tieWeights,
-      'seed': gptCfg.seed,
-    },
+    'maxLen': globalLM.maxLen,
+    'seed': cfg.seed,
     'target': cfg.target,
   });
 
   final server = await HttpServer.bind(cfg.host, cfg.port);
   print('coop_coordinator: listening on http://${cfg.host}:${cfg.port}');
   print(
-    '  model=${cfg.model} corpus=${cfg.corpus} vocab=${vocab.size} '
-    'target=${cfg.target}',
+    '  arch=${archToString(cfg.arch)} model=${cfg.model} '
+    'corpus=${cfg.corpus} vocab=${vocab.size} target=${cfg.target}',
   );
-  print('  initial round=$round, checkpoint=${globalBytes.length} bytes');
+  print(
+    '  initial round=$round, checkpoint=${globalBytes.length} bytes '
+    '(${globalLM.scalarCount} scalars)',
+  );
 
   await for (final req in server) {
     try {
@@ -238,9 +222,16 @@ Future<void> main(List<String> args) async {
             break;
           }
           try {
-            // Validate by loading into a scratch model.
-            final scratch = GPT(gptCfg);
-            Checkpoint.loadIntoBytes(scratch, body);
+            // Validate by loading into a scratch model of the same
+            // arch. Any shape/header mismatch throws here.
+            final scratch = buildCoopLM(
+              arch: cfg.arch,
+              modelSize: cfg.model,
+              vocabSize: vocab.size,
+              device: cfg.device,
+              seed: cfg.seed,
+            );
+            Checkpoint.loadIntoBytes(scratch.module, body);
           } catch (e) {
             req.response
               ..statusCode = HttpStatus.badRequest

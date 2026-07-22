@@ -32,6 +32,36 @@ All three modes share the same underlying primitives:
   a toy character-level tokenizer plus a helper that hands each
   replica a disjoint slice of the token stream.
 
+### Two model families (`--arch=gpt|aft`)
+
+Every phase can train either transformer family:
+
+- `--arch=gpt` (default) — the attention-based `GPT` in
+  `lib/core/nn/gpt.dart`. Runs on CPU or GPU.
+- `--arch=aft` — the attention-free `AFTLanguageModel` in
+  `lib/core/nn/aft_transformer.dart`. **CPU only** — passing
+  `--device=gpu --arch=aft` logs a warning and falls back to CPU.
+
+Both families are wrapped behind a common `CoopLM` handle
+(`lib/core/coop/lm_factory.dart`) so the coop scripts are model
+agnostic. The `tiny` and `small` presets are sized to have near
+identical scalar counts across families (e.g. `tiny` is 27008 for
+GPT and 26776 for AFT) so you can do apples-to-apples runs.
+
+Because `averageCheckpoints` byte-validates the DPTC header before
+averaging, **every process in a run MUST agree on `--arch`**:
+
+- **Phase 0** — all replicas are spawned by the same process from
+  the same `--arch`, so this is automatic.
+- **Phase 1** — the coordinator advertises its `--arch` via
+  `GET /config`, and workers inherit it. Workers do **not** take an
+  `--arch` flag. If you point a stale `--arch=gpt` binary at an
+  `--arch=aft` coordinator, its `POST /submit` will be rejected
+  with HTTP 400 `invalid checkpoint`.
+- **Phase 2** — every peer takes its own `--arch`. Mixing families
+  in one mesh will throw at the first gossip round when
+  `averageCheckpoints` sees a header mismatch. Keep them consistent.
+
 ---
 
 ## Phase 0 — single-process (`bin/coop_train_phase0.dart`)
@@ -58,6 +88,7 @@ Flags:
 | `--local-steps=K`| 30      | Adam steps between averages                |
 | `--seed=N`       | 42      |                                            |
 | `--device=cpu\|gpu`| cpu   |                                            |
+| `--arch=gpt\|aft`| gpt     | Transformer family (see "Two model families" below) |
 | `--model=tiny\|small` | tiny |                                          |
 | `--corpus=toy\|shakespeare` | toy | `shakespeare` needs `data/tiny_shakespeare.txt` |
 
@@ -87,9 +118,12 @@ Terminal 1 — coordinator:
 
 ```bash
 dart run bin/coop_coordinator.dart --port=8765 --target=2
+# or, for the attention-free family:
+dart run bin/coop_coordinator.dart --port=8765 --target=2 --arch=aft
 ```
 
-Terminals 2, 3, ... — one per worker:
+Terminals 2, 3, ... — one per worker (no `--arch` flag; the worker
+reads it from the coordinator's `/config`):
 
 ```bash
 dart run bin/coop_worker.dart \
@@ -109,7 +143,7 @@ dart run bin/coop_worker.dart \
 
 | Route              | Meaning                                                                                  |
 |--------------------|------------------------------------------------------------------------------------------|
-| `GET /config`      | JSON: model type, corpus, vocab (`itos`), gpt config, target                             |
+| `GET /config`      | JSON: `{version, arch, model, corpus, vocab, maxLen, seed, target}` — workers use `arch` + `model` to build a matching local `CoopLM` |
 | `GET /corpus`      | text/plain: full corpus (workers shard it locally via `shardSlice`)                      |
 | `GET /checkpoint`  | binary DPTC bytes; response header `X-Coop-Round: N` says which round they belong to     |
 | `GET /status`      | JSON: `{round, queueSize, target, workersSeen[]}`                                        |
@@ -158,8 +192,8 @@ machines you can set it to 0.
 
 | Route            | Meaning                                                          |
 |------------------|------------------------------------------------------------------|
-| `GET /health`    | JSON: `{id, round, peers, vocabSize}`                            |
-| `GET /checkpoint`| binary DPTC bytes + `X-Coop-Round: N` + `X-Coop-Peer-Id`         |
+| `GET /health`    | JSON: `{id, round, peers, vocabSize, arch, model}`               |
+| `GET /checkpoint`| binary DPTC bytes + `X-Coop-Round: N` + `X-Coop-Peer-Id` + `X-Coop-Arch` |
 
 ### Flags
 
@@ -175,6 +209,7 @@ machines you can set it to 0.
 | `--gossip-every=R`  | 1                    | gossip once every R rounds                               |
 | `--rounds=N`        | 20                   | max rounds (-1 = forever)                                |
 | `--warmup-secs=N`   | 0                    | delay training start by N seconds                        |
+| `--arch=gpt\|aft`   | gpt                  | Transformer family. All peers in the mesh must agree.    |
 | `--model=tiny\|small`| tiny                |                                                          |
 | `--corpus=toy\|shakespeare` | toy         |                                                          |
 | `--lr=F`            | 3e-3                 | Adam learning rate                                       |

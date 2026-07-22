@@ -43,6 +43,7 @@ export 'core/nn/muzero_lm.dart';
 export 'core/nn/serialize.dart';
 export 'core/coop/param_avg.dart';
 export 'core/coop/shard.dart';
+export 'core/coop/lm_factory.dart';
 export 'core/optim/optimizer.dart';
 export 'core/optim/sgd.dart';
 export 'core/optim/adam.dart';

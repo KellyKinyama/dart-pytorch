@@ -44,6 +44,11 @@
 ///   --local-steps=K     Adam steps between gossip rounds (default 30)
 ///   --gossip-every=R    gossip once every R rounds (default 1)
 ///   --rounds=N          max rounds before exiting (default 20; -1 = forever)
+///   --arch=gpt|aft      transformer family (default: gpt). Every
+///                        peer in the mesh MUST agree on this; a
+///                        gpt peer trying to average a checkpoint
+///                        pulled from an aft peer will fail loudly
+///                        at `averageCheckpoints` header validation.
 ///   --model=tiny|small
 ///   --corpus=toy|shakespeare
 ///   --lr=F              Adam learning rate (default 3e-3)
@@ -76,6 +81,7 @@ class _PeerConfig {
   int localSteps = 30;
   int gossipEvery = 1;
   int rounds = 20;
+  Arch arch = Arch.gpt;
   String model = 'tiny';
   String corpus = 'toy';
   double lr = 3e-3;
@@ -98,8 +104,11 @@ _PeerConfig _parseArgs(List<String> args) {
       case 'host':
         c.host = v;
       case 'peers':
-        c.peers =
-            v.split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
+        c.peers = v
+            .split(',')
+            .map((s) => s.trim())
+            .where((s) => s.isNotEmpty)
+            .toList();
       case 'id':
         c.id = v;
       case 'shard-id':
@@ -112,6 +121,13 @@ _PeerConfig _parseArgs(List<String> args) {
         c.gossipEvery = int.parse(v);
       case 'rounds':
         c.rounds = int.parse(v);
+      case 'arch':
+        try {
+          c.arch = parseArch(v);
+        } on ArgumentError catch (e) {
+          stderr.writeln('coop_peer: $e');
+          exit(2);
+        }
       case 'model':
         c.model = v;
       case 'corpus':
@@ -130,38 +146,6 @@ _PeerConfig _parseArgs(List<String> args) {
     }
   }
   return c;
-}
-
-GPTConfig _makeGptConfig(String model, int vocabSize, Device device, int seed) {
-  switch (model) {
-    case 'tiny':
-      return GPTConfig(
-        vocabSize: vocabSize,
-        maxCtx: 32,
-        embedDim: 32,
-        numLayers: 2,
-        numHeads: 4,
-        dropoutP: 0.0,
-        tieWeights: true,
-        device: device,
-        seed: seed,
-      );
-    case 'small':
-      return GPTConfig(
-        vocabSize: vocabSize,
-        maxCtx: 64,
-        embedDim: 128,
-        numLayers: 4,
-        numHeads: 8,
-        dropoutP: 0.0,
-        tieWeights: true,
-        device: device,
-        seed: seed,
-      );
-    default:
-      stderr.writeln('coop_peer: unknown --model=$model');
-      exit(2);
-  }
 }
 
 String _loadCorpus(String kind) {
@@ -205,62 +189,79 @@ Future<void> main(List<String> args) async {
   // Model + vocab.
   final text = _loadCorpus(cfg.corpus);
   final vocab = CharVocab.fromText(text);
-  final gptCfg =
-      _makeGptConfig(cfg.model, vocab.size, cfg.device, cfg.seed);
-  final gpt = GPT(gptCfg);
+  final lm = buildCoopLM(
+    arch: cfg.arch,
+    modelSize: cfg.model,
+    vocabSize: vocab.size,
+    device: cfg.device,
+    seed: cfg.seed,
+  );
   final ids = vocab.encode(text);
   final shard = shardSlice(ids, cfg.shardId, cfg.numShards!);
-  final opt = Adam(gpt.parameters(), lr: cfg.lr);
+  final opt = Adam(lm.module.parameters(), lr: cfg.lr);
   final rng = math.Random(cfg.seed + cfg.id.hashCode);
   final gossipRng = math.Random(cfg.seed + cfg.listen);
-  final blockSize = gptCfg.maxCtx - 1;
+  final blockSize = lm.maxLen - 1;
 
   // Shared mutable state: current local checkpoint bytes, updated
   // after each local-train round and after each gossip average.
   // Serves as the reply body for GET /checkpoint.
-  var localBytes = Checkpoint.saveBytes(gpt);
+  var localBytes = Checkpoint.saveBytes(lm.module);
   var localRound = 0;
 
   // ---- HTTP server for peers to pull from us ----
   final server = await HttpServer.bind(cfg.host, cfg.listen);
-  print('coop_peer "${cfg.id}": '
-      'listening on http://${cfg.host}:${cfg.listen}');
-  print('  model=${cfg.model} corpus=${cfg.corpus} vocab=${vocab.size} '
-      'shard=${cfg.shardId}/${cfg.numShards} tokens=${shard.length}');
+  print(
+    'coop_peer "${cfg.id}": '
+    'listening on http://${cfg.host}:${cfg.listen}',
+  );
+  print(
+    '  arch=${archToString(cfg.arch)} model=${cfg.model} '
+    'corpus=${cfg.corpus} vocab=${vocab.size} '
+    'shard=${cfg.shardId}/${cfg.numShards} tokens=${shard.length} '
+    '(${lm.scalarCount} scalars)',
+  );
   print('  peers: ${cfg.peers.isEmpty ? "(solo)" : cfg.peers.join(", ")}');
 
   // Serve endpoints in the background.
-  unawaited(Future(() async {
-    await for (final req in server) {
-      try {
-        switch ('${req.method} ${req.uri.path}') {
-          case 'GET /health':
-            req.response
-              ..headers.contentType = ContentType.json
-              ..write(jsonEncode({
-                'id': cfg.id,
-                'round': localRound,
-                'peers': cfg.peers,
-                'vocabSize': vocab.size,
-              }));
-          case 'GET /checkpoint':
-            req.response.headers
-              ..contentType = ContentType.binary
-              ..add('X-Coop-Round', '$localRound')
-              ..add('X-Coop-Peer-Id', cfg.id);
-            req.response.add(localBytes);
-          default:
-            req.response
-              ..statusCode = HttpStatus.notFound
-              ..write('unknown route');
+  unawaited(
+    Future(() async {
+      await for (final req in server) {
+        try {
+          switch ('${req.method} ${req.uri.path}') {
+            case 'GET /health':
+              req.response
+                ..headers.contentType = ContentType.json
+                ..write(
+                  jsonEncode({
+                    'id': cfg.id,
+                    'arch': archToString(cfg.arch),
+                    'model': cfg.model,
+                    'round': localRound,
+                    'peers': cfg.peers,
+                    'vocabSize': vocab.size,
+                  }),
+                );
+            case 'GET /checkpoint':
+              req.response.headers
+                ..contentType = ContentType.binary
+                ..add('X-Coop-Round', '$localRound')
+                ..add('X-Coop-Peer-Id', cfg.id)
+                ..add('X-Coop-Arch', archToString(cfg.arch));
+              req.response.add(localBytes);
+            default:
+              req.response
+                ..statusCode = HttpStatus.notFound
+                ..write('unknown route');
+          }
+        } catch (e) {
+          req.response.statusCode = HttpStatus.internalServerError;
+        } finally {
+          await req.response.close();
         }
-      } catch (e) {
-        req.response.statusCode = HttpStatus.internalServerError;
-      } finally {
-        await req.response.close();
       }
-    }
-  }));
+    }),
+  );
 
   final httpClient = HttpClient();
 
@@ -288,9 +289,9 @@ Future<void> main(List<String> args) async {
     for (var s = 0; s < cfg.localSteps; s++) {
       opt.zeroGrad();
       final (x, y) = sampleWindow(shard, blockSize, rng, device: cfg.device);
-      final loss = gpt(x).crossEntropy(y).mean();
+      final loss = lm(x).crossEntropy(y).mean();
       loss.backward();
-      clipGradNorm(gpt.parameters(), 1.0);
+      clipGradNorm(lm.module.parameters(), 1.0);
       opt.step();
       lossAccum += loss.toList()[0];
       // Drain the event loop periodically so incoming GET /checkpoint
@@ -300,7 +301,7 @@ Future<void> main(List<String> args) async {
     final avgLoss = (lossAccum / cfg.localSteps).toStringAsFixed(4);
 
     // Publish new local weights so peers see the post-train version.
-    localBytes = Checkpoint.saveBytes(gpt);
+    localBytes = Checkpoint.saveBytes(lm.module);
     localRound = round;
 
     // Gossip: pull one random peer's checkpoint, average with ours,
@@ -310,14 +311,14 @@ Future<void> main(List<String> args) async {
       final target = cfg.peers[gossipRng.nextInt(cfg.peers.length)];
       final url = Uri.parse('http://$target/checkpoint');
       try {
-        final req = await httpClient.getUrl(url).timeout(
-              const Duration(seconds: 5),
-            );
+        final req = await httpClient
+            .getUrl(url)
+            .timeout(const Duration(seconds: 5));
         final resp = await req.close().timeout(const Duration(seconds: 30));
         if (resp.statusCode == 200) {
           final theirBytes = await _readAllBody(resp);
           final avg = averageCheckpoints([localBytes, theirBytes]);
-          Checkpoint.loadIntoBytes(gpt, avg);
+          Checkpoint.loadIntoBytes(lm.module, avg);
           localBytes = avg;
           gossipedWith = target;
         } else {
@@ -328,8 +329,10 @@ Future<void> main(List<String> args) async {
       }
     }
 
-    print('  round=$round  local-loss=$avgLoss'
-        '${gossipedWith.isEmpty ? "" : "  gossip<-$gossipedWith"}');
+    print(
+      '  round=$round  local-loss=$avgLoss'
+      '${gossipedWith.isEmpty ? "" : "  gossip<-$gossipedWith"}',
+    );
   }
 
   print('coop_peer "${cfg.id}": done after $round rounds');

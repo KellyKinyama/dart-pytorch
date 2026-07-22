@@ -26,6 +26,10 @@
 ///   --seed=N            local RNG seed (default: derived from --id)
 ///   --device=cpu|gpu    default cpu
 ///   --idle-ms=N         sleep between rounds (default 100)
+///
+/// The transformer arch (gpt vs aft) is dictated by the coordinator's
+/// GET /config response and inherited automatically; workers don't
+/// choose it, they conform.
 library;
 
 import 'dart:convert';
@@ -146,25 +150,6 @@ Future<Map<String, dynamic>> _postCheckpoint(
   return {'status': resp.statusCode, ...jsonDecode(text) as Map};
 }
 
-GPTConfig _configFromJson(
-  Map<String, dynamic> cfg,
-  int vocabSize,
-  Device device,
-) {
-  final g = cfg['gptConfig'] as Map<String, dynamic>;
-  return GPTConfig(
-    vocabSize: vocabSize,
-    maxCtx: g['maxCtx'] as int,
-    embedDim: g['embedDim'] as int,
-    numLayers: g['numLayers'] as int,
-    numHeads: g['numHeads'] as int,
-    dropoutP: 0.0,
-    tieWeights: g['tieWeights'] as bool,
-    device: device,
-    seed: g['seed'] as int,
-  );
-}
-
 Future<void> main(List<String> args) async {
   final cfg = _parseArgs(args);
   final base = Uri.parse(cfg.coordinator);
@@ -174,11 +159,19 @@ Future<void> main(List<String> args) async {
   // Handshake.
   final serverCfg = await _getJson(client, base.resolve('/config'));
   final vocab = CharVocab.fromItos((serverCfg['vocab'] as List).cast<String>());
-  final gptCfg = _configFromJson(serverCfg, vocab.size, cfg.device);
-  final gpt = GPT(gptCfg);
+  final arch = parseArch(serverCfg['arch'] as String? ?? 'gpt');
+  final modelSize = serverCfg['model'] as String;
+  final seed = serverCfg['seed'] as int;
+  final lm = buildCoopLM(
+    arch: arch,
+    modelSize: modelSize,
+    vocabSize: vocab.size,
+    device: cfg.device,
+    seed: seed,
+  );
   print(
-    '  built local GPT: '
-    '${gpt.parameters().fold<int>(0, (a, p) => a + p.length)} scalars',
+    '  built local ${archToString(arch)}/$modelSize: '
+    '${lm.scalarCount} scalars',
   );
 
   final corpus = await _getString(client, base.resolve('/corpus'));
@@ -189,9 +182,9 @@ Future<void> main(List<String> args) async {
     ' (${shard.length} tokens)',
   );
 
-  final opt = Adam(gpt.parameters(), lr: cfg.lr);
+  final opt = Adam(lm.module.parameters(), lr: cfg.lr);
   final rng = math.Random(cfg.seed ?? cfg.id.hashCode & 0x7fffffff);
-  final blockSize = gptCfg.maxCtx - 1;
+  final blockSize = lm.maxLen - 1;
 
   var contributed = 0;
   while (cfg.rounds < 0 || contributed < cfg.rounds) {
@@ -200,22 +193,22 @@ Future<void> main(List<String> args) async {
       client,
       base.resolve('/checkpoint'),
     );
-    Checkpoint.loadIntoBytes(gpt, bytes);
+    Checkpoint.loadIntoBytes(lm.module, bytes);
 
     // Local train.
     var lossAccum = 0.0;
     for (var s = 0; s < cfg.localSteps; s++) {
       opt.zeroGrad();
       final (x, y) = sampleWindow(shard, blockSize, rng, device: cfg.device);
-      final loss = gpt(x).crossEntropy(y).mean();
+      final loss = lm(x).crossEntropy(y).mean();
       loss.backward();
-      clipGradNorm(gpt.parameters(), 1.0);
+      clipGradNorm(lm.module.parameters(), 1.0);
       opt.step();
       lossAccum += loss.toList()[0];
     }
 
     // Push.
-    final out = Checkpoint.saveBytes(gpt);
+    final out = Checkpoint.saveBytes(lm.module);
     final result = await _postCheckpoint(
       client,
       base.resolve('/submit'),
