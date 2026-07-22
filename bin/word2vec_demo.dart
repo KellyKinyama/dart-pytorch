@@ -34,6 +34,17 @@
 ///   --num-ns=N       negative samples per positive (default: 4)
 ///   --window=N       skip-gram window radius (default: 2)
 ///   --queries=w,w,w  comma-separated words to query at the end
+///
+/// Recipes (copy/paste ready):
+///
+///   # Default (fast smoke run — pipeline check, not meaningful clusters):
+///   dart run bin/word2vec_demo.dart
+///
+///   # Bigger corpus + more epochs — decent semantic clusters:
+///   dart run bin/word2vec_demo.dart --max-chars=1200000 --epochs=20 --window=4 --vocab-size=2048
+///
+///   # "Aggressive" small run — sharper discriminator, higher LR:
+///   dart run bin/word2vec_demo.dart --max-chars=800000 --epochs=15 --window=5 --vocab-size=2048 --num-ns=8 --lr=0.01
 library;
 
 import 'dart:io';
