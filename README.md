@@ -108,6 +108,11 @@ nvcc --shared -Xcompiler -fPIC \
      lib/native/src/engine.cu
 ```
 
+**No local GPU?** See [docs/colab.md](docs/colab.md) for a copy/paste
+recipe that runs on a free Google Colab, Kaggle, Paperspace, or
+Lightning AI GPU. `scripts/setup_colab.sh` handles the whole install +
+nvcc build in one command.
+
 ## Run the tests
 
 ```bash

@@ -33,7 +33,14 @@
 ///   --lr=F           Adam learning rate (default: 5e-3)
 ///   --num-ns=N       negative samples per positive (default: 4)
 ///   --window=N       skip-gram window radius (default: 2)
+///   --subsample-t=F  Mikolov subsample threshold (default: 1e-3;
+///                    lower = drop frequent words more aggressively; use
+///                    1e-5 only for gigabyte-scale corpora)
 ///   --queries=w,w,w  comma-separated words to query at the end
+///   --device=cpu|gpu run everything on CPU (default) or CUDA GPU.
+///                    GPU requires native/lib/libmat_mul.so — see
+///                    scripts/setup_colab.sh + docs/colab.md for a
+///                    free Colab / Kaggle GPU recipe.
 ///
 /// Recipes (copy/paste ready):
 ///
@@ -45,6 +52,12 @@
 ///
 ///   # "Aggressive" small run — sharper discriminator, higher LR:
 ///   dart run bin/word2vec_demo.dart --max-chars=800000 --epochs=15 --window=5 --vocab-size=2048 --num-ns=8 --lr=0.01
+///
+///   # Full-corpus quality run (bigger dim, fewer epochs — avoids memorisation):
+///   dart run bin/word2vec_demo.dart --max-chars=1200000 --epochs=8 --window=5 --vocab-size=4096 --embed-dim=128 --num-ns=8 --subsample-t=1e-3
+///
+///   # Run on a free Colab / Kaggle GPU (after scripts/setup_colab.sh):
+///   dart run bin/word2vec_demo.dart --device=gpu --max-chars=1200000 --epochs=20 --embed-dim=128 --vocab-size=4096 --num-ns=8 --batch=1024
 library;
 
 import 'dart:io';
@@ -72,8 +85,9 @@ class _Config {
   double lr = 5e-3;
   int numNs = 4;
   int windowSize = 2;
-  double subsampleT = 1e-5;
+  double subsampleT = 1e-3;
   int seed = 42;
+  Device device = Device.CPU;
   List<String> queries = const [
     'king',
     'queen',
@@ -109,8 +123,20 @@ _Config _parseArgs(List<String> args) {
         c.numNs = int.parse(v);
       case 'window':
         c.windowSize = int.parse(v);
+      case 'subsample-t':
+        c.subsampleT = double.parse(v);
       case 'queries':
         c.queries = v.split(',').where((s) => s.isNotEmpty).toList();
+      case 'device':
+        switch (v.toLowerCase()) {
+          case 'cpu':
+            c.device = Device.CPU;
+          case 'gpu' || 'cuda':
+            c.device = Device.GPU;
+          default:
+            stderr.writeln('word2vec_demo: --device must be cpu or gpu');
+            exit(2);
+        }
       default:
         stderr.writeln('word2vec_demo: unknown flag --$k');
         exit(2);
@@ -327,7 +353,7 @@ Tensor _batchLogits(Tensor target, Tensor context, Tensor onesD) {
   final repIdx = Tensor.fromList(
     [b * c],
     List<double>.generate(b * c, (bc) => (bc ~/ c).toDouble()),
-    device: Device.CPU,
+    device: target.device,
   );
   final tgtRep = target.embedding(repIdx); // [B*C, D]
   final ctxFlat = context.reshape([b * c, d]); // [B*C, D]
@@ -394,7 +420,7 @@ void main(List<String> args) {
   final keepProb = _keepProb(vocab, cfg.subsampleT);
   print(
     'Generating skip-gram pairs (window=${cfg.windowSize}, '
-    'numNs=${cfg.numNs})...',
+    'numNs=${cfg.numNs}, subsampleT=${cfg.subsampleT})...',
   );
   final triples = _makeSkipGramData(
     sequences,
@@ -415,16 +441,27 @@ void main(List<String> args) {
   }
 
   // ---- Model ----
-  final targetEmb = Embedding(vocab.size, cfg.embedDim, seed: cfg.seed);
-  final ctxEmb = Embedding(vocab.size, cfg.embedDim, seed: cfg.seed + 1);
+  print('Device: ${cfg.device}');
+  final targetEmb = Embedding(
+    vocab.size,
+    cfg.embedDim,
+    seed: cfg.seed,
+    device: cfg.device,
+  );
+  final ctxEmb = Embedding(
+    vocab.size,
+    cfg.embedDim,
+    seed: cfg.seed + 1,
+    device: cfg.device,
+  );
   final params = [...targetEmb.parameters(), ...ctxEmb.parameters()];
   final opt = Adam(params, lr: cfg.lr);
 
-  final onesD = Tensor.fill([cfg.embedDim, 1], 1.0, device: Device.CPU);
+  final onesD = Tensor.fill([cfg.embedDim, 1], 1.0, device: cfg.device);
   final zeroTargets = Tensor.fromList(
     [cfg.batchSize],
     List<double>.filled(cfg.batchSize, 0.0),
-    device: Device.CPU,
+    device: cfg.device,
   );
 
   // ---- Train ----
@@ -454,12 +491,12 @@ void main(List<String> args) {
       final tgtIds = Tensor.fromList(
         [cfg.batchSize],
         tgtBuf,
-        device: Device.CPU,
+        device: cfg.device,
       );
       final ctxIds = Tensor.fromList(
         [cfg.batchSize, 1 + cfg.numNs],
         ctxBuf,
-        device: Device.CPU,
+        device: cfg.device,
       );
 
       opt.zeroGrad();
