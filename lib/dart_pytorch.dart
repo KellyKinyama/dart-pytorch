@@ -41,6 +41,8 @@ export 'core/nn/modalities/multi_modal_generator.dart';
 export 'core/nn/modalities/multi_modal_lm.dart';
 export 'core/nn/muzero_lm.dart';
 export 'core/nn/serialize.dart';
+export 'core/coop/param_avg.dart';
+export 'core/coop/shard.dart';
 export 'core/optim/optimizer.dart';
 export 'core/optim/sgd.dart';
 export 'core/optim/adam.dart';

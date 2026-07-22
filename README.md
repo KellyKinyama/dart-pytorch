@@ -113,6 +113,13 @@ recipe that runs on a free Google Colab, Kaggle, Paperspace, or
 Lightning AI GPU. `scripts/setup_colab.sh` handles the whole install +
 nvcc build in one command.
 
+**Have friends with GPUs, or want to pool donated compute?** See
+[docs/coop-training.md](docs/coop-training.md) for three cooperative
+training modes (single-process replicas, HTTP coordinator + workers,
+peer-to-peer gossip). All three use DiLoCo-style periodic parameter
+averaging so one full model shipment every `K` local steps is enough
+bandwidth for training over slow / free internet links.
+
 ## Run the tests
 
 ```bash
