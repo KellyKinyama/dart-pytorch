@@ -1,8 +1,10 @@
-/// Run the HF GPT-2 **xl** demo (1.5 B params, ~6 GB fp32).
+/// Run the HF GPT-2 **xl** demo on the **GPU** (1.5 B params).
 ///
-/// This preset is memory-heavy: 6 GB just for weights and several
-/// more for activations. On a 6 GB GPU it will not fit in fp32 —
-/// use CPU with plenty of RAM (16 GB+ recommended).
+/// Same as `run.dart`, but builds the `GPT` with `device: Device.GPU`.
+///
+/// **Will not fit in a 6 GB GPU** at fp32 — weights alone are ~6 GB,
+/// activations push you well past 10 GB. Use CPU with plenty of RAM
+/// for this preset, or wait for fp16/int8 support.
 ///
 /// ```sh
 ///   cd /mnt/c/Users/kkinyama/dart-pytorch
@@ -12,7 +14,7 @@
 ///     https://huggingface.co/gpt2-xl/resolve/main/model.safetensors
 ///   curl -L -o models/gpt2-xl/vocab.json \
 ///     https://huggingface.co/gpt2-xl/resolve/main/vocab.json
-///   dart run bin/gpt2/xl/run.dart
+///   dart run bin/gpt2/xl/run_gpu.dart
 /// ```
 ///
 /// Optional: pass a custom safetensors path as the first argument,
@@ -24,8 +26,10 @@ import 'package:dart_pytorch/dart_pytorch.dart';
 import '../../_gpt2_hf_demo_common.dart';
 
 void main(List<String> args) {
-  final path = args.isNotEmpty
-      ? args.first
-      : 'models/gpt2-xl/model.safetensors';
-  runGpt2Demo(path: path, cfg: GPT2HFLoader.gpt2XLConfig(), sizeLabel: 'xl');
+  final path = args.isNotEmpty ? args.first : 'models/gpt2-xl/model.safetensors';
+  runGpt2Demo(
+    path: path,
+    cfg: GPT2HFLoader.gpt2XLConfig(device: Device.GPU),
+    sizeLabel: 'xl (gpu)',
+  );
 }
