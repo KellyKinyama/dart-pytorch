@@ -29,6 +29,7 @@ class RopeCache {
   RopeCache._(
     this.maxCtx,
     this.headDim,
+    this.rotaryDim,
     this.base,
     this._cosPerPos,
     this._sinPerPos,
@@ -38,6 +39,11 @@ class RopeCache {
 
   final int maxCtx;
   final int headDim;
+
+  /// Number of leading dimensions of each head that receive RoPE.
+  /// For GPT-NeoX / Pythia this is `headDim * rotary_pct` (0.25 for
+  /// 160m / 410m; 1.0 for LLaMA-style full rotation).
+  final int rotaryDim;
   final double base;
   final Device device;
 
@@ -50,47 +56,71 @@ class RopeCache {
   final List<Tensor> _sinPerPos;
 
   /// Permutation-with-sign matrix P of shape `[headDim, headDim]`
-  /// such that `q @ P == rotate_half(q)`.
+  /// such that `q @ P == rotate_half(q_rot) ⊕ 0_pass` where q_rot is
+  /// the first `rotaryDim` cols of q and q_pass the rest. In the
+  /// full-rotation case (`rotaryDim == headDim`) this reduces to
+  /// the plain rotate_half matrix.
   final Tensor _rotateHalfP;
 
   /// Build tables for positions `[0, maxCtx)` and head-dim `headDim`
   /// (must be even). `base` is the geometric-progression base for the
   /// frequency schedule (10000 for GPT-NeoX / Pythia; the same in
-  /// LLaMA/Mistral).
+  /// LLaMA/Mistral). `rotaryDim` defaults to the full `headDim`;
+  /// pass a smaller even number to only rotate a prefix of each
+  /// head (GPT-NeoX rotary_pct convention).
   factory RopeCache({
     required int maxCtx,
     required int headDim,
+    int? rotaryDim,
     double base = 10000.0,
     Device device = Device.CPU,
   }) {
     if (headDim.isOdd) {
       throw ArgumentError('RopeCache: headDim ($headDim) must be even');
     }
-    final halfD = headDim ~/ 2;
+    final rDim = rotaryDim ?? headDim;
+    if (rDim.isOdd) {
+      throw ArgumentError('RopeCache: rotaryDim ($rDim) must be even');
+    }
+    if (rDim <= 0 || rDim > headDim) {
+      throw ArgumentError(
+        'RopeCache: rotaryDim ($rDim) must be in (0, $headDim]',
+      );
+    }
+    final halfR = rDim ~/ 2;
 
-    // Inverse frequencies: shape [halfD].
+    // Inverse frequencies: shape [halfR]. Note the divisor is
+    // `rDim` (not headDim) — matches HF GPT-NeoX which passes
+    // rotary_ndims as the "dim" arg to RotaryEmbedding.
     final invFreq = List<double>.generate(
-      halfD,
-      (i) => 1.0 / math.pow(base, 2.0 * i / headDim),
+      halfR,
+      (i) => 1.0 / math.pow(base, 2.0 * i / rDim),
     );
 
     // For each position m, build a [headDim] vector of cos/sin values
-    // laid out as [cos(m*f_0)..cos(m*f_{halfD-1}) | cos(m*f_0)..cos(m*f_{halfD-1})]
-    // (i.e. the halves are duplicated, matching GPT-NeoX's einsum +
-    // torch.cat convention).
+    // laid out as:
+    //   cos: [cos(m*f_0)..cos(m*f_{halfR-1}) | cos(m*f_0)..cos(m*f_{halfR-1}) | 1..1]
+    //   sin: [sin(m*f_0)..sin(m*f_{halfR-1}) | sin(m*f_0)..sin(m*f_{halfR-1}) | 0..0]
+    // The trailing `headDim - rDim` slots ensure the pass-through
+    // dims are multiplied by 1 (cos) / 0 (sin), leaving them
+    // unrotated in the formula q*cos + rotate_half(q)*sin.
     final cosPerPos = <Tensor>[];
     final sinPerPos = <Tensor>[];
     for (int m = 0; m < maxCtx; m++) {
       final cRow = Float64List(headDim);
       final sRow = Float64List(headDim);
-      for (int j = 0; j < halfD; j++) {
+      for (int j = 0; j < halfR; j++) {
         final ang = m * invFreq[j];
         final c = math.cos(ang);
         final s = math.sin(ang);
         cRow[j] = c;
-        cRow[j + halfD] = c;
+        cRow[j + halfR] = c;
         sRow[j] = s;
-        sRow[j + halfD] = s;
+        sRow[j + halfR] = s;
+      }
+      for (int j = rDim; j < headDim; j++) {
+        cRow[j] = 1.0;
+        // sRow[j] already 0.0 from Float64List default.
       }
       cosPerPos.add(
         Tensor.fromList([1, headDim], cRow.toList(), device: device),
@@ -100,19 +130,21 @@ class RopeCache {
       );
     }
 
-    // rotate_half([a | b]) = [-b | a]. Encode as a matmul:
-    // P has shape [headDim, headDim] where P[i, j] is 1 or -1 iff the
-    // output column j sources input column i.
-    //   * for j in [0, halfD):   out_j = -in_{j + halfD}
-    //     -> P[j + halfD, j] = -1
-    //   * for j in [halfD, headDim): out_j = in_{j - halfD}
-    //     -> P[j - halfD, j] = 1
+    // rotate_half([a | b | pass]) = [-b | a | 0]. Encode as a matmul:
+    // P has shape [headDim, headDim] where P[i, j] tells the output
+    // column j to source input column i.
+    //   * for j in [0, halfR):      out_j = -in_{j + halfR}
+    //     -> P[j + halfR, j] = -1
+    //   * for j in [halfR, rDim):   out_j = in_{j - halfR}
+    //     -> P[j - halfR, j] = 1
+    //   * for j in [rDim, headDim): out_j = 0
+    // The last block is left zero (multiplied by sin==0 anyway).
     final pData = Float64List(headDim * headDim);
-    for (int j = 0; j < halfD; j++) {
-      pData[(j + halfD) * headDim + j] = -1.0;
+    for (int j = 0; j < halfR; j++) {
+      pData[(j + halfR) * headDim + j] = -1.0;
     }
-    for (int j = halfD; j < headDim; j++) {
-      pData[(j - halfD) * headDim + j] = 1.0;
+    for (int j = halfR; j < rDim; j++) {
+      pData[(j - halfR) * headDim + j] = 1.0;
     }
     final rotateHalfP = Tensor.fromList(
       [headDim, headDim],
@@ -123,6 +155,7 @@ class RopeCache {
     return RopeCache._(
       maxCtx,
       headDim,
+      rDim,
       base,
       cosPerPos,
       sinPerPos,

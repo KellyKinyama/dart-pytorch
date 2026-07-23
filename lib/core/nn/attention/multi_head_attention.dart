@@ -13,6 +13,7 @@ import '../dropout.dart';
 import '../kv_cache.dart';
 import '../linear.dart';
 import '../module.dart';
+import '../rotary.dart';
 
 class MultiHeadAttention extends Module {
   final int embedDim;
@@ -23,6 +24,14 @@ class MultiHeadAttention extends Module {
   final List<Linear> wv;
   final Linear wo;
   final Dropout? attnDropout;
+
+  /// Optional rotary positional embedding cache. When non-null,
+  /// [call] applies RoPE to Q and K per head after their linear
+  /// projections and before the SDPA. The `startPos` argument to
+  /// [call] tells RoPE the absolute position of the first Q/K row
+  /// (matters for KV-cache generation, where each appended token
+  /// sits at a new absolute position).
+  RopeCache? rope;
 
   MultiHeadAttention(
     this.embedDim,
@@ -96,7 +105,7 @@ class MultiHeadAttention extends Module {
   ///
   /// Batched input (`shape.length == 3`) does not support `cache` —
   /// KV caching is inherently per-sequence.
-  Tensor call(Tensor x, {Tensor? mask, MHACache? cache}) {
+  Tensor call(Tensor x, {Tensor? mask, MHACache? cache, int startPos = 0}) {
     final isBatched = x.shape.length == 3;
     if (isBatched && cache != null) {
       throw ArgumentError(
@@ -111,6 +120,12 @@ class MultiHeadAttention extends Module {
         'grown K/V)',
       );
     }
+    if (isBatched && rope != null) {
+      throw ArgumentError(
+        'MultiHeadAttention: RoPE not supported for batched (3D) '
+        'inputs; use the 2D single-sequence path.',
+      );
+    }
 
     if (isBatched) {
       return _callBatched(x, mask: mask);
@@ -118,9 +133,13 @@ class MultiHeadAttention extends Module {
 
     final heads = <Tensor>[];
     for (int h = 0; h < numHeads; h++) {
-      final q = wq[h](x);
+      var q = wq[h](x);
       var k = wk[h](x);
       var v = wv[h](x);
+      if (rope != null) {
+        q = rope!.apply(q, startPos: startPos);
+        k = rope!.apply(k, startPos: startPos);
+      }
       if (cache != null) {
         k = cache.appendK(h, k);
         v = cache.appendV(h, v);

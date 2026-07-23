@@ -239,13 +239,38 @@ class SafeTensors {
           data[i] = _decodeBF16(view.getUint16(i * 2, Endian.little));
         }
         break;
+      case 'U8':
+      case 'BOOL':
+      case 'I8':
+        // Byte-wide integer / boolean tensors. HF PyTorch stores
+        // causal-mask buffers this way (`attention.bias`). Decode
+        // to float so we can round-trip the entry, but note our
+        // loaders never consume these — they build masks on the
+        // fly and leave the entry in `unusedKeys`.
+        if (byteLen != n) {
+          throw ArgumentError(
+            'safetensors: "${e.name}" ${e.dtype} expected $n bytes, got '
+            '$byteLen',
+          );
+        }
+        for (int i = 0; i < n; i++) {
+          final b = view.getUint8(i);
+          data[i] = e.dtype == 'I8' && b >= 0x80
+              ? (b - 0x100).toDouble()
+              : b.toDouble();
+        }
+        break;
       default:
         throw ArgumentError(
           'safetensors: unsupported dtype "${e.dtype}" for entry '
-          '"${e.name}" (supported: F32, F64, F16, BF16)',
+          '"${e.name}" (supported: F32, F64, F16, BF16, U8, BOOL, I8)',
         );
     }
-    return Tensor.fromList(e.shape, data, device: Device.CPU);
+    return Tensor.fromList(
+      e.shape.isEmpty ? const [1] : e.shape,
+      data,
+      device: Device.CPU,
+    );
   }
 
   /// IEEE-754 half-precision → single-precision decode.

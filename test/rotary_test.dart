@@ -93,7 +93,10 @@ void main() {
 
     test('rejects out-of-range window', () {
       final rope = RopeCache(maxCtx: 4, headDim: 4);
-      final q = Tensor.fromList([3, 4], [1.0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+      final q = Tensor.fromList(
+        [3, 4],
+        [1.0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+      );
       expect(() => rope.apply(q, startPos: 2), throwsArgumentError);
     });
   });
