@@ -250,8 +250,11 @@ void main() {
       final lb = hybrid(tokens).toList();
       expect(la.length, lb.length);
       for (int i = 0; i < la.length; i++) {
-        expect((la[i] - lb[i]).abs(), lessThan(1e-6),
-            reason: 'logit[$i] mismatch');
+        expect(
+          (la[i] - lb[i]).abs(),
+          lessThan(1e-6),
+          reason: 'logit[$i] mismatch',
+        );
       }
     });
 

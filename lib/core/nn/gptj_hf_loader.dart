@@ -60,19 +60,17 @@ class GPTJHFLoader {
   /// EleutherAI/gpt-j-6B. 28 layers, 4096 embed, 16 heads (headDim=256),
   /// rotary_dim=64, ffn=16384, vocab=50400, ctx=2048. ~24 GB fp32
   /// weights, ~12 GB fp16.
-  static GPTJConfig gptJ6bConfig({
-    Device device = Device.CPU,
-    int seed = 0,
-  }) => GPTJConfig(
-    vocabSize: 50400,
-    maxCtx: 2048,
-    embedDim: 4096,
-    numLayers: 28,
-    numHeads: 16,
-    rotaryDim: 64,
-    device: device,
-    seed: seed,
-  );
+  static GPTJConfig gptJ6bConfig({Device device = Device.CPU, int seed = 0}) =>
+      GPTJConfig(
+        vocabSize: 50400,
+        maxCtx: 2048,
+        embedDim: 4096,
+        numLayers: 28,
+        numHeads: 16,
+        rotaryDim: 64,
+        device: device,
+        seed: seed,
+      );
 
   /// Hybrid split preset for GPT-J-6B: place the first [gpuLayers]
   /// transformer blocks on GPU, the remaining `28 - gpuLayers` blocks
@@ -239,9 +237,7 @@ class GPTJHFLoader {
     );
     _copy(
       model.finalLn.beta,
-      _expectShape(take('transformer.ln_f.bias'), [
-        d,
-      ], 'transformer.ln_f.bias'),
+      _expectShape(take('transformer.ln_f.bias'), [d], 'transformer.ln_f.bias'),
     );
 
     // Untied output head (with bias!).
@@ -370,10 +366,7 @@ class GPTJLoadReport {
   final int consumedCount;
   final List<String> unusedKeys;
 
-  const GPTJLoadReport({
-    required this.consumedCount,
-    required this.unusedKeys,
-  });
+  const GPTJLoadReport({required this.consumedCount, required this.unusedKeys});
 
   @override
   String toString() =>

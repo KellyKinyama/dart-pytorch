@@ -17,10 +17,7 @@ import 'package:dart_pytorch/dart_pytorch.dart';
 Future<void> runGPTJApi({
   required String modelName,
   required String defaultPath,
-  required GPTJConfig Function({
-    required Device device,
-    int? gpuLayers,
-  })
+  required GPTJConfig Function({required Device device, int? gpuLayers})
   configFactory,
   required List<String> args,
 }) async {
