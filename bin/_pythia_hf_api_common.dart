@@ -37,6 +37,7 @@ class _Options {
   final String defaultPath;
   String path;
   String? vocabPath; // HF tokenizer.json
+  String? promptText; // if set, tokenizer.encode() takes priority
   List<double> prompt = <double>[510, 973, 310]; // "The world is" via GPT-NeoX
   int maxNewTokens = 20;
   double temperature = 0.0;
@@ -80,6 +81,9 @@ _Options _parseArgs(
             .map(double.parse)
             .toList();
         i++;
+      case '--text':
+        o.promptText = need(i, a);
+        i++;
       case '--max-tokens':
         o.maxNewTokens = int.parse(need(i, a));
         i++;
@@ -122,8 +126,9 @@ void _printUsage(String modelName, String defaultPath, IOSink out) {
   out.writeln('');
   out.writeln('Flags:');
   out.writeln('  --path PATH          safetensors file (default $defaultPath)');
-  out.writeln('  --vocab PATH         HF tokenizer.json for pretty-printing');
+  out.writeln('  --vocab PATH         HF tokenizer.json (encode + decode)');
   out.writeln('  --prompt IDS         comma-separated BPE token ids');
+  out.writeln('  --text  STR          prompt as text (BPE-encoded, needs tokenizer.json)');
   out.writeln('  --max-tokens N       new tokens to generate (default 20)');
   out.writeln('  --temperature T      0 = greedy (default 0.0)');
   out.writeln('  --top-k K            0 = disabled (default 0)');
@@ -140,10 +145,10 @@ void _printUsage(String modelName, String defaultPath, IOSink out) {
 // ---------------------------------------------------------------------------
 
 class _Loaded {
-  _Loaded(this.model, this.cfg, this.idToTok, this.modelPath, this.deviceLabel);
+  _Loaded(this.model, this.cfg, this.tok, this.modelPath, this.deviceLabel);
   final PythiaModel model;
   final PythiaConfig cfg;
-  final Map<int, String>? idToTok;
+  final HFBpeTokenizer? tok;
   final String modelPath;
   final String deviceLabel;
 }
@@ -174,49 +179,24 @@ _Loaded _buildAndLoad(
   stdout.writeln('Loaded in ${dt.inMilliseconds} ms. $report');
 
   final vocabPath = o.vocabPath ?? '${File(o.path).parent.path}/tokenizer.json';
-  Map<int, String>? idToTok;
+  HFBpeTokenizer? tok;
   if (File(vocabPath).existsSync()) {
-    stdout.writeln('Decoding token ids using $vocabPath');
-    idToTok = _loadTokenizerJsonVocab(vocabPath);
+    stdout.writeln('Loading BPE tokenizer from $vocabPath');
+    try {
+      tok = HFBpeTokenizer.loadFile(vocabPath);
+    } catch (e) {
+      stderr.writeln('tokenizer.json parse failed: $e');
+    }
   } else {
     stdout.writeln(
-      '(no tokenizer.json at $vocabPath — token strings unavailable)',
+      '(no tokenizer.json at $vocabPath — text encode/decode disabled)',
     );
   }
-  return _Loaded(model, cfg, idToTok, o.path, deviceLabel);
+  return _Loaded(model, cfg, tok, o.path, deviceLabel);
 }
 
-Map<int, String>? _loadTokenizerJsonVocab(String path) {
-  try {
-    final raw =
-        jsonDecode(File(path).readAsStringSync()) as Map<String, dynamic>;
-    final model = raw['model'] as Map<String, dynamic>?;
-    if (model == null) return null;
-    final vocab = model['vocab'];
-    if (vocab is! Map) return null;
-    final out = <int, String>{};
-    vocab.forEach((k, v) {
-      if (v is num) out[v.toInt()] = k.toString();
-    });
-    return out;
-  } catch (e) {
-    stderr.writeln('tokenizer.json parse failed: $e');
-    return null;
-  }
-}
-
-String _decode(Map<int, String>? idToTok, List<int> ids) {
-  if (idToTok == null) return '';
-  final sb = StringBuffer();
-  for (final id in ids) {
-    final s = idToTok[id];
-    if (s == null) continue;
-    // GPT-NeoX BPE uses 'Ġ' (U+0120) for leading space and 'Ċ' (U+010A)
-    // for newline — same convention as GPT-2 BPE.
-    sb.write(s.replaceAll('\u0120', ' ').replaceAll('\u010A', '\n'));
-  }
-  return sb.toString();
-}
+String _decode(HFBpeTokenizer? tok, List<int> ids) =>
+    tok == null ? '' : tok.decode(ids);
 
 class _GenRequest {
   _GenRequest({
@@ -267,7 +247,7 @@ _GenResult _runGeneration(_Loaded m, _GenRequest req) {
   final ids = gen.map((d) => d.toInt()).toList();
   final promptLen = req.tokens.length;
   final newIds = ids.sublist(promptLen);
-  final text = _decode(m.idToTok, ids);
+  final text = _decode(m.tok, ids);
   return _GenResult(
     ids,
     newIds,
@@ -281,16 +261,17 @@ _GenResult _runGeneration(_Loaded m, _GenRequest req) {
 // ---------------------------------------------------------------------------
 
 void _runOnce(_Loaded m, _Options o) {
+  final prompt = _resolvePrompt(m, o);
   stdout.writeln('');
   stdout.writeln(
-    'Generating: prompt=${o.prompt.map((d) => d.toInt()).toList()} '
+    'Generating: prompt=${prompt.map((d) => d.toInt()).toList()} '
     'max=${o.maxNewTokens} temp=${o.temperature} topK=${o.topK} '
     'seed=${o.seed ?? "none"} cache=${o.useCache}',
   );
   final res = _runGeneration(
     m,
     _GenRequest(
-      tokens: o.prompt,
+      tokens: prompt,
       maxNewTokens: o.maxNewTokens,
       temperature: o.temperature,
       topK: o.topK,
@@ -299,10 +280,26 @@ void _runOnce(_Loaded m, _Options o) {
     ),
   );
   stdout.writeln('  ids : ${res.tokens}');
-  if (m.idToTok != null) {
+  if (m.tok != null) {
     stdout.writeln('  text: "${res.text}"');
   }
   stdout.writeln('  ${res.elapsedMs} ms for ${res.newTokens.length} tokens');
+}
+
+List<double> _resolvePrompt(_Loaded m, _Options o) {
+  if (o.promptText != null) {
+    if (m.tok == null) {
+      stderr.writeln('--text supplied but no tokenizer.json loaded');
+      exit(65);
+    }
+    final ids = m.tok!.encode(o.promptText!);
+    if (ids.isEmpty) {
+      stderr.writeln('--text tokenized to zero ids');
+      exit(65);
+    }
+    return ids.map((i) => i.toDouble()).toList();
+  }
+  return o.prompt;
 }
 
 // ---------------------------------------------------------------------------
@@ -370,20 +367,36 @@ Future<void> _handle(_Loaded m, HttpRequest req, String modelName) async {
     final Map<String, dynamic> json = (jsonDecode(body) as Map)
         .cast<String, dynamic>();
     final rawTokens = (json['tokens'] as List?) ?? const [];
-    if (rawTokens.isEmpty) {
-      writeJson(400, {'error': 'field "tokens" is required and non-empty'});
+    final textField = json['text'] as String?;
+    List<double> tokens;
+    if (textField != null && textField.isNotEmpty) {
+      if (m.tok == null) {
+        writeJson(400, {
+          'error': 'field "text" supplied but no tokenizer.json loaded',
+        });
+        await req.response.close();
+        return;
+      }
+      tokens = m.tok!.encode(textField).map((i) => i.toDouble()).toList();
+    } else if (rawTokens.isNotEmpty) {
+      tokens = rawTokens.map((e) => (e as num).toDouble()).toList();
     } else {
-      final gr = _GenRequest(
-        tokens: rawTokens.map((e) => (e as num).toDouble()).toList(),
-        maxNewTokens: (json['maxNewTokens'] as num?)?.toInt() ?? 20,
-        temperature: (json['temperature'] as num?)?.toDouble() ?? 0.0,
-        topK: (json['topK'] as num?)?.toInt() ?? 0,
-        seed: (json['seed'] as num?)?.toInt(),
-        useCache: (json['useCache'] as bool?) ?? true,
-      );
-      final res = _runGeneration(m, gr);
-      writeJson(200, res.toJson());
+      writeJson(400, {
+        'error': 'either "text" or non-empty "tokens" is required',
+      });
+      await req.response.close();
+      return;
     }
+    final gr = _GenRequest(
+      tokens: tokens,
+      maxNewTokens: (json['maxNewTokens'] as num?)?.toInt() ?? 20,
+      temperature: (json['temperature'] as num?)?.toDouble() ?? 0.0,
+      topK: (json['topK'] as num?)?.toInt() ?? 0,
+      seed: (json['seed'] as num?)?.toInt(),
+      useCache: (json['useCache'] as bool?) ?? true,
+    );
+    final res = _runGeneration(m, gr);
+    writeJson(200, res.toJson());
   } else {
     writeJson(404, {'error': 'not found: $method $path'});
   }
