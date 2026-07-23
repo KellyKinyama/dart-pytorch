@@ -96,6 +96,21 @@ class PythiaHFLoader {
     seed: seed,
   );
 
+  /// Pythia-1b. Vocab 50304, ctx 2048, 16 layers, embed 2048,
+  /// 8 heads (headDim=256, rotaryDim=64). ~3.3 GB fp32 weights.
+  static PythiaConfig pythia1bConfig({
+    Device device = Device.CPU,
+    int seed = 0,
+  }) => PythiaConfig(
+    vocabSize: 50304,
+    maxCtx: 2048,
+    embedDim: 2048,
+    numLayers: 16,
+    numHeads: 8,
+    device: device,
+    seed: seed,
+  );
+
   static PythiaLoadReport loadFile(PythiaModel model, String path) {
     final state = SafeTensors.loadFile(path);
     return loadMap(model, state);

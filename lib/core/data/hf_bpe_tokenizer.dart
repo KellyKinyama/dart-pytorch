@@ -68,7 +68,8 @@ class HFBpeTokenizer {
 
   /// Load from a `tokenizer.json` on disk.
   factory HFBpeTokenizer.loadFile(String path) {
-    final raw = jsonDecode(File(path).readAsStringSync()) as Map<String, dynamic>;
+    final raw =
+        jsonDecode(File(path).readAsStringSync()) as Map<String, dynamic>;
     return HFBpeTokenizer.fromJson(raw);
   }
 
@@ -89,7 +90,8 @@ class HFBpeTokenizer {
       throw ArgumentError('tokenizer.json: missing "model.vocab"');
     }
     final vocab = <String, int>{
-      for (final e in rawVocab.entries) e.key.toString(): (e.value as num).toInt(),
+      for (final e in rawVocab.entries)
+        e.key.toString(): (e.value as num).toInt(),
     };
     final rawMerges = model['merges'];
     if (rawMerges is! List) {

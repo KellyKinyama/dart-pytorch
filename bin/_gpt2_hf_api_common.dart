@@ -134,9 +134,13 @@ void _printUsage(String modelName, String defaultPath, IOSink out) {
   out.writeln('');
   out.writeln('Flags:');
   out.writeln('  --path PATH          safetensors file (default $defaultPath)');
-  out.writeln('  --vocab PATH         tokenizer.json or vocab.json (encode + decode)');
+  out.writeln(
+    '  --vocab PATH         tokenizer.json or vocab.json (encode + decode)',
+  );
   out.writeln('  --prompt IDS         comma-separated BPE token ids');
-  out.writeln('  --text  STR          prompt as text (BPE-encoded, needs tokenizer.json)');
+  out.writeln(
+    '  --text  STR          prompt as text (BPE-encoded, needs tokenizer.json)',
+  );
   out.writeln('  --max-tokens N       new tokens to generate (default 20)');
   out.writeln('  --temperature T      0 = greedy (default 0.0)');
   out.writeln('  --top-k K            0 = disabled (default 0)');
@@ -221,8 +225,9 @@ _Loaded _buildAndLoad(
   }
   if (tok == null && File(vocabJsonPath).existsSync()) {
     stdout.writeln('Decoding token ids using $vocabJsonPath');
-    final raw = jsonDecode(File(vocabJsonPath).readAsStringSync())
-        as Map<String, dynamic>;
+    final raw =
+        jsonDecode(File(vocabJsonPath).readAsStringSync())
+            as Map<String, dynamic>;
     idToTok = <int, String>{
       for (final e in raw.entries) (e.value as num).toInt(): e.key.toString(),
     };
@@ -424,7 +429,7 @@ Future<void> _handle(_Loaded m, HttpRequest req, String modelName) async {
         writeJson(400, {
           'error':
               'field "text" supplied but no tokenizer.json loaded '
-                  '(vocab.json is decode-only)',
+              '(vocab.json is decode-only)',
         });
         await req.response.close();
         return;

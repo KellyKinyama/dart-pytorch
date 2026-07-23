@@ -128,7 +128,9 @@ void _printUsage(String modelName, String defaultPath, IOSink out) {
   out.writeln('  --path PATH          safetensors file (default $defaultPath)');
   out.writeln('  --vocab PATH         HF tokenizer.json (encode + decode)');
   out.writeln('  --prompt IDS         comma-separated BPE token ids');
-  out.writeln('  --text  STR          prompt as text (BPE-encoded, needs tokenizer.json)');
+  out.writeln(
+    '  --text  STR          prompt as text (BPE-encoded, needs tokenizer.json)',
+  );
   out.writeln('  --max-tokens N       new tokens to generate (default 20)');
   out.writeln('  --temperature T      0 = greedy (default 0.0)');
   out.writeln('  --top-k K            0 = disabled (default 0)');
