@@ -74,6 +74,51 @@ class GPTJHFLoader {
     seed: seed,
   );
 
+  /// Hybrid split preset for GPT-J-6B: place the first [gpuLayers]
+  /// transformer blocks on GPU, the remaining `28 - gpuLayers` blocks
+  /// on CPU. The token embedding (`wte`) and output stack
+  /// (`ln_f` + `lm_head`) stay on CPU by default — each is ~826 MB
+  /// fp32 and doesn't leave much room for transformer blocks
+  /// alongside it on a 6 GB GPU.
+  ///
+  /// Per-block VRAM cost (fp32) is roughly
+  /// `12 * embedDim^2 * 4 bytes ≈ 805 MB`, so budget ~5 blocks max
+  /// for a 6 GB GPU (leaving room for activations, KV cache, rope
+  /// tables, and the CUDA runtime itself).
+  ///
+  /// Set [embedOnGpu] / [lmHeadOnGpu] to override the CPU default
+  /// for those pieces when you have spare VRAM.
+  static GPTJConfig gptJ6bHybridConfig({
+    required int gpuLayers,
+    bool embedOnGpu = false,
+    bool lmHeadOnGpu = false,
+    int seed = 0,
+  }) {
+    const numLayers = 28;
+    if (gpuLayers < 0 || gpuLayers > numLayers) {
+      throw ArgumentError(
+        'gptJ6bHybridConfig: gpuLayers ($gpuLayers) must be in [0, $numLayers]',
+      );
+    }
+    final layerDevices = List<Device>.generate(
+      numLayers,
+      (i) => i < gpuLayers ? Device.GPU : Device.CPU,
+    );
+    return GPTJConfig(
+      vocabSize: 50400,
+      maxCtx: 2048,
+      embedDim: 4096,
+      numLayers: numLayers,
+      numHeads: 16,
+      rotaryDim: 64,
+      device: Device.CPU, // primary/default; overridden per-block
+      layerDevices: layerDevices,
+      embeddingDevice: embedOnGpu ? Device.GPU : Device.CPU,
+      lmHeadDevice: lmHeadOnGpu ? Device.GPU : Device.CPU,
+      seed: seed,
+    );
+  }
+
   static GPTJLoadReport loadFile(GPTJModel model, String path) {
     final state = SafeTensors.loadFile(path);
     return loadMap(model, state);

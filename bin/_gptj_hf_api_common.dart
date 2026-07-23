@@ -17,7 +17,11 @@ import 'package:dart_pytorch/dart_pytorch.dart';
 Future<void> runGPTJApi({
   required String modelName,
   required String defaultPath,
-  required GPTJConfig Function({required Device device}) configFactory,
+  required GPTJConfig Function({
+    required Device device,
+    int? gpuLayers,
+  })
+  configFactory,
   required List<String> args,
 }) async {
   final o = _parseArgs(args, modelName: modelName, defaultPath: defaultPath);
@@ -46,6 +50,7 @@ class _Options {
   int? seed;
   bool useCache = true;
   bool cpu = true; // default CPU: 6B fp32 won't fit on a 6 GB GPU
+  int? gpuLayers; // hybrid split: first N transformer blocks on GPU
   bool serve = false;
   String host = '127.0.0.1';
   int port = 8080;
@@ -103,6 +108,9 @@ _Options _parseArgs(
         o.cpu = true;
       case '--gpu':
         o.cpu = false;
+      case '--gpu-layers':
+        o.gpuLayers = int.parse(need(i, a));
+        i++;
       case '--serve':
         o.serve = true;
       case '--host':
@@ -141,6 +149,9 @@ void _printUsage(String modelName, String defaultPath, IOSink out) {
   out.writeln('  --no-cache           disable KV-cache fast path');
   out.writeln('  --cpu                build the model on CPU (default)');
   out.writeln('  --gpu                build on GPU (needs ~24 GB VRAM, fp32)');
+  out.writeln(
+    '  --gpu-layers N       hybrid: first N transformer blocks on GPU, rest on CPU',
+  );
   out.writeln('  --serve              run HTTP server');
   out.writeln('  --host H             HTTP bind host (default 127.0.0.1)');
   out.writeln('  --port P             HTTP port    (default 8080)');
@@ -162,7 +173,7 @@ class _Loaded {
 _Loaded _buildAndLoad(
   _Options o,
   String modelName,
-  GPTJConfig Function({required Device device}) configFactory,
+  GPTJConfig Function({required Device device, int? gpuLayers}) configFactory,
 ) {
   final f = File(o.path);
   if (!f.existsSync()) {
@@ -170,8 +181,8 @@ _Loaded _buildAndLoad(
     exit(66);
   }
   final device = o.cpu ? Device.CPU : Device.GPU;
-  final deviceLabel = o.cpu ? 'cpu' : 'gpu';
-  final cfg = configFactory(device: device);
+  final cfg = configFactory(device: device, gpuLayers: o.gpuLayers);
+  final deviceLabel = _placementLabel(cfg);
   stdout.writeln(
     'Building GPT-J ($modelName, $deviceLabel, embed=${cfg.embedDim}, '
     'layers=${cfg.numLayers}, heads=${cfg.numHeads}, '
@@ -204,6 +215,28 @@ _Loaded _buildAndLoad(
 
 String _decode(HFBpeTokenizer? tok, List<int> ids) =>
     tok == null ? '' : tok.decode(ids);
+
+/// Compact human-readable placement string. Examples:
+///   `cpu`, `gpu`, `hybrid(gpu:0-4,cpu:5-27; embed=cpu, lm=cpu)`.
+String _placementLabel(GPTJConfig cfg) {
+  if (!cfg.hasMixedPlacement) {
+    return cfg.device == Device.GPU ? 'gpu' : 'cpu';
+  }
+  final runs = <String>[];
+  var i = 0;
+  while (i < cfg.numLayers) {
+    final d = cfg.deviceForLayer(i);
+    var j = i;
+    while (j < cfg.numLayers && cfg.deviceForLayer(j) == d) {
+      j++;
+    }
+    runs.add('${d == Device.GPU ? "gpu" : "cpu"}:$i-${j - 1}');
+    i = j;
+  }
+  final embed = cfg.embedDevice == Device.GPU ? 'gpu' : 'cpu';
+  final lm = cfg.lmDevice == Device.GPU ? 'gpu' : 'cpu';
+  return 'hybrid(${runs.join(",")}; embed=$embed, lm=$lm)';
+}
 
 class _GenRequest {
   _GenRequest({
@@ -368,6 +401,14 @@ Future<void> _handle(_Loaded m, HttpRequest req, String modelName) async {
       'maxCtx': m.cfg.maxCtx,
       'rotaryDim': m.cfg.rotaryDim,
       'ropeBase': m.cfg.ropeBase,
+      'placement': {
+        'embedding': m.cfg.embedDevice.toString(),
+        'lmHead': m.cfg.lmDevice.toString(),
+        'layers': [
+          for (int i = 0; i < m.cfg.numLayers; i++)
+            m.cfg.deviceForLayer(i).toString(),
+        ],
+      },
     });
   } else if (method == 'POST' && path == '/generate') {
     final body = await utf8.decoder.bind(req).join();

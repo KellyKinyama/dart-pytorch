@@ -36,7 +36,7 @@ Future<void> main(List<String> args) async {
   await runGPTJApi(
     modelName: 'gpt-j-6b',
     defaultPath: 'models/gpt-j-6b/model.safetensors',
-    configFactory: ({required Device device}) =>
+    configFactory: ({required Device device, int? gpuLayers}) =>
         GPTJHFLoader.gptJ6bConfig(device: device),
     args: args,
   );

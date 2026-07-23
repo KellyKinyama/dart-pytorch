@@ -93,11 +93,7 @@ void main() {
         // Ours: permute first, then half-split rotary (via RopeCache).
         final qPerm = _permuteHeadDim(qRaw, n, headDim, rDim);
         final kPerm = _permuteHeadDim(kRaw, n, headDim, rDim);
-        final rope = RopeCache(
-          maxCtx: n,
-          headDim: headDim,
-          rotaryDim: rDim,
-        );
+        final rope = RopeCache(maxCtx: n, headDim: headDim, rotaryDim: rDim);
         final qTens = Tensor.fromList([n, headDim], qPerm);
         final kTens = Tensor.fromList([n, headDim], kPerm);
         final qRot = rope.apply(qTens).toList();
@@ -121,8 +117,11 @@ void main() {
         final sJ = scores(qJ, kJ);
         final sHalf = scores(qRot, kRot);
         for (int i = 0; i < n * n; i++) {
-          expect((sJ[i] - sHalf[i]).abs(), lessThan(1e-6),
-              reason: 'score[$i] mismatch: GPT-J=${sJ[i]}, ours=${sHalf[i]}');
+          expect(
+            (sJ[i] - sHalf[i]).abs(),
+            lessThan(1e-6),
+            reason: 'score[$i] mismatch: GPT-J=${sJ[i]}, ours=${sHalf[i]}',
+          );
         }
       },
     );
@@ -167,18 +166,110 @@ void main() {
         seed: 42,
       );
       final m = GPTJModel(cfg);
-      final a = m.generate(
-        [1.0, 2.0, 3.0],
-        maxNewTokens: 4,
-        temperature: 0.0,
-      );
-      final b = m.generate(
-        [1.0, 2.0, 3.0],
-        maxNewTokens: 4,
-        temperature: 0.0,
-      );
+      final a = m.generate([1.0, 2.0, 3.0], maxNewTokens: 4, temperature: 0.0);
+      final b = m.generate([1.0, 2.0, 3.0], maxNewTokens: 4, temperature: 0.0);
       expect(a, b);
       expect(a.length, 7);
+    });
+  });
+
+  group('GPT-J hybrid placement', () {
+    test('gptJ6bHybridConfig builds correct layerDevices layout', () {
+      final c = GPTJHFLoader.gptJ6bHybridConfig(gpuLayers: 5);
+      expect(c.hasMixedPlacement, isTrue);
+      expect(c.embedDevice, Device.CPU);
+      expect(c.lmDevice, Device.CPU);
+      for (int i = 0; i < c.numLayers; i++) {
+        expect(
+          c.deviceForLayer(i),
+          i < 5 ? Device.GPU : Device.CPU,
+          reason: 'layer $i placement wrong',
+        );
+      }
+    });
+
+    test('gpuLayers out of range throws', () {
+      expect(
+        () => GPTJHFLoader.gptJ6bHybridConfig(gpuLayers: -1),
+        throwsArgumentError,
+      );
+      expect(
+        () => GPTJHFLoader.gptJ6bHybridConfig(gpuLayers: 29),
+        throwsArgumentError,
+      );
+    });
+
+    test('layerDevices with wrong length rejected', () {
+      expect(
+        () => GPTJConfig(
+          vocabSize: 16,
+          maxCtx: 8,
+          embedDim: 8,
+          numLayers: 4,
+          numHeads: 2,
+          rotaryDim: 2,
+          layerDevices: [Device.CPU, Device.CPU], // wrong length
+        ),
+        throwsArgumentError,
+      );
+    });
+
+    test('hybrid-on-CPU model matches uniform-CPU model bit-exactly', () {
+      // Both layerDevices=all-CPU and no layerDevices at all should
+      // produce identical logits, since we're just exercising the
+      // extra `.to()` machinery (which no-ops when devices match).
+      GPTJConfig makeCfg({List<Device>? layerDevices}) => GPTJConfig(
+        vocabSize: 16,
+        maxCtx: 8,
+        embedDim: 8,
+        numLayers: 4,
+        numHeads: 2,
+        rotaryDim: 2,
+        seed: 11,
+        layerDevices: layerDevices,
+      );
+      final uniform = GPTJModel(makeCfg());
+      final hybrid = GPTJModel(
+        makeCfg(layerDevices: List.filled(4, Device.CPU)),
+      );
+      // Copy parameters from uniform → hybrid so both models are
+      // numerically identical (constructor seeds are the same, but
+      // parameter initialisation with `.hasMixedPlacement=true` may
+      // walk different rope-cache-per-device paths — copying is the
+      // safe way to isolate the forward-path check).
+      final ups = uniform.parameters();
+      final hps = hybrid.parameters();
+      expect(ups.length, hps.length);
+      for (int i = 0; i < ups.length; i++) {
+        hps[i].assign(
+          Tensor.fromList(ups[i].shape, ups[i].toList(), device: hps[i].device),
+        );
+      }
+      final tokens = Tensor.fromList([3], [0, 1, 2]);
+      final la = uniform(tokens).toList();
+      final lb = hybrid(tokens).toList();
+      expect(la.length, lb.length);
+      for (int i = 0; i < la.length; i++) {
+        expect((la[i] - lb[i]).abs(), lessThan(1e-6),
+            reason: 'logit[$i] mismatch');
+      }
+    });
+
+    test('model builds one rope cache per distinct device', () {
+      final cfg = GPTJConfig(
+        vocabSize: 16,
+        maxCtx: 8,
+        embedDim: 8,
+        numLayers: 4,
+        numHeads: 2,
+        rotaryDim: 2,
+        seed: 1,
+        layerDevices: [Device.CPU, Device.CPU, Device.CPU, Device.CPU],
+      );
+      final m = GPTJModel(cfg);
+      // All layers on CPU → exactly one rope cache.
+      expect(m.ropeByDevice.length, 1);
+      expect(m.ropeByDevice.containsKey(Device.CPU), isTrue);
     });
   });
 }

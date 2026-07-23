@@ -60,6 +60,25 @@ class GPTJConfig {
   final int rotaryDim; // 64 for GPT-J 6B
   final double ropeBase; // 10000 for GPT-J
   final Device device;
+
+  /// Optional per-block device override. When non-null, its length
+  /// must equal [numLayers] and `layerDevices[i]` places transformer
+  /// block `i` (its LayerNorm, attention, and MLP weights) on that
+  /// device. Activations are moved between devices at block
+  /// boundaries via `Tensor.to()`. When null, every block uses
+  /// [device].
+  final List<Device>? layerDevices;
+
+  /// Optional override for the token embedding table (`wte`). Falls
+  /// back to [device] when null. Useful for hybrid inference where
+  /// the embedding matrix (`[V, D]`, ~826 MB fp32 for GPT-J-6B) is
+  /// too large to co-reside with transformer layers on GPU.
+  final Device? embeddingDevice;
+
+  /// Optional override for the output stack (final `LayerNorm` +
+  /// `lm_head`). Falls back to [device] when null.
+  final Device? lmHeadDevice;
+
   final int seed;
 
   GPTJConfig({
@@ -72,6 +91,9 @@ class GPTJConfig {
     int? ffnDim,
     this.ropeBase = 10000.0,
     this.device = Device.CPU,
+    this.layerDevices,
+    this.embeddingDevice,
+    this.lmHeadDevice,
     this.seed = 0,
   }) : ffnDim = ffnDim ?? 4 * embedDim {
     if (rotaryDim <= 0 || rotaryDim.isOdd) {
@@ -86,6 +108,32 @@ class GPTJConfig {
         'rotaryDim ($rotaryDim) must be <= headDim ($headDim)',
       );
     }
+    if (layerDevices != null && layerDevices!.length != numLayers) {
+      throw ArgumentError(
+        'layerDevices length (${layerDevices!.length}) must equal '
+        'numLayers ($numLayers)',
+      );
+    }
+  }
+
+  /// Resolved device for transformer block `i`.
+  Device deviceForLayer(int i) => layerDevices?[i] ?? device;
+
+  /// Resolved device for the token embedding table.
+  Device get embedDevice => embeddingDevice ?? device;
+
+  /// Resolved device for the output stack.
+  Device get lmDevice => lmHeadDevice ?? device;
+
+  /// Whether any two components live on different devices — cheap
+  /// hint used by the model to decide when to emit `.to()` moves.
+  bool get hasMixedPlacement {
+    final target = embedDevice;
+    if (lmDevice != target) return true;
+    for (int i = 0; i < numLayers; i++) {
+      if (deviceForLayer(i) != target) return true;
+    }
+    return false;
   }
 }
 
@@ -161,43 +209,59 @@ class GPTJModel extends Module {
   final List<GPTJBlock> blocks;
   final LayerNorm finalLn;
   final Linear lmHead; // has bias in GPT-J
-  final RopeCache rope;
+
+  /// One [RopeCache] per unique device that hosts at least one
+  /// transformer block. Blocks look up their cache by device.
+  final Map<Device, RopeCache> ropeByDevice;
 
   GPTJModel(this.config)
     : wte = Embedding(
         config.vocabSize,
         config.embedDim,
-        device: config.device,
+        device: config.embedDevice,
         seed: config.seed,
       ),
-      finalLn = LayerNorm(config.embedDim, device: config.device),
+      finalLn = LayerNorm(config.embedDim, device: config.lmDevice),
       lmHead = Linear(
         config.embedDim,
         config.vocabSize,
         bias: true, // unusual — GPT-J's lm_head has a bias
-        device: config.device,
+        device: config.lmDevice,
         seed: config.seed + 900000,
       ),
-      rope = RopeCache(
-        maxCtx: config.maxCtx,
-        headDim: config.embedDim ~/ config.numHeads,
-        rotaryDim: config.rotaryDim,
-        base: config.ropeBase,
-        device: config.device,
-      ),
+      ropeByDevice = _buildRopeCaches(config),
       blocks = <GPTJBlock>[] {
     for (int i = 0; i < config.numLayers; i++) {
+      final dev = config.deviceForLayer(i);
       blocks.add(
         GPTJBlock(
           config.embedDim,
           config.numHeads,
           ffnDim: config.ffnDim,
-          rope: rope,
-          device: config.device,
+          rope: ropeByDevice[dev]!,
+          device: dev,
           seed: config.seed + 100000 + i * 1000,
         ),
       );
     }
+  }
+
+  static Map<Device, RopeCache> _buildRopeCaches(GPTJConfig cfg) {
+    final devs = <Device>{};
+    for (int i = 0; i < cfg.numLayers; i++) {
+      devs.add(cfg.deviceForLayer(i));
+    }
+    final headDim = cfg.embedDim ~/ cfg.numHeads;
+    return {
+      for (final d in devs)
+        d: RopeCache(
+          maxCtx: cfg.maxCtx,
+          headDim: headDim,
+          rotaryDim: cfg.rotaryDim,
+          base: cfg.ropeBase,
+          device: d,
+        ),
+    };
   }
 
   /// Forward pass. `tokens` is a 1D `[seqLen]` float tensor of token
@@ -219,11 +283,33 @@ class GPTJModel extends Module {
         'maxCtx=${config.maxCtx}',
       );
     }
-    var h = wte(tokens); // [N, D]
-    final mask = n > 1 ? causalMask(n, device: h.device) : null;
+    // Ensure the input token tensor lives on the embed device.
+    final t0 = tokens.device == config.embedDevice
+        ? tokens
+        : tokens.to(config.embedDevice);
+    var h = wte(t0); // [N, D] on config.embedDevice
+    // Cache one causal mask per device we visit (mask is [N, N]; small).
+    Tensor? mask;
+    Device? maskDevice;
     for (int i = 0; i < blocks.length; i++) {
+      final blockDev = config.deviceForLayer(i);
+      if (h.device != blockDev) {
+        h = h.to(blockDev);
+      }
+      if (n > 1 && maskDevice != blockDev) {
+        mask = causalMask(n, device: blockDev);
+        maskDevice = blockDev;
+      }
       final cacheI = cache?.layers[i];
-      h = blocks[i](h, mask: mask, cache: cacheI, startPos: startPos);
+      h = blocks[i](
+        h,
+        mask: n > 1 ? mask : null,
+        cache: cacheI,
+        startPos: startPos,
+      );
+    }
+    if (h.device != config.lmDevice) {
+      h = h.to(config.lmDevice);
     }
     h = finalLn(h);
     return lmHead(h);
@@ -275,7 +361,7 @@ class GPTJModel extends Module {
     final promptCtx = Tensor.fromList(
       [prompt.length],
       prompt,
-      device: config.device,
+      device: config.embedDevice,
     );
     var logits = _forward(promptCtx, startPos: 0, cache: cache).toList();
     var lastBase = (prompt.length - 1) * v;
@@ -288,7 +374,7 @@ class GPTJModel extends Module {
       final tokTensor = Tensor.fromList(
         [1],
         [next.toDouble()],
-        device: config.device,
+        device: config.embedDevice,
       );
       logits = _forward(
         tokTensor,
@@ -317,7 +403,7 @@ class GPTJModel extends Module {
       final ctx = Tensor.fromList(
         [ctxList.length],
         ctxList,
-        device: config.device,
+        device: config.embedDevice,
       );
       final logits = call(ctx).toList();
       final lastBase = (ctxList.length - 1) * v;
