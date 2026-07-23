@@ -27,6 +27,8 @@ export 'core/nn/moe.dart';
 export 'core/nn/moe_transformer.dart';
 export 'core/nn/kv_cache.dart';
 export 'core/nn/gpt.dart';
+export 'core/nn/gptj.dart';
+export 'core/nn/gptj_hf_loader.dart';
 export 'core/nn/safetensors.dart';
 export 'core/nn/gpt2_hf_loader.dart';
 export 'core/nn/rotary.dart';
