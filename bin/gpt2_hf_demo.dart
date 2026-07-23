@@ -1,26 +1,56 @@
 /// End-to-end demo: load HuggingFace GPT-2 (`.safetensors`) weights
 /// into our `GPT` module and run a forward pass.
 ///
-/// Usage:
+/// ## Quickstart (copy-paste)
 ///
 /// ```sh
-///   # 1. Download the weights (public, no auth):
-///   mkdir -p models/gpt2
-///   curl -L -o models/gpt2/model.safetensors \
-///     https://huggingface.co/gpt2/resolve/main/model.safetensors
+///   # From the repo root:
+///   cd /mnt/c/Users/kkinyama/dart-pytorch
 ///
-///   # 2. (Optional) also download vocab.json to get token strings
-///   #    printed next to the ids:
-///   curl -L -o models/gpt2/vocab.json \
+///   # 1. Download the weights (523 MB) and vocab (1 MB). Public, no auth.
+///   #    Skip either step if the file already exists locally.
+///   mkdir -p models/gpt2
+///   curl -L --progress-bar \
+///     -o models/gpt2/model.safetensors \
+///     https://huggingface.co/gpt2/resolve/main/model.safetensors
+///   curl -L \
+///     -o models/gpt2/vocab.json \
 ///     https://huggingface.co/gpt2/resolve/main/vocab.json
 ///
-///   # 3. Run this demo:
+///   # 2. Run this demo end-to-end (CPU; takes ~40 s on the first run
+///   #    while the 500 MB safetensors is parsed).
 ///   dart run bin/gpt2_hf_demo.dart models/gpt2/model.safetensors
-///   # or larger:
-///   dart run bin/gpt2_hf_demo.dart <path> --size medium|large|xl
 /// ```
 ///
-/// The demo:
+/// Expected tail of the output:
+///
+/// ```text
+///   Top-5 next-token ids for "The world is":
+///        257    logit=-110.827  " a"
+///       5609    logit=-111.145  " changing"
+///        407    logit=-111.372  " not"
+///       1016    logit=-111.593  " going"
+///       1336    logit=-111.637  " full"
+///
+///   Greedy 8-token continuation:
+///     text: "The world is a better place if you're a good"
+/// ```
+///
+/// ## Larger presets
+///
+/// ```sh
+///   # gpt2-medium (~1.5 GB fp32), gpt2-large (~3 GB), gpt2-xl (~6 GB).
+///   mkdir -p models/gpt2-medium
+///   curl -L --progress-bar \
+///     -o models/gpt2-medium/model.safetensors \
+///     https://huggingface.co/gpt2-medium/resolve/main/model.safetensors
+///   curl -L -o models/gpt2-medium/vocab.json \
+///     https://huggingface.co/gpt2-medium/resolve/main/vocab.json
+///   dart run bin/gpt2_hf_demo.dart \
+///     models/gpt2-medium/model.safetensors --size medium
+/// ```
+///
+/// ## What the demo does
 ///
 ///   * Builds a `GPT` with `GPT2HFLoader.gpt2SmallConfig()` (or one of
 ///     the larger presets when passed `--size medium|large|xl`).
@@ -32,6 +62,8 @@
 ///     their raw logits.
 ///   * If `<model_dir>/vocab.json` is present alongside the weights,
 ///     each top-5 id is decoded to its BPE token string.
+///   * Runs an 8-token greedy continuation to exercise the full
+///     encoder + KV-cache `generate()` path with imported weights.
 ///
 /// Note: this demo does not do full BPE **encoding** of arbitrary
 /// input text — that requires `merges.txt` and the byte-level BPE
@@ -64,7 +96,17 @@ void main(List<String> args) {
   if (positional.isEmpty) {
     stderr.writeln(
       'usage: gpt2_hf_demo <path/to/model.safetensors> '
-      '[--size small|medium|large|xl]',
+      '[--size small|medium|large|xl]\n'
+      '\n'
+      'Quickstart:\n'
+      '  mkdir -p models/gpt2\n'
+      '  curl -L --progress-bar \\\n'
+      '    -o models/gpt2/model.safetensors \\\n'
+      '    https://huggingface.co/gpt2/resolve/main/model.safetensors\n'
+      '  curl -L \\\n'
+      '    -o models/gpt2/vocab.json \\\n'
+      '    https://huggingface.co/gpt2/resolve/main/vocab.json\n'
+      '  dart run bin/gpt2_hf_demo.dart models/gpt2/model.safetensors',
     );
     exit(64);
   }
