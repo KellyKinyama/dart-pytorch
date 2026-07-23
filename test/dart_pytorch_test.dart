@@ -142,6 +142,27 @@ void main() {
       expect(th[1].abs() < 1e-6, isTrue);
     });
 
+    test('tanh is numerically stable for large |x| (no NaN/Inf)', () {
+      // Regression: the old `(exp(2x) - 1) / (exp(2x) + 1)` form
+      // overflowed to Inf/Inf = NaN for |x| >~ 44. GPT-2's GELU
+      // feeds tanh values in the hundreds/thousands.
+      final t = Tensor.fromList(
+        [6],
+        [-10000.0, -100.0, -20.0, 20.0, 100.0, 10000.0],
+      );
+      final out = t.tanh().toList();
+      for (final v in out) {
+        expect(v.isFinite, isTrue, reason: 'tanh produced $v');
+      }
+      // Values well outside [-1, 1] would indicate math error.
+      for (final v in out) {
+        expect(v.abs() <= 1.0 + 1e-6, isTrue);
+      }
+      // Sign is preserved.
+      expect(out[0], lessThan(0));
+      expect(out[5], greaterThan(0));
+    });
+
     test('log / pow', () {
       final t = Tensor.fromList([3], [1.0, 2.0, 4.0]);
       expectClose(t.log().toList(), [

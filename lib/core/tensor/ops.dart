@@ -323,11 +323,21 @@ extension TensorOps on Tensor {
   }
 
   /// Tanh. Backward: `dY = dOut - dOut * y * y` — pure composition.
+  ///
+  /// Uses the numerically stable formulation
+  ///   `tanh(x) = sign(x) * (1 - 2 / (exp(2|x|) + 1))`,
+  /// which avoids `exp(2x)` overflowing to `+inf` (giving `inf/inf = NaN`)
+  /// for large positive `x`, and symmetrically underflow for large
+  /// negative `x`. For `|x| > 20` the result is already within fp32 ULP
+  /// of `±1`, so we short-circuit.
   Tensor tanh() {
     final out = _unaryFwd(
       cpuFn: (x) {
-        final e2 = math.exp(2 * x);
-        return (e2 - 1) / (e2 + 1);
+        if (x > 20.0) return 1.0;
+        if (x < -20.0) return -1.0;
+        final ax = x.abs();
+        final t = 1.0 - 2.0 / (math.exp(2.0 * ax) + 1.0);
+        return x >= 0 ? t : -t;
       },
       gpu: engine.tanhTensor,
     );

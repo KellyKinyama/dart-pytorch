@@ -12,3 +12,6 @@ faces_gallery/
 
 # Dart pub lockfile — application repo, keep. If you convert this to a library, remove this line to ignore it instead.
 # pubspec.lock
+
+# Downloaded pretrained-model weights (large, regenerable).
+models/
