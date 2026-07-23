@@ -70,6 +70,26 @@ class GPT2HFLoader {
     seed: seed,
   );
 
+  /// HuggingFace `distilgpt2` config (82M params). Same shape as GPT-2
+  /// small except only **6** transformer blocks instead of 12. Loads
+  /// with the same [loadFile] / [loadMap] used for regular GPT-2.
+  static GPTConfig distilGpt2Config({
+    Device device = Device.CPU,
+    int seed = 0,
+  }) => GPTConfig(
+    vocabSize: 50257,
+    maxCtx: 1024,
+    embedDim: 768,
+    numLayers: 6,
+    numHeads: 12,
+    dropoutP: 0.0,
+    tieWeights: true,
+    attnBias: true,
+    activation: Activation.geluTanh,
+    device: device,
+    seed: seed,
+  );
+
   /// GPT-2 medium (345M).
   static GPTConfig gpt2MediumConfig({
     Device device = Device.CPU,
@@ -139,7 +159,24 @@ class GPT2HFLoader {
   /// Same as [loadFile] but takes a pre-parsed `state_dict` map.
   /// Useful for tests and for callers that want to preview / mutate
   /// the map before loading.
-  static GPT2LoadReport loadMap(GPT gpt, Map<String, Tensor> state) {
+  static GPT2LoadReport loadMap(GPT gpt, Map<String, Tensor> stateIn) {
+    // HF `GPT2LMHeadModel` saves under a `transformer.` prefix (this
+    // is what `distilgpt2/model.safetensors` uses). Raw `gpt2` from
+    // the hub has no prefix. Strip if *every* key starts with it so
+    // both layouts load with the same code.
+    Map<String, Tensor> state = stateIn;
+    if (stateIn.isNotEmpty &&
+        stateIn.keys.every(
+          (k) => k.startsWith('transformer.') || k.startsWith('lm_head.'),
+        )) {
+      state = <String, Tensor>{
+        for (final e in stateIn.entries)
+          if (e.key.startsWith('transformer.'))
+            e.key.substring('transformer.'.length): e.value
+          else
+            e.key: e.value,
+      };
+    }
     final consumed = <String>{};
     final missing = <String>[];
 

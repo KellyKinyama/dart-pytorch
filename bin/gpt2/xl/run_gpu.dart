@@ -26,7 +26,9 @@ import 'package:dart_pytorch/dart_pytorch.dart';
 import '../../_gpt2_hf_demo_common.dart';
 
 void main(List<String> args) {
-  final path = args.isNotEmpty ? args.first : 'models/gpt2-xl/model.safetensors';
+  final path = args.isNotEmpty
+      ? args.first
+      : 'models/gpt2-xl/model.safetensors';
   runGpt2Demo(
     path: path,
     cfg: GPT2HFLoader.gpt2XLConfig(device: Device.GPU),
