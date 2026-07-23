@@ -33,6 +33,7 @@ import 'linear.dart';
 import 'masks.dart';
 import 'module.dart';
 import 'positional.dart';
+import 'transformer.dart';
 import 'transformer_encoder.dart';
 
 class GPTConfig {
@@ -44,6 +45,16 @@ class GPTConfig {
   final int? ffnDim;
   final double dropoutP;
   final bool tieWeights;
+
+  /// If `true`, the Q/K/V/output projections carry a learned bias.
+  /// GPT-2 uses biased attention projections; smaller demos in this
+  /// repo default to no bias for parameter economy.
+  final bool attnBias;
+
+  /// Feed-forward activation. Defaults to ReLU; GPT-2 uses
+  /// [Activation.geluTanh].
+  final Activation activation;
+
   final Device device;
   final int seed;
 
@@ -56,6 +67,8 @@ class GPTConfig {
     this.ffnDim,
     this.dropoutP = 0.0,
     this.tieWeights = true,
+    this.attnBias = false,
+    this.activation = Activation.relu,
     this.device = Device.CPU,
     this.seed = 0,
   });
@@ -93,6 +106,8 @@ class GPT extends Module {
         config.numHeads,
         ffnDim: config.ffnDim,
         dropoutP: config.dropoutP,
+        attnBias: config.attnBias,
+        activation: config.activation,
         device: config.device,
         seed: config.seed + 100000,
       ),
