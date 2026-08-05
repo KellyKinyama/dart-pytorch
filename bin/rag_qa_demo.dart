@@ -225,7 +225,8 @@ void main(List<String> args) {
         '  ! prompt (${promptIds.length} tok) + $_maxNewTokens > '
         '${cfg.maxCtx}; truncating to top hit only.',
       );
-      final short = 'Context:\n[1] ${retrieved.first}\n\n'
+      final short =
+          'Context:\n[1] ${retrieved.first}\n\n'
           'Question: $question\nAnswer:';
       final shortIds = tokenizer.encode(short);
       _generateAndPrint(model, tokenizer, shortIds);
