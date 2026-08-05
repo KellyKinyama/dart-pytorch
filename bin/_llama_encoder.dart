@@ -87,8 +87,7 @@ LlamaConfig configForLlamaPreset(String preset, Device device) {
 /// Build a Llama model, load its safetensors, load its tokenizer.json,
 /// eval-mode it. Same shape as `loadEncoder` in `_lm_encoder.dart` but
 /// returns a Llama and a LlamaConfig.
-({Llama model, HFBpeTokenizer tokenizer, LlamaConfig config})
-loadLlamaEncoder({
+({Llama model, HFBpeTokenizer tokenizer, LlamaConfig config}) loadLlamaEncoder({
   required String path,
   required String vocabPath,
   required String preset,

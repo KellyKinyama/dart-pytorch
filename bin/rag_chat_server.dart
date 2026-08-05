@@ -596,10 +596,7 @@ Future<void> _handleChat(
     temperature: _temperature,
     topK: _generatorTopK,
   );
-  var answerIds = full
-      .sublist(promptIds.length)
-      .map((d) => d.toInt())
-      .toList();
+  var answerIds = full.sublist(promptIds.length).map((d) => d.toInt()).toList();
   // If the tokenizer defines an EOT id (Llama-3 <|eot_id|> or
   // GPT-2 <|endoftext|>), stop the answer at its first occurrence.
   final eot = state.backend.eotId;
@@ -680,7 +677,12 @@ _ServerOpts _parseServerArgs(List<String> args) {
       encoderArgs.add(a);
     }
   }
-  return _ServerOpts(host: host, port: port, arch: arch, encoderArgs: encoderArgs);
+  return _ServerOpts(
+    host: host,
+    port: port,
+    arch: arch,
+    encoderArgs: encoderArgs,
+  );
 }
 
 const String _help = '''
@@ -706,6 +708,26 @@ Model (Llama arch):
 
 Shared:
   --gpu            run on CUDA (default: CPU)
+
+Examples:
+  # Default: distilgpt2 on CPU, http://127.0.0.1:8090
+  dart run bin/rag_chat_server.dart
+
+  # GPT-2 medium on GPU (WSL2 needs LD_LIBRARY_PATH for CUDA driver stub)
+  LD_LIBRARY_PATH=/usr/lib/wsl/lib dart run bin/rag_chat_server.dart \\
+    --path models/gpt2-medium/model.safetensors \\
+    --vocab models/gpt2-medium/tokenizer.json \\
+    --preset medium --gpu --port 8090
+
+  # Llama-3.2-1B-Instruct on GPU
+  LD_LIBRARY_PATH=/usr/lib/wsl/lib dart run bin/rag_chat_server.dart \\
+    --arch llama \\
+    --path models/llama-3.2-1b-instruct/model.safetensors \\
+    --vocab models/llama-3.2-1b-instruct/tokenizer.json \\
+    --preset llama-3.2-1b --gpu --port 8090
+
+  # Llama-3.2-1B-Instruct on CPU (uses safe defaults for --path / --vocab / --preset)
+  dart run bin/rag_chat_server.dart --arch llama
 
 Then open http://127.0.0.1:PORT/ in your browser.
 ''';
