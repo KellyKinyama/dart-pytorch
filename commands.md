@@ -403,3 +403,67 @@ constants at the top of [bin/rag_qa_demo.dart](bin/rag_qa_demo.dart).
 For a production-grade encoder path, fine-tune a small
 `TextTransformer` with triplet loss instead — see
 [bin/vector_store_demo.dart](bin/vector_store_demo.dart).
+
+---
+
+# More vector-embedding applications
+
+Same encoder recipe as the RAG demo (`distilgpt2` → last-token
+hidden → corpus-mean centre → L2-normalise → `IndexFlatIP`), applied
+to three more classic tasks. Shared encoder helpers live in
+[bin/_lm_encoder.dart](bin/_lm_encoder.dart) so each demo file stays
+focused on its own logic. All three accept the same
+`--path / --vocab / --preset / --gpu` flags as `rag_qa_demo`.
+
+## R3. Zero-shot text classification
+
+Describe each candidate **label** as a short sentence, index the
+label vectors, then classify each doc by argmax cosine similarity.
+No training required — the "prompt engineering as classifier"
+trick popularised by SBERT / instructor-xl.
+
+```sh
+dart run bin/vector_zero_shot_classify_demo.dart
+```
+
+Six labels (`astronomy`, `biology`, `cooking`, `finance`,
+`programming`, `sports`) × twelve test docs. Prints top-3 label
+scores per doc plus overall top-1 agreement with ground truth.
+Editable label list at the top of
+[bin/vector_zero_shot_classify_demo.dart](bin/vector_zero_shot_classify_demo.dart).
+
+## R4. Semantic near-duplicate detection
+
+Find paraphrase clusters in a mixed pile of documents.
+`IndexFlatIP.rangeSearch(vecs, radius=cosine_threshold)` returns
+every pair above the similarity cutoff; union-find groups them into
+duplicate clusters.
+
+```sh
+dart run bin/vector_dedup_demo.dart
+```
+
+Seeded corpus contains three phrasings of "photosynthesis", two of
+"Eiffel Tower", two of "insulin regulates blood sugar" plus three
+unique passages — the demo should recover exactly those clusters.
+Adjust `_threshold` in
+[bin/vector_dedup_demo.dart](bin/vector_dedup_demo.dart) to trade
+precision for recall.
+
+## R5. Unsupervised topic clustering (k-means)
+
+No labels, no queries — just run Lloyd's k-means over the corpus
+embeddings. Each cluster centroid becomes a discovered topic.
+Uses [lib/core/vector_store/kmeans.dart](lib/core/vector_store/kmeans.dart)
+(k-means++ init + 30 Lloyd iters).
+
+```sh
+dart run bin/vector_cluster_demo.dart
+```
+
+24-passage mixed corpus (astronomy / cooking / programming /
+sports) with `k=4`. Prints each cluster's members alongside their
+ground-truth topic and an overall purity score (fraction assigned
+to the majority topic of their cluster; chance = 25%). Editable
+corpus at the top of
+[bin/vector_cluster_demo.dart](bin/vector_cluster_demo.dart).
