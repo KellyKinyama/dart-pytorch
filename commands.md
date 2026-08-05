@@ -21,6 +21,58 @@ fix so the CUDA driver stub is found. Drop it on native Linux.
 `vocab.json` (rows 2, 4) still work via `--prompt IDS` and decode
 their output through the legacy `Ġ`→space fallback.
 
+## What the tokenizer does
+
+Language models don't consume characters — they consume integer
+**token ids** drawn from a fixed vocabulary (~50k entries for the
+GPT-2 family, ~50k for Pythia/NeoX, ~50k for GPT-J). The tokenizer
+is the reversible map between raw UTF-8 text and that id stream:
+
+```
+"The world is"  ──encode──▶  [464, 995, 318]  ──model──▶  [318, 257, ...]
+                                                              │
+                                       decode ◀──────────────┘
+                                          │
+                                          ▼
+                                    " a great"
+```
+
+Two on-disk formats show up in `models/`:
+
+- **`tokenizer.json`** — Hugging Face "fast" tokenizer. A single
+  JSON file bundling the vocab **and** the merges/pre-tokenizer/
+  post-processor rules. Required for `--text STR`: it's what
+  encodes your prompt into ids and decodes generated ids back to
+  a string that respects byte-level BPE (so `"Ġworld"` becomes
+  `" world"`, emoji round-trip, etc.).
+- **`vocab.json`** — legacy GPT-2 vocab (id → surface token, with
+  `Ġ` marking a leading space). No merges, no encoder rules — good
+  enough to *decode* an id stream approximately, but you can't
+  encode arbitrary text with it. This is why rows 2, 4, 6 in the
+  table above must feed `--prompt IDS` (pre-computed ids) instead
+  of `--text`.
+
+Practical rules of thumb for this repo:
+
+| You want to… | Requires |
+|---|---|
+| Pass a natural-language prompt via `--text "..."` | `tokenizer.json` |
+| Pass raw ids via `--prompt 464,995,318` | nothing (encoding skipped) |
+| Get readable output from the runner | `tokenizer.json` preferred; `vocab.json` works with `Ġ`→space fallback |
+| Hit `POST /generate` with `{"text": "..."}` | `tokenizer.json` on the server |
+| Hit `POST /generate` with `{"tokens": [...]}` | nothing (ids in, ids + text-via-fallback out) |
+
+Runners resolve the tokenizer in this order:
+
+1. `--vocab PATH` (explicit override, any of the two formats)
+2. `<weights-dir>/tokenizer.json`
+3. `<weights-dir>/vocab.json`
+4. otherwise: `--text` is rejected; `--prompt` still works.
+
+Whenever you see a "no tokenizer" note below, the fix is a single
+`curl` for the model's `tokenizer.json` from its HF repo — every
+snippet in this file shows the exact URL.
+
 ## 1. distilgpt2 (82M, GPU)
 
 ```sh
