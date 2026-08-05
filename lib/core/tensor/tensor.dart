@@ -26,6 +26,7 @@ import 'cuda_engine.dart';
 part 'mat_mul.dart';
 part 'ops.dart';
 part 'layer_norm.dart';
+part 'rms_norm.dart';
 part 'softmax.dart';
 part 'embedding.dart';
 part 'attention.dart';

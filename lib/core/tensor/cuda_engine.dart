@@ -77,6 +77,38 @@ typedef DLnBwd =
       double,
     );
 
+// RMSNorm forward: (x, gamma, eps) -> out
+typedef CRmsFwd =
+    ffi.Pointer<ffi.Void> Function(
+      ffi.Pointer<ffi.Void>,
+      ffi.Pointer<ffi.Void>,
+      ffi.Float,
+    );
+typedef DRmsFwd =
+    ffi.Pointer<ffi.Void> Function(
+      ffi.Pointer<ffi.Void>,
+      ffi.Pointer<ffi.Void>,
+      double,
+    );
+
+// RMSNorm backward: (x, gamma, gO, gGammaAccum, eps) -> gX
+typedef CRmsBwd =
+    ffi.Pointer<ffi.Void> Function(
+      ffi.Pointer<ffi.Void>,
+      ffi.Pointer<ffi.Void>,
+      ffi.Pointer<ffi.Void>,
+      ffi.Pointer<ffi.Void>,
+      ffi.Float,
+    );
+typedef DRmsBwd =
+    ffi.Pointer<ffi.Void> Function(
+      ffi.Pointer<ffi.Void>,
+      ffi.Pointer<ffi.Void>,
+      ffi.Pointer<ffi.Void>,
+      ffi.Pointer<ffi.Void>,
+      double,
+    );
+
 // Cross-entropy backward: (x, targets, gLoss) -> gX
 typedef COp3 =
     ffi.Pointer<ffi.Void> Function(
@@ -245,6 +277,10 @@ class CudaEngine {
   late DLnFwd layernormForward;
   late DLnBwd layernormBackward;
 
+  // RMSNorm
+  late DRmsFwd rmsnormForward;
+  late DRmsBwd rmsnormBackward;
+
   // Softmax
   late DOp1 softmaxForward;
   late DOp2 softmaxBackward;
@@ -318,6 +354,11 @@ class CudaEngine {
     layernormForward = _lib.lookupFunction<CLnFwd, DLnFwd>('layernorm_forward');
     layernormBackward = _lib.lookupFunction<CLnBwd, DLnBwd>(
       'layernorm_backward',
+    );
+
+    rmsnormForward = _lib.lookupFunction<CRmsFwd, DRmsFwd>('rmsnorm_forward');
+    rmsnormBackward = _lib.lookupFunction<CRmsBwd, DRmsBwd>(
+      'rmsnorm_backward',
     );
 
     softmaxForward = _lib.lookupFunction<COp1, DOp1>('softmax_forward');

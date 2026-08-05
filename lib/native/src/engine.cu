@@ -13,6 +13,7 @@
 #include "kernels/elementwise.cuh"
 #include "kernels/transpose.cuh"
 #include "kernels/layernorm.cuh"
+#include "kernels/rms_norm.cuh"
 #include "kernels/softmax.cuh"
 #include "kernels/embedding.cuh"
 #include "kernels/attention.cuh"
@@ -379,6 +380,39 @@ extern "C"
                                         gO->data_gpu, gX->data_gpu,
                                         gGamma->data_gpu, gBeta->data_gpu,
                                         x->rows, x->cols, eps);
+        return (void *)gX;
+    }
+
+    // ---------------------------------------------------------------------
+    // RMSNorm forward + backward.
+    // Same block-per-row pattern as LayerNorm. No beta bias, no mean
+    // subtraction. Backward accumulates dGamma via atomicAdd into the
+    // caller's grad accumulator and returns dX as a fresh handle.
+    // ---------------------------------------------------------------------
+
+    DLLEXPORT void *rmsnorm_forward(void *xh, void *gh, float eps)
+    {
+        Tensor *x = (Tensor *)xh;
+        Tensor *gamma = (Tensor *)gh;
+        Tensor *out = new Tensor(x->rows, x->cols);
+        rmsnorm_fwd<<<x->rows, 256>>>(x->data_gpu, gamma->data_gpu,
+                                      out->data_gpu,
+                                      x->rows, x->cols, eps);
+        return (void *)out;
+    }
+
+    DLLEXPORT void *rmsnorm_backward(void *xh, void *gh, void *goh,
+                                     void *gGammaH, float eps)
+    {
+        Tensor *x = (Tensor *)xh;
+        Tensor *gamma = (Tensor *)gh;
+        Tensor *gO = (Tensor *)goh;
+        Tensor *gGamma = (Tensor *)gGammaH;
+        Tensor *gX = new Tensor(x->rows, x->cols);
+        rmsnorm_bwd<<<x->rows, 256>>>(x->data_gpu, gamma->data_gpu,
+                                      gO->data_gpu, gX->data_gpu,
+                                      gGamma->data_gpu,
+                                      x->rows, x->cols, eps);
         return (void *)gX;
     }
 

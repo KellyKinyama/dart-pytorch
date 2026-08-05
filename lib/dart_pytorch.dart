@@ -8,6 +8,7 @@ library;
 export 'core/tensor/tensor.dart';
 export 'core/nn/module.dart';
 export 'core/nn/layer_norm.dart';
+export 'core/nn/rms_norm.dart';
 export 'core/nn/embedding.dart';
 export 'core/nn/linear.dart';
 export 'core/nn/dropout.dart';
