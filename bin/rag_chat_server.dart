@@ -384,24 +384,6 @@ Future<void> _handleChat(
 
   final sw = Stopwatch()..start();
 
-  // ---- 0. Refuse open-domain chat (base GPT-2 rambles) --------
-  if (state.chunks.isEmpty) {
-    final canned =
-        "I'm a document-grounded chat surface backed by a base "
-        'GPT-2 checkpoint (not instruction-tuned), so I can only '
-        'answer questions about text you upload. Drop a `.txt` or '
-        '`.md` file into the sidebar on the left and ask again.';
-    sw.stop();
-    writeJson(200, {
-      'reply': canned,
-      'retrieved': <Map<String, dynamic>>[],
-      'ms': sw.elapsed.inMilliseconds,
-      'promptTokens': 0,
-      'newTokens': 0,
-    });
-    return;
-  }
-
   // ---- 1. Retrieve (skip if no docs uploaded yet) --------------
   final retrieved = <Map<String, dynamic>>[];
   final ctxLines = <String>[];
@@ -782,7 +764,7 @@ const String _indexHtml = r'''<!doctype html>
   <div id="log">
     <div class="msg assistant">
       <div class="role">assistant</div>
-      <div class="bubble">Hi. Drop one or more <code>.txt</code> / <code>.md</code> files on the left, then ask questions about them. This is a <b>base</b> GPT-2 checkpoint (not instruction-tuned), so it will refuse open-domain chat &mdash; retrieval over your uploaded documents is what makes the answers grounded.</div>
+      <div class="bubble">Hi. Chat away. Drop <code>.txt</code> / <code>.md</code> files on the left to ground my answers in your documents &mdash; retrieved chunks show up as expandable "sources" under each reply.</div>
     </div>
   </div>
 
