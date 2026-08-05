@@ -37,6 +37,7 @@ export 'core/nn/rotary.dart';
 export 'core/nn/pythia.dart';
 export 'core/nn/pythia_hf_loader.dart';
 export 'core/nn/llama.dart';
+export 'core/nn/llama_hf_loader.dart';
 export 'core/nn/vision/vit_backbone.dart';
 export 'core/nn/vision/vit_classifier.dart';
 export 'core/nn/vision/vit_face_embedding.dart';

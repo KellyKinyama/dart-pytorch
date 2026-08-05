@@ -59,33 +59,23 @@ void main() {
   });
 
   group('LlamaBlock', () {
-    test('parameters and submodules present (attnNorm, ffnNorm, attn, ffn)',
-        () {
-      final rope = RopeCache(maxCtx: 8, headDim: 4);
-      final blk = LlamaBlock(
-        8,
-        2,
-        numKvHeads: 2,
-        ffnDim: 16,
-        rope: rope,
-      );
-      // 2 RMSNorm gammas + attn (wq*2 + wk*2 + wv*2 + wo, all bias=false)
-      // + swiglu (3 Linears bias=false)
-      // = 2 + 7 + 3 = 12 params
-      expect(blk.parameters().length, 12);
-      expect(blk.submodules().length, 4);
-      expect(blk.attn.rope, isNotNull);
-    });
+    test(
+      'parameters and submodules present (attnNorm, ffnNorm, attn, ffn)',
+      () {
+        final rope = RopeCache(maxCtx: 8, headDim: 4);
+        final blk = LlamaBlock(8, 2, numKvHeads: 2, ffnDim: 16, rope: rope);
+        // 2 RMSNorm gammas + attn (wq*2 + wk*2 + wv*2 + wo, all bias=false)
+        // + swiglu (3 Linears bias=false)
+        // = 2 + 7 + 3 = 12 params
+        expect(blk.parameters().length, 12);
+        expect(blk.submodules().length, 4);
+        expect(blk.attn.rope, isNotNull);
+      },
+    );
 
     test('forward preserves shape [N, D]', () {
       final rope = RopeCache(maxCtx: 8, headDim: 4);
-      final blk = LlamaBlock(
-        8,
-        2,
-        numKvHeads: 2,
-        ffnDim: 16,
-        rope: rope,
-      );
+      final blk = LlamaBlock(8, 2, numKvHeads: 2, ffnDim: 16, rope: rope);
       final x = Tensor.fromList(
         [3, 8],
         [for (int i = 0; i < 24; i++) 0.1 * i - 0.5],
@@ -133,8 +123,7 @@ void main() {
       expect(logits.shape, [4, 24]);
     });
 
-    test('token-by-token generate with cache matches no-cache prompt-fill',
-        () {
+    test('token-by-token generate with cache matches no-cache prompt-fill', () {
       final cfg = LlamaConfig(
         vocabSize: 20,
         maxCtx: 16,
@@ -192,15 +181,11 @@ void main() {
         ffnDim: 8,
       );
       final m = Llama(cfg);
-      final tokens = Tensor.fromList(
-        [5],
-        [0.0, 1.0, 2.0, 3.0, 0.0],
-      );
+      final tokens = Tensor.fromList([5], [0.0, 1.0, 2.0, 3.0, 0.0]);
       expect(() => m(tokens), throwsArgumentError);
     });
 
-    test('parameter count includes final RMSNorm and no lm_head when tied',
-        () {
+    test('parameter count includes final RMSNorm and no lm_head when tied', () {
       final cfg = LlamaConfig(
         vocabSize: 24,
         maxCtx: 8,
@@ -211,16 +196,18 @@ void main() {
         ffnDim: 16,
       );
       final tied = Llama(cfg);
-      final untied = Llama(LlamaConfig(
-        vocabSize: 24,
-        maxCtx: 8,
-        embedDim: 8,
-        numLayers: 1,
-        numHeads: 2,
-        numKvHeads: 1,
-        ffnDim: 16,
-        tieWeights: false,
-      ));
+      final untied = Llama(
+        LlamaConfig(
+          vocabSize: 24,
+          maxCtx: 8,
+          embedDim: 8,
+          numLayers: 1,
+          numHeads: 2,
+          numKvHeads: 1,
+          ffnDim: 16,
+          tieWeights: false,
+        ),
+      );
       // untied adds one Linear (weight only, bias=false)
       expect(untied.parameters().length, tied.parameters().length + 1);
     });

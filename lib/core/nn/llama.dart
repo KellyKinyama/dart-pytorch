@@ -102,12 +102,7 @@ class LlamaBlock extends Module {
          device: device,
          seed: seed,
        ),
-       ffn = SwiGluFfn(
-         embedDim,
-         ffnDim,
-         device: device,
-         seed: seed + 500000,
-       ) {
+       ffn = SwiGluFfn(embedDim, ffnDim, device: device, seed: seed + 500000) {
     attn.rope = rope;
   }
 
