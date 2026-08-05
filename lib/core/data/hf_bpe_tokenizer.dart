@@ -52,11 +52,18 @@ class HFBpeTokenizer {
   /// for greedy left-to-right split before regex pre-tokenizing.
   final List<_Special> _specials;
 
-  /// Compiled GPT-2 style pre-tokenizer regex.
-  static final RegExp _preTokenRe = RegExp(
+  /// Compiled GPT-2 style pre-tokenizer regex — the default when
+  /// tokenizer.json doesn't advertise its own pattern.
+  static final RegExp _defaultPreTokenRe = RegExp(
     r"'s|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+",
     unicode: true,
   );
+
+  /// The pre-tokenizer regex actually in use for this tokenizer.
+  /// Populated from `tokenizer.json` when a `Split` pre-tokenizer is
+  /// present (Llama 3, Qwen 2, Mistral, …). Otherwise falls back to
+  /// [_defaultPreTokenRe].
+  final RegExp _preTokenRe;
 
   HFBpeTokenizer._(
     this.vocab,
@@ -64,7 +71,14 @@ class HFBpeTokenizer {
     this._byteEncoder,
     this._byteDecoder,
     this._specials,
-  ) : _idToTok = {for (final e in vocab.entries) e.value: e.key};
+    this._preTokenRe,
+  ) : _idToTok = {
+        for (final e in vocab.entries) e.value: e.key,
+        // Specials override any vocab collision — their id → literal
+        // content mapping is what decode() needs to round-trip
+        // multi-codepoint markers like `<|eot_id|>` intact.
+        for (final s in _specials) s.id: s.text,
+      };
 
   /// Load from a `tokenizer.json` on disk.
   factory HFBpeTokenizer.loadFile(String path) {
@@ -128,13 +142,111 @@ class HFBpeTokenizer {
       specials.sort((a, b) => b.text.length - a.text.length);
     }
 
+    final preTokenRe =
+        _extractPreTokenizerRegex(raw['pre_tokenizer']) ?? _defaultPreTokenRe;
+
     return HFBpeTokenizer._(
       vocab,
       mergeRank,
       byteEncoder,
       byteDecoder,
       specials,
+      preTokenRe,
     );
+  }
+
+  /// Walk the tokenizer.json `pre_tokenizer` node looking for a
+  /// `Split` entry that carries a `Regex` pattern. Returns a compiled
+  /// [RegExp] with `unicode: true`, or `null` if none was found.
+  ///
+  /// Handles the three shapes we see in practice:
+  ///   * `{"type": "Split", "pattern": {"Regex": "…"}}`
+  ///   * `{"type": "Sequence", "pretokenizers": [ {Split…}, {ByteLevel…} ]}`
+  ///   * `{"type": "ByteLevel"}` (GPT-2 style — no explicit regex,
+  ///     returns `null` so the caller uses the GPT-2 default).
+  ///
+  /// Also strips Python-regex `(?i:…)` inline flag groups (unsupported
+  /// by Dart's ECMAScript-flavoured RegExp) by dropping the wrapper
+  /// and setting `caseSensitive: false` on the resulting RegExp.
+  static RegExp? _extractPreTokenizerRegex(dynamic node) {
+    if (node is! Map) return null;
+    final type = node['type'];
+    if (type == 'Split') {
+      final pattern = node['pattern'];
+      if (pattern is Map) {
+        final r = pattern['Regex'];
+        if (r is String && r.isNotEmpty) {
+          return _compilePyRegex(r);
+        }
+      }
+      return null;
+    }
+    if (type == 'Sequence') {
+      final kids = node['pretokenizers'];
+      if (kids is List) {
+        for (final k in kids) {
+          final re = _extractPreTokenizerRegex(k);
+          if (re != null) return re;
+        }
+      }
+      return null;
+    }
+    // ByteLevel / Whitespace / Metaspace / etc. — no explicit regex.
+    return null;
+  }
+
+  /// Compile a Python-`regex`-module pattern into a Dart [RegExp].
+  /// Handles the one non-portable construct that shows up in the
+  /// wild — leading `(?i:…)` inline flag groups.
+  static RegExp _compilePyRegex(String pattern) {
+    var p = pattern;
+    var caseInsensitive = false;
+    // Match a leading `(?i:` … `)` group and lift the flag out.
+    if (p.startsWith('(?i:')) {
+      final close = _findMatchingParen(p, 0);
+      if (close > 0 && close == p.length - 1) {
+        p = p.substring(4, close);
+        caseInsensitive = true;
+      } else if (close > 0) {
+        // The `(?i:…)` group is followed by more alternatives — inline
+        // the case-insensitive flag globally. Safe because the rest of
+        // the pattern uses `\p{L}` / `\p{N}` which don't care about case.
+        p = p.substring(4, close) + p.substring(close + 1);
+        caseInsensitive = true;
+      }
+    }
+    return RegExp(p, unicode: true, caseSensitive: !caseInsensitive);
+  }
+
+  /// Given an open `(` at position `open`, return the index of its
+  /// matching `)`, or -1 if none. Ignores parens inside character
+  /// classes `[…]` and escaped parens `\(` / `\)`.
+  static int _findMatchingParen(String s, int open) {
+    var depth = 0;
+    var inClass = false;
+    var i = open;
+    while (i < s.length) {
+      final c = s[i];
+      if (c == r'\' && i + 1 < s.length) {
+        i += 2;
+        continue;
+      }
+      if (inClass) {
+        if (c == ']') inClass = false;
+        i++;
+        continue;
+      }
+      if (c == '[') {
+        inClass = true;
+      } else if (c == '(') {
+        depth++;
+      } else if (c == ')') {
+        depth--;
+        if (depth == 0) return i;
+      }
+      i++;
+    }
+    return -1;
   }
 
   /// GPT-2's `bytes_to_unicode`. Returns a length-256 list mapping
@@ -217,11 +329,24 @@ class HFBpeTokenizer {
 
   /// The special token used by GPT-2 / Pythia as end-of-text.
   /// Returns `null` if the vocab has no `<|endoftext|>` entry.
-  int? get endOfTextId {
+  int? get endOfTextId => tokenId('<|endoftext|>');
+
+  /// Llama 3 end-of-turn marker (`<|eot_id|>`, id 128009 for the
+  /// stock 128k vocab). Returns `null` for tokenizers that don't
+  /// define it.
+  int? get llamaEotId => tokenId('<|eot_id|>');
+
+  /// Llama 3 begin-of-text marker (`<|begin_of_text|>`, id 128000).
+  /// Returns `null` for tokenizers that don't define it.
+  int? get llamaBeginOfTextId => tokenId('<|begin_of_text|>');
+
+  /// Look up any special-token id by its literal content string.
+  /// Returns `null` if not present.
+  int? tokenId(String content) {
     for (final s in _specials) {
-      if (s.text == '<|endoftext|>') return s.id;
+      if (s.text == content) return s.id;
     }
-    return vocab['<|endoftext|>'];
+    return vocab[content];
   }
 
   int get vocabSize => vocab.length;

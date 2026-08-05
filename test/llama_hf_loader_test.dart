@@ -79,16 +79,18 @@ void main() {
       final src = Llama(cfg);
       final state = _dumpToHFMap(src);
 
-      final dst = Llama(LlamaConfig(
-        vocabSize: cfg.vocabSize,
-        maxCtx: cfg.maxCtx,
-        embedDim: cfg.embedDim,
-        numLayers: cfg.numLayers,
-        numHeads: cfg.numHeads,
-        numKvHeads: cfg.numKvHeads,
-        ffnDim: cfg.ffnDim,
-        seed: 999, // deliberately different init seed
-      ));
+      final dst = Llama(
+        LlamaConfig(
+          vocabSize: cfg.vocabSize,
+          maxCtx: cfg.maxCtx,
+          embedDim: cfg.embedDim,
+          numLayers: cfg.numLayers,
+          numHeads: cfg.numHeads,
+          numKvHeads: cfg.numKvHeads,
+          ffnDim: cfg.ffnDim,
+          seed: 999, // deliberately different init seed
+        ),
+      );
 
       final report = LlamaHFLoader.loadMap(dst, state);
       expect(report.unusedKeys, isEmpty);
@@ -124,17 +126,19 @@ void main() {
       final state = _dumpToHFMap(src);
       expect(state.containsKey('lm_head.weight'), isTrue);
 
-      final dst = Llama(LlamaConfig(
-        vocabSize: cfg.vocabSize,
-        maxCtx: cfg.maxCtx,
-        embedDim: cfg.embedDim,
-        numLayers: cfg.numLayers,
-        numHeads: cfg.numHeads,
-        numKvHeads: cfg.numKvHeads,
-        ffnDim: cfg.ffnDim,
-        tieWeights: false,
-        seed: 42,
-      ));
+      final dst = Llama(
+        LlamaConfig(
+          vocabSize: cfg.vocabSize,
+          maxCtx: cfg.maxCtx,
+          embedDim: cfg.embedDim,
+          numLayers: cfg.numLayers,
+          numHeads: cfg.numHeads,
+          numKvHeads: cfg.numKvHeads,
+          ffnDim: cfg.ffnDim,
+          tieWeights: false,
+          seed: 42,
+        ),
+      );
       final report = LlamaHFLoader.loadMap(dst, state);
       expect(report.unusedKeys, isEmpty);
 
@@ -163,10 +167,7 @@ void main() {
       final m = Llama(cfg);
       final state = _dumpToHFMap(m);
       state.remove('model.norm.weight');
-      expect(
-        () => LlamaHFLoader.loadMap(m, state),
-        throwsArgumentError,
-      );
+      expect(() => LlamaHFLoader.loadMap(m, state), throwsArgumentError);
     });
 
     test('rejects shape mismatch', () {
@@ -183,10 +184,7 @@ void main() {
       final state = _dumpToHFMap(m);
       // Replace the norm weight with a wrong-shape tensor.
       state['model.norm.weight'] = Tensor.fromList([8], List.filled(8, 1.0));
-      expect(
-        () => LlamaHFLoader.loadMap(m, state),
-        throwsArgumentError,
-      );
+      expect(() => LlamaHFLoader.loadMap(m, state), throwsArgumentError);
     });
 
     test('tied model with redundant lm_head.weight is accepted', () {
