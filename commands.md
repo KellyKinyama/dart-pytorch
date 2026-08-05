@@ -579,3 +579,42 @@ identity hit-rate vs class-uniform baseline. `--all-classes` uses
 every subfolder; `--gallery PATH` points at a different
 folder-per-class dataset. Source:
 [bin/vector_image_search_demo.dart](bin/vector_image_search_demo.dart).
+
+## R9. Copilot-style RAG chat server (browser UI + upload)
+
+Local HTTP server that serves a drag-drop chat page and does
+retrieval-augmented generation over the docs you upload. Reuses
+the R6 chunked-RAG pipeline (200-token windows, 100-token stride,
+last-token hidden state, corpus-mean centring, `IndexFlatIP` over
+L2-normalised vectors, cosine = inner product). Prompts assemble
+top-K retrieved chunks + recent history + user turn, then feeds
+the pretrained HF GPT-2 checkpoint. State is in-memory (no auth,
+single-user, no persistence).
+
+```sh
+# distilgpt2 on CPU (default)
+dart run bin/rag_chat_server.dart --port 8090
+
+# gpt2-medium on GPU
+LD_LIBRARY_PATH=/usr/lib/wsl/lib dart run bin/rag_chat_server.dart \
+  --path models/gpt2-medium/model.safetensors \
+  --vocab models/gpt2-medium/tokenizer.json \
+  --preset medium --gpu --port 8090
+```
+
+Then open `http://127.0.0.1:8090/` in a browser: drop text files
+into the sidebar, chat in the main pane, expand the "sources"
+panel under each reply to see which chunks were retrieved (doc
+title, token span, cosine score, preview). Endpoints:
+
+- `GET  /`          — HTML chat UI.
+- `GET  /health`    — `{model, device, embedDim, numLayers, maxCtx}`.
+- `GET  /status`    — doc list + chunk counts.
+- `POST /upload`    — `text/plain` body, `x-filename` header.
+- `POST /chat`      — `{"message": "..."}` → `{reply, retrieved, ms, ...}`.
+- `POST /reset`     — wipe docs, chunks and history.
+
+Limits: 5 MB per upload, 500 chunks total, last 3 turn-pairs of
+history retained, prompt overflow first drops history then
+chunks. Text/markdown only (no PDF ingest). Source:
+[bin/rag_chat_server.dart](bin/rag_chat_server.dart).
