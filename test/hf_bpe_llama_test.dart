@@ -27,11 +27,7 @@ Map<String, dynamic> _synthLlama3Tokenizer() {
   vocab[String.fromCharCode(0x10A)] = nextId++;
 
   return <String, dynamic>{
-    'model': {
-      'type': 'BPE',
-      'vocab': vocab,
-      'merges': <List<String>>[],
-    },
+    'model': {'type': 'BPE', 'vocab': vocab, 'merges': <List<String>>[]},
     'pre_tokenizer': {
       'type': 'Sequence',
       'pretokenizers': [
@@ -94,8 +90,7 @@ void main() {
       tok = HFBpeTokenizer.fromJson(_synthLlama3Tokenizer());
     });
 
-    test('loads pre_tokenizer.Sequence(Split, ByteLevel) without error',
-        () {
+    test('loads pre_tokenizer.Sequence(Split, ByteLevel) without error', () {
       // If we got here, the (?i:…) group survived _compilePyRegex.
       expect(tok.vocabSize, greaterThan(90));
     });
@@ -132,8 +127,7 @@ void main() {
       expect(tok.endOfTextId, isNull);
     });
 
-    test(
-        'JSON string load path also works (round-trips through '
+    test('JSON string load path also works (round-trips through '
         'jsonDecode)', () {
       final asString = jsonEncode(_synthLlama3Tokenizer());
       final parsed = jsonDecode(asString) as Map<String, dynamic>;
@@ -145,15 +139,14 @@ void main() {
   group('HFBpeTokenizer regex compilation helpers', () {
     test('accepts pattern with no (?i:…) prefix', () {
       final j = _synthLlama3Tokenizer();
-      (j['pre_tokenizer']['pretokenizers'][0]['pattern']
-          as Map)['Regex'] = r'\p{L}+|\p{N}+|\s+';
+      (j['pre_tokenizer']['pretokenizers'][0]['pattern'] as Map)['Regex'] =
+          r'\p{L}+|\p{N}+|\s+';
       // Should not throw.
       final t = HFBpeTokenizer.fromJson(j);
       expect(t.encode('abc'), isNotEmpty);
     });
 
-    test('falls back to GPT-2 regex when pre_tokenizer is ByteLevel-only',
-        () {
+    test('falls back to GPT-2 regex when pre_tokenizer is ByteLevel-only', () {
       final j = _synthLlama3Tokenizer();
       j['pre_tokenizer'] = {
         'type': 'ByteLevel',

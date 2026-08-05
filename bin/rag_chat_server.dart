@@ -62,6 +62,7 @@ import 'dart:typed_data';
 
 import 'package:dart_pytorch/dart_pytorch.dart';
 
+import '_llama_encoder.dart';
 import '_lm_encoder.dart';
 
 // ---------------------------------------------------------------------------
@@ -118,18 +119,18 @@ class _Turn {
 
 class _State {
   _State({
-    required this.model,
+    required this.backend,
     required this.tokenizer,
-    required this.cfg,
     required this.presetLabel,
     required this.deviceLabel,
+    required this.archLabel,
   });
 
-  final GPT model;
+  final _LmBackend backend;
   final HFBpeTokenizer tokenizer;
-  final GPTConfig cfg;
   final String presetLabel;
   final String deviceLabel;
+  final String archLabel;
 
   final List<_Doc> docs = [];
   final List<_Chunk> chunks = [];
@@ -138,26 +139,142 @@ class _State {
   final List<_Turn> history = [];
 }
 
+/// Uniform surface over [GPT] and [Llama] so the chat handler doesn't
+/// have to know which arch is loaded. Both back-ends already speak
+/// the same generate() ergonomics; the encoder path per arch lives
+/// in `_lm_encoder.dart` / `_llama_encoder.dart`.
+abstract class _LmBackend {
+  int get embedDim;
+  int get maxCtx;
+  int get numLayers;
+
+  /// Last-position hidden state after the transformer stack, no head.
+  Float32List lastHidden(List<int> ids);
+
+  /// Autoregressive generate returning the full sequence `prompt +
+  /// newly generated tokens` as doubles (the float32-index convention).
+  List<double> generate(
+    List<double> promptIds, {
+    required int maxNewTokens,
+    required double temperature,
+    int? topK,
+  });
+
+  /// End-of-turn token id if the tokenizer defines one. Used to stop
+  /// generation early. `null` for arches whose tokenizer has no EOT.
+  int? get eotId;
+}
+
+class _GptBackend extends _LmBackend {
+  _GptBackend(this.model, this.tokenizer);
+  final GPT model;
+  final HFBpeTokenizer tokenizer;
+
+  @override
+  int get embedDim => model.config.embedDim;
+  @override
+  int get maxCtx => model.config.maxCtx;
+  @override
+  int get numLayers => model.config.numLayers;
+
+  @override
+  Float32List lastHidden(List<int> ids) => lastTokenHidden(model, ids);
+
+  @override
+  List<double> generate(
+    List<double> promptIds, {
+    required int maxNewTokens,
+    required double temperature,
+    int? topK,
+  }) => model.generate(
+    promptIds,
+    maxNewTokens: maxNewTokens,
+    temperature: temperature,
+    topK: topK,
+  );
+
+  @override
+  int? get eotId => tokenizer.endOfTextId;
+}
+
+class _LlamaBackend extends _LmBackend {
+  _LlamaBackend(this.model, this.tokenizer);
+  final Llama model;
+  final HFBpeTokenizer tokenizer;
+
+  @override
+  int get embedDim => model.config.embedDim;
+  @override
+  int get maxCtx => model.config.maxCtx;
+  @override
+  int get numLayers => model.config.numLayers;
+
+  @override
+  Float32List lastHidden(List<int> ids) => lastTokenHiddenLlama(model, ids);
+
+  @override
+  List<double> generate(
+    List<double> promptIds, {
+    required int maxNewTokens,
+    required double temperature,
+    int? topK,
+  }) => model.generate(
+    promptIds,
+    maxNewTokens: maxNewTokens,
+    temperature: temperature,
+    topK: topK,
+  );
+
+  @override
+  int? get eotId => tokenizer.llamaEotId ?? tokenizer.endOfTextId;
+}
+
 // ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
 
 Future<void> main(List<String> args) async {
   final srvOpts = _parseServerArgs(args);
-  final opts = parseEncoderArgs(srvOpts.encoderArgs, programHelp: _help);
-  final loaded = loadEncoder(opts);
 
-  final state = _State(
-    model: loaded.model,
-    tokenizer: loaded.tokenizer,
-    cfg: loaded.config,
-    presetLabel: opts.preset,
-    deviceLabel: opts.gpu ? 'gpu' : 'cpu',
-  );
+  late final _State state;
+  if (srvOpts.arch == 'llama') {
+    // Reuse the shared --path / --vocab / --preset / --gpu flag parser,
+    // but with Llama-friendly defaults.
+    final opts = parseEncoderArgs(
+      srvOpts.encoderArgs,
+      defaultPath: 'models/llama-3.2-1b-instruct/model.safetensors',
+      defaultVocab: 'models/llama-3.2-1b-instruct/tokenizer.json',
+      defaultPreset: 'llama-3.2-1b',
+      programHelp: _help,
+    );
+    final loaded = loadLlamaEncoder(
+      path: opts.path,
+      vocabPath: opts.vocabPath,
+      preset: opts.preset,
+      gpu: opts.gpu,
+    );
+    state = _State(
+      backend: _LlamaBackend(loaded.model, loaded.tokenizer),
+      tokenizer: loaded.tokenizer,
+      presetLabel: opts.preset,
+      deviceLabel: opts.gpu ? 'gpu' : 'cpu',
+      archLabel: 'llama',
+    );
+  } else {
+    final opts = parseEncoderArgs(srvOpts.encoderArgs, programHelp: _help);
+    final loaded = loadEncoder(opts);
+    state = _State(
+      backend: _GptBackend(loaded.model, loaded.tokenizer),
+      tokenizer: loaded.tokenizer,
+      presetLabel: opts.preset,
+      deviceLabel: opts.gpu ? 'gpu' : 'cpu',
+      archLabel: 'gpt',
+    );
+  }
 
   final server = await HttpServer.bind(srvOpts.host, srvOpts.port);
   stdout.writeln(
-    '\nrag_chat_server (${state.presetLabel}, '
+    '\nrag_chat_server (arch=${state.archLabel}, ${state.presetLabel}, '
     '${state.deviceLabel}) listening on '
     'http://${srvOpts.host}:${srvOpts.port}',
   );
@@ -208,11 +325,12 @@ Future<void> _handle(_State state, HttpRequest req) async {
   if (method == 'GET' && path == '/health') {
     writeJson(200, {
       'status': 'ok',
+      'arch': state.archLabel,
       'model': state.presetLabel,
       'device': state.deviceLabel,
-      'embedDim': state.cfg.embedDim,
-      'numLayers': state.cfg.numLayers,
-      'maxCtx': state.cfg.maxCtx,
+      'embedDim': state.backend.embedDim,
+      'numLayers': state.backend.numLayers,
+      'maxCtx': state.backend.maxCtx,
     });
     await req.response.close();
     return;
@@ -247,7 +365,7 @@ Future<void> _handle(_State state, HttpRequest req) async {
   if (method == 'POST' && path == '/reset') {
     state.docs.clear();
     state.chunks.clear();
-    state.index = IndexFlatIP(state.cfg.embedDim);
+    state.index = IndexFlatIP(state.backend.embedDim);
     state.corpusMean = null;
     state.history.clear();
     writeJson(200, {'ok': true});
@@ -296,7 +414,7 @@ Future<void> _handleUpload(
 
   void addChunk(int start, int end, List<int> ids) {
     final chunkText = state.tokenizer.decode(ids);
-    final raw = lastTokenHidden(state.model, ids);
+    final raw = state.backend.lastHidden(ids);
     newChunks.add(
       _Chunk(
         id: state.chunks.length + newChunks.length,
@@ -349,7 +467,7 @@ Future<void> _handleUpload(
 }
 
 void _rebuildIndex(_State state) {
-  final d = state.cfg.embedDim;
+  final d = state.backend.embedDim;
   if (state.chunks.isEmpty) {
     state.index = IndexFlatIP(d);
     state.corpusMean = null;
@@ -388,7 +506,7 @@ Future<void> _handleChat(
   final retrieved = <Map<String, dynamic>>[];
   final ctxLines = <String>[];
   if (state.chunks.isNotEmpty && state.corpusMean != null) {
-    final qRaw = lastTokenHidden(state.model, state.tokenizer.encode(message));
+    final qRaw = state.backend.lastHidden(state.tokenizer.encode(message));
     final qVec = centerAndNormalize(qRaw, state.corpusMean!);
     final k = _topKChunks < state.chunks.length
         ? _topKChunks
@@ -437,7 +555,7 @@ Future<void> _handleChat(
   var promptIds = state.tokenizer.encode(prompt);
 
   // ---- 3. Guard against overflow: trim history first, then chunks
-  while (promptIds.length + _maxNewTokens > state.cfg.maxCtx &&
+  while (promptIds.length + _maxNewTokens > state.backend.maxCtx &&
       state.history.isNotEmpty) {
     state.history.removeAt(0);
     // Rebuild prompt.
@@ -459,7 +577,7 @@ Future<void> _handleChat(
     b.write('User: $message\nAssistant:');
     promptIds = state.tokenizer.encode(b.toString());
   }
-  while (promptIds.length + _maxNewTokens > state.cfg.maxCtx &&
+  while (promptIds.length + _maxNewTokens > state.backend.maxCtx &&
       ctxLines.length > 1) {
     ctxLines.removeLast();
     retrieved.removeLast();
@@ -472,16 +590,25 @@ Future<void> _handleChat(
   }
 
   // ---- 4. Generate ---------------------------------------------
-  final full = state.model.generate(
+  final full = state.backend.generate(
     promptIds.map((i) => i.toDouble()).toList(),
     maxNewTokens: _maxNewTokens,
     temperature: _temperature,
     topK: _generatorTopK,
   );
-  final answerIds = full
+  var answerIds = full
       .sublist(promptIds.length)
       .map((d) => d.toInt())
       .toList();
+  // If the tokenizer defines an EOT id (Llama-3 <|eot_id|> or
+  // GPT-2 <|endoftext|>), stop the answer at its first occurrence.
+  final eot = state.backend.eotId;
+  if (eot != null) {
+    final eotIdx = answerIds.indexOf(eot);
+    if (eotIdx >= 0) {
+      answerIds = answerIds.sublist(0, eotIdx);
+    }
+  }
   var answer = state.tokenizer.decode(answerIds).trim();
 
   // Trim at the next self-invented turn header (`\nUser:` or
@@ -520,16 +647,19 @@ class _ServerOpts {
   _ServerOpts({
     required this.host,
     required this.port,
+    required this.arch,
     required this.encoderArgs,
   });
   final String host;
   final int port;
+  final String arch; // 'gpt' | 'llama'
   final List<String> encoderArgs;
 }
 
 _ServerOpts _parseServerArgs(List<String> args) {
   var host = '127.0.0.1';
   var port = 8090;
+  var arch = 'gpt';
   final encoderArgs = <String>[];
   for (var i = 0; i < args.length; i++) {
     final a = args[i];
@@ -537,6 +667,12 @@ _ServerOpts _parseServerArgs(List<String> args) {
       port = int.parse(args[++i]);
     } else if (a == '--host' && i + 1 < args.length) {
       host = args[++i];
+    } else if (a == '--arch' && i + 1 < args.length) {
+      arch = args[++i];
+      if (arch != 'gpt' && arch != 'llama') {
+        stderr.writeln('unknown --arch "$arch"; use gpt | llama');
+        exit(64);
+      }
     } else if (a == '-h' || a == '--help') {
       stdout.writeln(_help);
       exit(0);
@@ -544,7 +680,7 @@ _ServerOpts _parseServerArgs(List<String> args) {
       encoderArgs.add(a);
     }
   }
-  return _ServerOpts(host: host, port: port, encoderArgs: encoderArgs);
+  return _ServerOpts(host: host, port: port, arch: arch, encoderArgs: encoderArgs);
 }
 
 const String _help = '''
@@ -556,11 +692,19 @@ Usage:
 Server:
   --host HOST      bind address     (default: 127.0.0.1 — local only)
   --port PORT      TCP port         (default: 8090)
+  --arch ARCH      gpt | llama      (default: gpt)
 
-Model:
+Model (GPT arch):
   --path PATH      safetensors weights (default: models/distilgpt2/model.safetensors)
   --vocab PATH     tokenizer.json     (default: models/distilgpt2/tokenizer.json)
   --preset NAME    distilgpt2 | small | medium | large  (default: distilgpt2)
+
+Model (Llama arch):
+  --path PATH      safetensors weights (default: models/llama-3.2-1b-instruct/model.safetensors)
+  --vocab PATH     tokenizer.json     (default: models/llama-3.2-1b-instruct/tokenizer.json)
+  --preset NAME    llama-3.2-1b | llama-3.2-3b | llama-3.1-8b  (default: llama-3.2-1b)
+
+Shared:
   --gpu            run on CUDA (default: CPU)
 
 Then open http://127.0.0.1:PORT/ in your browser.
