@@ -226,3 +226,137 @@ curl -s -X POST http://127.0.0.1:8080/generate \
 
 `"tokens"` can be replaced with `"text": "The world is"` when a
 `tokenizer.json` was loaded.
+
+---
+
+# Vision Transformer (ViT) demos
+
+Everything under `bin/vit_*.dart` and `bin/train_face_folder.dart`.
+No weights or tokenizer needed — they train from scratch on tiny
+synthetic (or, for `train_face_folder.dart`, on-disk real) data.
+Every demo accepts the same flag surface:
+
+```
+(no flag)          CPU (default)
+--gpu              CUDA via the FFI backend
+```
+
+`train_face_folder.dart` adds `--synthetic`, `--tmp`,
+`--all-classes` (see its section below).
+
+> **Speed note** (from `memories/dart_pytorch_training.md`): on
+> tiny models the GPU is *slower* than CPU because kernel-launch
+> overhead dominates. Expect ~4× slowdown on a 250 k-param ViT.
+> Run these demos on CPU unless you're specifically checking the
+> CUDA path.
+
+## V1. vit_demo — 3-class synthetic classification (smoke test)
+
+16×16 grayscale patches, 3 classes (horizontal/vertical stripes,
+checkerboard). Two encoder layers. Runs in a few seconds.
+
+```sh
+# CPU
+dart run bin/vit_demo.dart
+
+# GPU
+LD_LIBRARY_PATH=/usr/lib/wsl/lib \
+  dart run bin/vit_demo.dart --gpu
+```
+
+## V2. vit_face_recognition_demo — synthetic triplet loss
+
+Four synthetic "identities" (deterministic random patchified images),
+triplet loss `relu(‖a-p‖² - ‖a-n‖² + margin)`. Prints the
+cosine-similarity matrix over the four base identities before/after
+training — diagonal should approach 1.0, off-diagonal should drop.
+
+```sh
+# CPU
+dart run bin/vit_face_recognition_demo.dart
+
+# GPU
+LD_LIBRARY_PATH=/usr/lib/wsl/lib \
+  dart run bin/vit_face_recognition_demo.dart --gpu
+```
+
+## V3. vit_object_detection_demo — fixed-order detection
+
+3 query slots over a 32×32 synthetic RGB input trained against a
+fixed target (class 1 @ small box, class 2 @ mid box, background @ 0).
+Loss = `crossEntropy + 0.25 · MSE(box)`. No bipartite matching.
+
+```sh
+# CPU
+dart run bin/vit_object_detection_demo.dart
+
+# GPU
+LD_LIBRARY_PATH=/usr/lib/wsl/lib \
+  dart run bin/vit_object_detection_demo.dart --gpu
+```
+
+## V4. vit_hungarian_matching_demo — DETR-style single image
+
+Same detector, but predicted queries are Hungarian-matched to a
+variable set of GT objects each step. Unmatched queries fall to
+background with a masked box loss.
+
+```sh
+# CPU
+dart run bin/vit_hungarian_matching_demo.dart
+
+# GPU
+LD_LIBRARY_PATH=/usr/lib/wsl/lib \
+  dart run bin/vit_hungarian_matching_demo.dart --gpu
+```
+
+## V5. vit_hungarian_batch_demo — DETR-style variable-count batch
+
+Extends V4 to a batch of images with GT counts 0..numQueries per
+step. Realistic DETR training loop. Uses `Tensor.abs` (needs the
+`abs_backward_op` GPU kernel — already wired in).
+
+```sh
+# CPU
+dart run bin/vit_hungarian_batch_demo.dart
+
+# GPU
+LD_LIBRARY_PATH=/usr/lib/wsl/lib \
+  dart run bin/vit_hungarian_batch_demo.dart --gpu
+```
+
+## V6. train_face_folder — real-photo face recognition
+
+End-to-end pipeline: reads real celebrity photos, materializes an
+`ImageFolder`-style layout, splits 75/25 train/val, trains a
+`ViTClassifier` with cross-entropy on class ids (top-1 accuracy
+reported before/after). Falls back to the cartoon 4-identity gallery
+under `--synthetic` (triplet loss + cosine similarity gap).
+
+Data source: hardcoded to `/mnt/c/Users/kkinyama/dart_cuda/Faces`
+by default — override by prepping your own `faces_gallery/{name}/*.jpg`
+tree and skipping the flat-dir stage.
+
+```sh
+# CPU, real celebrity photos, 8-class subset
+dart run bin/train_face_folder.dart
+
+# GPU
+LD_LIBRARY_PATH=/usr/lib/wsl/lib \
+  dart run bin/train_face_folder.dart --gpu
+
+# Cartoon synthetic gallery (triplet loss path)
+dart run bin/train_face_folder.dart --synthetic
+
+# Build the intermediate gallery in a /tmp dir that's deleted on exit
+dart run bin/train_face_folder.dart --tmp
+
+# Use every identity in the source folder instead of the 8-class subset
+dart run bin/train_face_folder.dart --all-classes
+```
+
+Working defaults (from user memory): 8 classes × 16 samples ×
+64×64×3, `ViTClassifier(embedDim=96, numLayers=2, numHeads=4,
+patchSize=8)`, Adam `lr=1e-3`, 1500 steps → val top-1 ≈ 25 %
+(2× uniform 12.5 %). `lr=3e-3` is too high — loss stays around
+uniform.
