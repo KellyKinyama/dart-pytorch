@@ -58,73 +58,102 @@ The GPT surface in
 [../../lib/core/nn/gpt.dart](../../lib/core/nn/gpt.dart) exposes
 its sub-modules directly — `tokenEmb`, `posEmb`, `embedDrop`,
 `encoder`. That lets you run the transformer stack **without** the
-LM head and use the final hidden state as your embedding:
+LM head and use the final hidden state as your embedding. A working
+end-to-end reference is
+[../../bin/rag_qa_demo.dart](../../bin/rag_qa_demo.dart); the core
+routine is:
 
 ```dart
 import 'dart:typed_data';
 import 'package:dart_pytorch/dart_pytorch.dart';
 
-/// Mean-pool + L2-normalize the final hidden state of a GPT model.
-/// Returns a `Float32List` of length `config.embedDim` ready for
-/// `IndexFlatIP.add([...])`.
-Float32List embedWithLM(GPT model, List<int> tokenIds) {
+/// Last-token hidden state of a GPT model. Raw — the caller applies
+/// corpus-mean centring and L2-normalisation before indexing.
+Float32List lastTokenHidden(GPT model, List<int> tokenIds) {
+  final clipped = tokenIds.length > model.config.maxCtx
+      ? tokenIds.sublist(0, model.config.maxCtx)
+      : tokenIds;
+
   return Tensor.noGrad(() {
     final tokens = Tensor.fromList(
-      [tokenIds.length],
-      tokenIds.map((i) => i.toDouble()).toList(),
+      [clipped.length],
+      clipped.map((i) => i.toDouble()).toList(),
       device: model.config.device,
     );
 
-    var h = model.tokenEmb(tokens);                 // [N, D]
-    h = model.posEmb(h);                             // [N, D]
+    var h = model.tokenEmb(tokens);                       // [N, D]
+    h = model.posEmb(h);                                   // [N, D]
     h = model.embedDrop(h);
-    final mask = tokenIds.length > 1
-        ? causalMask(tokenIds.length, device: h.device)
+    final mask = clipped.length > 1
+        ? causalMask(clipped.length, device: h.device)
         : null;
-    h = model.encoder(h, mask: mask);                // [N, D]
+    h = model.encoder(h, mask: mask);                     // [N, D]
 
-    // Mean-pool across the sequence axis → [D].
-    final pooled = h.mean(dim: 0);                   // [D]
-
-    // L2-normalize so IndexFlatIP == cosine similarity.
-    final norm = pooled
-        .mul(pooled)
-        .sum()
-        .add(Tensor.scalar(1e-12, device: pooled.device))
-        .sqrt();
-    final normalized = pooled.div(norm);
-
-    final v = Float32List(model.config.embedDim);
-    final flat = normalized.toList();
-    for (var i = 0; i < v.length; i++) {
-      v[i] = flat[i].toDouble();
+    // Pull the last row of [N, D] out via toList() + row-major offset.
+    final flat = h.toList();
+    final d = model.config.embedDim;
+    final n = clipped.length;
+    final out = Float32List(d);
+    final base = (n - 1) * d;
+    for (var j = 0; j < d; j++) {
+      out[j] = flat[base + j].toDouble();
     }
-    return v;
+    return out;
   });
 }
 ```
 
-Wiring it into a `IndexFlatIP` looks like:
+Two non-obvious details:
+
+- **Last-token, not mean.** GPT-family LMs are causal — only the
+  final position has attended to every previous token. Mean-pooling
+  hidden states from a causal LM lands every doc on nearly the
+  same unit vector (the "anisotropy cone", cosine ≈ 0.995) and
+  retrieval collapses.
+- **Corpus-mean centring.** Even last-token vectors share a strong
+  common direction. Compute the mean of every raw doc vector,
+  subtract it from each (and from every query), *then*
+  L2-normalise. In the demo this spreads cosine scores from
+  ≈ 0.996 to 0.09–0.69 — enough for `IndexFlatIP` to rank the
+  right passage in the top-3 for every question.
+
+Wiring it into an `IndexFlatIP` (two-pass — collect raw vectors,
+compute the mean, then center + normalise + index):
 
 ```dart
-final model = /* load via loadGpt2Hf, loadPythiaHf, loadGptJHf */;
-final tokenizer = /* loaded from tokenizer.json */;
-final index = IndexFlatIP(model.config.embedDim);
-final payloads = <String>[];
+final model = GPT(GPT2HFLoader.distilGpt2Config(device: Device.CPU));
+GPT2HFLoader.loadFile(model, 'models/distilgpt2/model.safetensors');
+final tokenizer = HFBpeTokenizer.loadFile('models/distilgpt2/tokenizer.json');
+model.eval();
 
+// Pass 1: raw last-token vectors.
+final rawDocVecs = <Float32List>[];
 for (final doc in docs) {
-  final ids = tokenizer.encode(doc);
-  index.add([embedWithLM(model, ids)]);
-  payloads.add(doc);
+  rawDocVecs.add(lastTokenHidden(model, tokenizer.encode(doc)));
 }
 
-// Query
-final qids = tokenizer.encode('What is a safe vehicle for kids?');
-final result = index.search([embedWithLM(model, qids)], 5);
+// Pass 2: subtract corpus mean, L2-normalise, index.
+final mean = meanVector(rawDocVecs, model.config.embedDim);
+final index = IndexFlatIP(model.config.embedDim);
+for (final v in rawDocVecs) {
+  index.add([centerAndNormalize(v, mean)]);
+}
+
+// Query — subtract the same mean before searching.
+final qRaw = lastTokenHidden(model, tokenizer.encode('...'));
+final result = index.search([centerAndNormalize(qRaw, mean)], 5);
 for (var j = 0; j < result.ids[0].length; j++) {
-  print('${result.scores[0][j].toStringAsFixed(3)}  ${payloads[result.ids[0][j]]}');
+  print(
+    '${result.distances[0][j].toStringAsFixed(3)}  '
+    '${docs[result.ids[0][j]]}',
+  );
 }
 ```
+
+`meanVector` and `centerAndNormalize` are trivial helpers — see the
+demo for full implementations. `result.distances` holds the cosine
+scores (`SearchResult` uses that field name for both L2 distances
+and IP scores; the metric is fixed at index-construction time).
 
 **Model-size cheat sheet** (which runner to load — see
 [../../commands.md](../../commands.md) for the CLI equivalents):
@@ -144,6 +173,12 @@ the vectors. Cross that threshold and swap `IndexFlatIP` for
 drop the dim to something like 256 first.
 
 ## 11.3 Pattern 3: retrieval-augmented generation
+
+A runnable end-to-end version of everything in §11.2 + §11.3 lives
+at [../../bin/rag_qa_demo.dart](../../bin/rag_qa_demo.dart) — ten
+factual passages, five questions, distilgpt2 doing both encoding
+and generation. It's the recommended starting point; skim the code
+alongside the theory below.
 
 Given the search from §11.2, generation is a prompt-templating step
 followed by the model's normal `generate(...)`:

@@ -360,3 +360,46 @@ Working defaults (from user memory): 8 classes × 16 samples ×
 patchSize=8)`, Adam `lr=1e-3`, 1500 steps → val top-1 ≈ 25 %
 (2× uniform 12.5 %). `lr=3e-3` is too high — loss stays around
 uniform.
+
+---
+
+# Document analysis — Retrieval-Augmented Q&A
+
+End-to-end **RAG** pipeline that uses one of the HF language models
+above as *both* the sentence encoder and the answer generator. See
+the chapter 11 write-up in
+[docs/vectors/11-LANGUAGE-MODEL-INTEGRATION.md](docs/vectors/11-LANGUAGE-MODEL-INTEGRATION.md).
+
+## R1. rag_qa_demo (distilgpt2, CPU)
+
+Ten hardcoded factual passages + five questions. For each question:
+last-token encode → corpus-mean center → `IndexFlatIP.search(k=3)` →
+stuff top-3 into prompt → `distilgpt2.generate(60 tokens)`.
+
+```sh
+dart run bin/rag_qa_demo.dart
+```
+
+## R2. rag_qa_demo (bigger model)
+
+Point at any GPT-2-family checkpoint. `--preset` picks the matching
+`GPTConfig`.
+
+```sh
+LD_LIBRARY_PATH=/usr/lib/wsl/lib \
+  dart run bin/rag_qa_demo.dart \
+    --path models/gpt2-medium/model.safetensors \
+    --vocab models/gpt2-medium/tokenizer.json \
+    --preset medium --gpu
+```
+
+Presets: `distilgpt2` (default) | `small` | `medium` | `large`.
+Encoder quality lifts visibly with model depth — distilgpt2 (6 blocks)
+gets the right passage into top-3 for every demo question; medium
+(24 blocks) usually to top-1.
+
+To swap in your own corpus, edit the `_corpus` and `_questions`
+constants at the top of [bin/rag_qa_demo.dart](bin/rag_qa_demo.dart).
+For a production-grade encoder path, fine-tune a small
+`TextTransformer` with triplet loss instead — see
+[bin/vector_store_demo.dart](bin/vector_store_demo.dart).
