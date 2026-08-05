@@ -5,21 +5,30 @@ weights downloaded under `models/<name>/`. All GPU-targeting commands
 prepend `LD_LIBRARY_PATH=/usr/lib/wsl/lib` — that's a WSL2-specific
 fix so the CUDA driver stub is found. Drop it on native Linux.
 
-| # | Model | Params | Device | Tokenizer available | Runner |
+| # | Model | Params | Device | Tokenizer  | Runner |
 |---|---|---|---|---|---|
-| 1 | distilgpt2       | 82M   | GPU    | `tokenizer.json`   | [bin/distilgpt2/run_gpu_api.dart](bin/distilgpt2/run_gpu_api.dart) |
-| 2 | gpt2 (small)     | 124M  | GPU    | `vocab.json` only  | [bin/gpt2/small/run_gpu.dart](bin/gpt2/small/run_gpu.dart) |
-| 3 | pythia-160m      | 160M  | GPU    | `tokenizer.json`   | [bin/pythia/run_gpu_api.dart](bin/pythia/run_gpu_api.dart) |
-| 4 | gpt2-medium      | 355M  | GPU    | `vocab.json` only  | [bin/gpt2/medium/run_gpu_api.dart](bin/gpt2/medium/run_gpu_api.dart) |
-| 5 | pythia-410m      | 410M  | GPU    | `tokenizer.json`   | [bin/pythia/run_410m_gpu_api.dart](bin/pythia/run_410m_gpu_api.dart) |
-| 6 | gpt2-large       | 774M  | GPU (tight) | *none present* | [bin/gpt2/large/run_gpu.dart](bin/gpt2/large/run_gpu.dart) |
-| 7 | pythia-1b        | 1.0B  | GPU    | `tokenizer.json`   | [bin/pythia/run_1b_gpu_api.dart](bin/pythia/run_1b_gpu_api.dart) |
-| 8 | gpt-j-6b (hybrid)| 6.05B | CPU + GPU | `tokenizer.json` | [bin/gptj/run_6b_hybrid_api.dart](bin/gptj/run_6b_hybrid_api.dart) |
-| 9 | gpt-j-6b (CPU)   | 6.05B | CPU    | `tokenizer.json`   | [bin/gptj/run_6b_cpu_api.dart](bin/gptj/run_6b_cpu_api.dart) |
+| 1 | distilgpt2       | 82M   | GPU    | ✅ local | [bin/distilgpt2/run_gpu_api.dart](bin/distilgpt2/run_gpu_api.dart) |
+| 2 | gpt2 (small)     | 124M  | GPU    | ✅ local | [bin/gpt2/small/run_gpu.dart](bin/gpt2/small/run_gpu.dart) |
+| 3 | pythia-160m      | 160M  | GPU    | ✅ local | [bin/pythia/run_gpu_api.dart](bin/pythia/run_gpu_api.dart) |
+| 4 | gpt2-medium      | 355M  | GPU    | ✅ local | [bin/gpt2/medium/run_gpu_api.dart](bin/gpt2/medium/run_gpu_api.dart) |
+| 5 | pythia-410m      | 410M  | GPU    | ✅ local | [bin/pythia/run_410m_gpu_api.dart](bin/pythia/run_410m_gpu_api.dart) |
+| 6 | gpt2-large       | 774M  | GPU (tight) | ✅ local | [bin/gpt2/large/run_gpu.dart](bin/gpt2/large/run_gpu.dart) |
+| 7 | pythia-1b        | 1.0B  | GPU    | ✅ local | [bin/pythia/run_1b_gpu_api.dart](bin/pythia/run_1b_gpu_api.dart) |
+| 8 | gpt-j-6b (hybrid)| 6.05B | CPU + GPU | ✅ local | [bin/gptj/run_6b_hybrid_api.dart](bin/gptj/run_6b_hybrid_api.dart) |
+| 9 | gpt-j-6b (CPU)   | 6.05B | CPU    | ✅ local | [bin/gptj/run_6b_cpu_api.dart](bin/gptj/run_6b_cpu_api.dart) |
 
-`--text STR` requires `tokenizer.json`. Runners that only have
-`vocab.json` (rows 2, 4) still work via `--prompt IDS` and decode
-their output through the legacy `Ġ`→space fallback.
+All `tokenizer.json` files are already downloaded under
+`models/<name>/`, so every command below runs fully offline — no
+network access needed at runtime. `--text` works everywhere.
+
+### Refresh tokenizers (only if you nuke `models/`)
+
+```sh
+curl -L -o models/gpt2/tokenizer.json         https://huggingface.co/gpt2/resolve/main/tokenizer.json
+curl -L -o models/gpt2-medium/tokenizer.json  https://huggingface.co/gpt2-medium/resolve/main/tokenizer.json
+curl -L -o models/gpt2-large/tokenizer.json   https://huggingface.co/gpt2-large/resolve/main/tokenizer.json
+curl -L -o models/gpt2-large/vocab.json       https://huggingface.co/gpt2-large/resolve/main/vocab.json
+```
 
 ## What the tokenizer does
 
@@ -48,9 +57,8 @@ Two on-disk formats show up in `models/`:
 - **`vocab.json`** — legacy GPT-2 vocab (id → surface token, with
   `Ġ` marking a leading space). No merges, no encoder rules — good
   enough to *decode* an id stream approximately, but you can't
-  encode arbitrary text with it. This is why rows 2, 4, 6 in the
-  table above must feed `--prompt IDS` (pre-computed ids) instead
-  of `--text`.
+  encode arbitrary text with it. Kept alongside `tokenizer.json`
+  for legacy runners that only understand this format.
 
 Practical rules of thumb for this repo:
 
@@ -64,14 +72,10 @@ Practical rules of thumb for this repo:
 
 Runners resolve the tokenizer in this order:
 
-1. `--vocab PATH` (explicit override, any of the two formats)
+1. `--vocab PATH` (explicit override, either format)
 2. `<weights-dir>/tokenizer.json`
 3. `<weights-dir>/vocab.json`
 4. otherwise: `--text` is rejected; `--prompt` still works.
-
-Whenever you see a "no tokenizer" note below, the fix is a single
-`curl` for the model's `tokenizer.json` from its HF repo — every
-snippet in this file shows the exact URL.
 
 ## 1. distilgpt2 (82M, GPU)
 
@@ -83,20 +87,17 @@ LD_LIBRARY_PATH=/usr/lib/wsl/lib \
 
 ## 2. gpt2 small (124M, GPU)
 
-Older non-API demo (no `--text` / `--serve`). Takes an optional path arg.
+Legacy demo runner (fixed prompt baked in, no `--text` / `--serve`):
 
 ```sh
 LD_LIBRARY_PATH=/usr/lib/wsl/lib \
   dart run bin/gpt2/small/run_gpu.dart models/gpt2/model.safetensors
 ```
 
-To use the API runner (`--text`, `--serve`, etc.), grab a tokenizer
-and point the distilgpt2 shim at gpt2's weights (same architecture
-family, same tokenizer):
+For the full API surface (`--text`, `--serve`, sampling knobs) point
+the distilgpt2 shim at gpt2's weights + tokenizer (same family):
 
 ```sh
-curl -L -o models/gpt2/tokenizer.json \
-  https://huggingface.co/gpt2/resolve/main/tokenizer.json
 LD_LIBRARY_PATH=/usr/lib/wsl/lib \
   dart run bin/distilgpt2/run_gpu_api.dart \
     --path models/gpt2/model.safetensors \
@@ -114,23 +115,18 @@ LD_LIBRARY_PATH=/usr/lib/wsl/lib \
 
 ## 4. gpt2-medium (355M, GPU)
 
-Only `vocab.json` present, so use `--prompt` with raw ids.
-`[464, 995, 318]` decodes to `"The world is"`:
-
 ```sh
 LD_LIBRARY_PATH=/usr/lib/wsl/lib \
   dart run bin/gpt2/medium/run_gpu_api.dart \
-    --prompt 464,995,318 --max-tokens 20 --temperature 0.8 --top-k 40 --seed 42
+    --text "The world is" --max-tokens 20 --temperature 0.8 --top-k 40 --seed 42
 ```
 
-Grab `tokenizer.json` and use `--text` if you prefer:
+Or equivalently with raw ids (`[464, 995, 318]` = `"The world is"`):
 
 ```sh
-curl -L -o models/gpt2-medium/tokenizer.json \
-  https://huggingface.co/gpt2-medium/resolve/main/tokenizer.json
 LD_LIBRARY_PATH=/usr/lib/wsl/lib \
   dart run bin/gpt2/medium/run_gpu_api.dart \
-    --text "The world is" --max-tokens 20
+    --prompt 464,995,318 --max-tokens 20
 ```
 
 ## 5. pythia-410m (410M, GPU)
@@ -143,7 +139,7 @@ LD_LIBRARY_PATH=/usr/lib/wsl/lib \
 
 ## 6. gpt2-large (774M, GPU — tight, may OOM)
 
-Only weights present, no tokenizer files. Legacy demo runner:
+Legacy demo runner (fixed prompt, no API surface):
 
 ```sh
 LD_LIBRARY_PATH=/usr/lib/wsl/lib \
@@ -152,7 +148,13 @@ LD_LIBRARY_PATH=/usr/lib/wsl/lib \
 
 At fp32 the weights alone are ~3 GB and activations + KV cache push
 close to the 6 GB card's limit — longer prompts or larger
-`--max-tokens` will likely OOM.
+`--max-tokens` will likely OOM. Tokenizer + vocab are also on disk
+for future API-runner support:
+
+```
+models/gpt2-large/tokenizer.json
+models/gpt2-large/vocab.json
+```
 
 ## 7. pythia-1b (1.0B, GPU)
 
