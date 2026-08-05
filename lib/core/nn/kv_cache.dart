@@ -20,41 +20,45 @@ library;
 import '../tensor/tensor.dart';
 
 class MHACache {
-  final int numHeads;
+  /// Number of KV-head slots stored. For standard MHA this equals the
+  /// number of Q heads; for GQA (Llama / Mistral / Qwen) it is smaller
+  /// than the Q-head count and each cached slot is shared by several
+  /// Q heads via head-grouping.
+  final int numKvHeads;
 
-  /// Per-head running K, shape `[T_seen, headDim]`. `null` until the
-  /// first append.
+  /// Per-KV-head running K, shape `[T_seen, headDim]`. `null` until
+  /// the first append.
   final List<Tensor?> k;
 
-  /// Per-head running V, shape `[T_seen, headDim]`. `null` until the
-  /// first append.
+  /// Per-KV-head running V, shape `[T_seen, headDim]`. `null` until
+  /// the first append.
   final List<Tensor?> v;
 
-  MHACache.empty(this.numHeads)
-    : k = List<Tensor?>.filled(numHeads, null, growable: false),
-      v = List<Tensor?>.filled(numHeads, null, growable: false);
+  MHACache.empty(this.numKvHeads)
+    : k = List<Tensor?>.filled(numKvHeads, null, growable: false),
+      v = List<Tensor?>.filled(numKvHeads, null, growable: false);
 
-  /// Length of the cached sequence so far (0 if empty). All heads
-  /// share the same T, so we read from head 0.
+  /// Length of the cached sequence so far (0 if empty). All KV heads
+  /// share the same T, so we read from KV head 0.
   int get seqLen => k[0]?.shape[0] ?? 0;
 
-  /// Append `[N_new, headDim]` K and V for a single head. Returns the
-  /// updated concatenated tensor (also stored in the cache).
-  Tensor appendK(int head, Tensor newK) {
-    final prev = k[head];
+  /// Append `[N_new, headDim]` K and V for a single KV head. Returns
+  /// the updated concatenated tensor (also stored in the cache).
+  Tensor appendK(int kvHead, Tensor newK) {
+    final prev = k[kvHead];
     final next = prev == null
         ? newK
         : TensorConcat.concat([prev, newK], axis: 0);
-    k[head] = next;
+    k[kvHead] = next;
     return next;
   }
 
-  Tensor appendV(int head, Tensor newV) {
-    final prev = v[head];
+  Tensor appendV(int kvHead, Tensor newV) {
+    final prev = v[kvHead];
     final next = prev == null
         ? newV
         : TensorConcat.concat([prev, newV], axis: 0);
-    v[head] = next;
+    v[kvHead] = next;
     return next;
   }
 }
@@ -65,11 +69,12 @@ class EncoderCache {
   EncoderCache(this.layers);
 
   /// Fresh cache sized for a stack of `numLayers` blocks each with
-  /// `numHeads` heads.
-  factory EncoderCache.empty(int numLayers, int numHeads) => EncoderCache(
+  /// `numKvHeads` KV-head slots (equal to the Q-head count for
+  /// standard MHA; smaller for GQA).
+  factory EncoderCache.empty(int numLayers, int numKvHeads) => EncoderCache(
     List<MHACache>.generate(
       numLayers,
-      (_) => MHACache.empty(numHeads),
+      (_) => MHACache.empty(numKvHeads),
       growable: false,
     ),
   );

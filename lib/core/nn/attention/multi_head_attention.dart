@@ -1,8 +1,17 @@
 /// Multi-head self / cross attention (2D single-sequence).
 ///
-/// Uses `numHeads` parallel `Linear` projections for Q, K, V (each of
-/// shape `[embedDim, headDim]`), runs single-head SDPA per head, then
+/// Uses `numHeads` parallel `Linear` projections for Q and `numKvHeads`
+/// projections for K and V (each of shape `[embedDim, headDim]`), runs
+/// single-head SDPA per Q head (with the corresponding K/V shared
+/// across a group of Q heads when `numKvHeads < numHeads`), then
 /// concatenates the outputs and applies an output `Linear` projection.
+///
+/// When `numKvHeads == numHeads` this is plain multi-head attention
+/// (the default and what GPT-2 / GPT-J / Pythia use). When
+/// `numKvHeads < numHeads` this is grouped-query attention (GQA) as
+/// used by Llama / Mistral / Qwen — `numHeads` must be a multiple of
+/// `numKvHeads`, and Q heads `[g*R, (g+1)*R)` share KV head `g` where
+/// `R = numHeads / numKvHeads`.
 ///
 /// Only supports `embedDim % numHeads == 0`. Sequence tensors are 2D
 /// `[N, embedDim]` (single batch).
@@ -18,6 +27,8 @@ import '../rotary.dart';
 class MultiHeadAttention extends Module {
   final int embedDim;
   final int numHeads;
+  final int numKvHeads;
+  final int numHeadGroups; // = numHeads ~/ numKvHeads
   final int headDim;
   final List<Linear> wq;
   final List<Linear> wk;
@@ -36,11 +47,14 @@ class MultiHeadAttention extends Module {
   MultiHeadAttention(
     this.embedDim,
     this.numHeads, {
+    int? numKvHeads,
     bool bias = false,
     double dropoutP = 0.0,
     Device device = Device.CPU,
     int seed = 0,
-  }) : headDim = embedDim ~/ numHeads,
+  }) : numKvHeads = numKvHeads ?? numHeads,
+       numHeadGroups = numHeads ~/ (numKvHeads ?? numHeads),
+       headDim = embedDim ~/ numHeads,
        wq = List<Linear>.generate(
          numHeads,
          (h) => Linear(
@@ -52,7 +66,7 @@ class MultiHeadAttention extends Module {
          ),
        ),
        wk = List<Linear>.generate(
-         numHeads,
+         numKvHeads ?? numHeads,
          (h) => Linear(
            embedDim,
            embedDim ~/ numHeads,
@@ -62,7 +76,7 @@ class MultiHeadAttention extends Module {
          ),
        ),
        wv = List<Linear>.generate(
-         numHeads,
+         numKvHeads ?? numHeads,
          (h) => Linear(
            embedDim,
            embedDim ~/ numHeads,
@@ -83,6 +97,13 @@ class MultiHeadAttention extends Module {
       throw ArgumentError(
         'MultiHeadAttention: embedDim ($embedDim) must be divisible by '
         'numHeads ($numHeads)',
+      );
+    }
+    final kv = numKvHeads ?? numHeads;
+    if (numHeads % kv != 0) {
+      throw ArgumentError(
+        'MultiHeadAttention: numHeads ($numHeads) must be divisible by '
+        'numKvHeads ($kv) for GQA',
       );
     }
   }
@@ -126,25 +147,45 @@ class MultiHeadAttention extends Module {
         'inputs; use the 2D single-sequence path.',
       );
     }
+    if (isBatched && numKvHeads != numHeads) {
+      throw ArgumentError(
+        'MultiHeadAttention: GQA (numKvHeads=$numKvHeads < '
+        'numHeads=$numHeads) is only implemented for the 2D '
+        'single-sequence path.',
+      );
+    }
 
     if (isBatched) {
       return _callBatched(x, mask: mask);
     }
 
-    final heads = <Tensor>[];
-    for (int h = 0; h < numHeads; h++) {
-      var q = wq[h](x);
-      var k = wk[h](x);
-      var v = wv[h](x);
+    // Project K/V once per KV head and (optionally) apply RoPE.
+    // Then append into cache once per KV head — Q heads that share
+    // this KV head will read the same appended slice.
+    final ks = List<Tensor>.filled(numKvHeads, x);
+    final vs = List<Tensor>.filled(numKvHeads, x);
+    for (int kh = 0; kh < numKvHeads; kh++) {
+      var k = wk[kh](x);
+      var v = wv[kh](x);
       if (rope != null) {
-        q = rope!.apply(q, startPos: startPos);
         k = rope!.apply(k, startPos: startPos);
       }
       if (cache != null) {
-        k = cache.appendK(h, k);
-        v = cache.appendV(h, v);
+        k = cache.appendK(kh, k);
+        v = cache.appendV(kh, v);
       }
-      heads.add(q.scaledDotProductAttention(k, v, mask: mask));
+      ks[kh] = k;
+      vs[kh] = v;
+    }
+
+    final heads = <Tensor>[];
+    for (int h = 0; h < numHeads; h++) {
+      var q = wq[h](x);
+      if (rope != null) {
+        q = rope!.apply(q, startPos: startPos);
+      }
+      final kh = h ~/ numHeadGroups; // Q-head -> KV-head grouping
+      heads.add(q.scaledDotProductAttention(ks[kh], vs[kh], mask: mask));
     }
     final concatted = TensorConcat.concat(heads, axis: 1);
     var out = wo(concatted);

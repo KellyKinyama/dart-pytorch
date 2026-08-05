@@ -357,9 +357,7 @@ class CudaEngine {
     );
 
     rmsnormForward = _lib.lookupFunction<CRmsFwd, DRmsFwd>('rmsnorm_forward');
-    rmsnormBackward = _lib.lookupFunction<CRmsBwd, DRmsBwd>(
-      'rmsnorm_backward',
-    );
+    rmsnormBackward = _lib.lookupFunction<CRmsBwd, DRmsBwd>('rmsnorm_backward');
 
     softmaxForward = _lib.lookupFunction<COp1, DOp1>('softmax_forward');
     softmaxBackward = _lib.lookupFunction<COp2, DOp2>('softmax_backward');

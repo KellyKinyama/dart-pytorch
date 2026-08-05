@@ -27,10 +27,10 @@ void main() {
   });
 
   group('EncoderCache', () {
-    test('factory sizes to [numLayers, numHeads]', () {
+    test('factory sizes to [numLayers, numKvHeads]', () {
       final ec = EncoderCache.empty(2, 4);
       expect(ec.layers.length, 2);
-      expect(ec.layers[0].numHeads, 4);
+      expect(ec.layers[0].numKvHeads, 4);
       expect(ec.seqLen, 0);
     });
   });
