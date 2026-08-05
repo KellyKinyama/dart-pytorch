@@ -57,32 +57,38 @@ import '_lm_encoder.dart';
 const List<({String label, String description})> _labels = [
   (
     label: 'astronomy',
-    description: 'This passage is about stars, planets, galaxies, black holes '
+    description:
+        'This passage is about stars, planets, galaxies, black holes '
         'and cosmology — the science of the universe beyond Earth.',
   ),
   (
     label: 'biology',
-    description: 'This passage is about living organisms, cells, genetics, '
+    description:
+        'This passage is about living organisms, cells, genetics, '
         'evolution, physiology and how life works at every scale.',
   ),
   (
     label: 'cooking',
-    description: 'This passage is about recipes, ingredients, kitchen '
+    description:
+        'This passage is about recipes, ingredients, kitchen '
         'techniques and preparing food.',
   ),
   (
     label: 'finance',
-    description: 'This passage is about money, banking, markets, investing, '
+    description:
+        'This passage is about money, banking, markets, investing, '
         'interest rates and economic policy.',
   ),
   (
     label: 'programming',
-    description: 'This passage is about writing computer code, software '
+    description:
+        'This passage is about writing computer code, software '
         'engineering, programming languages, algorithms and data structures.',
   ),
   (
     label: 'sports',
-    description: 'This passage is about athletic competition, teams, matches, '
+    description:
+        'This passage is about athletic competition, teams, matches, '
         'training and physical games.',
   ),
 ];
@@ -123,25 +129,26 @@ void main(List<String> args) {
   final tokenizer = loaded.tokenizer;
   final cfg = loaded.config;
 
-  stdout.writeln('\nEmbedding ${_labels.length} label descriptions and '
-      '${_docs.length} documents...');
+  stdout.writeln(
+    '\nEmbedding ${_labels.length} label descriptions and '
+    '${_docs.length} documents...',
+  );
 
   final sw = Stopwatch()..start();
   // Encode labels + docs together so they live in the same centred
   // space. Otherwise you'd fight the label vectors clustering apart
   // from the doc vectors along the anisotropy axis.
-  final joint = <String>[
-    for (final l in _labels) l.description,
-    ..._docs,
-  ];
+  final joint = <String>[for (final l in _labels) l.description, ..._docs];
   final embedded = embedCorpus(
     model,
     tokenizer,
     joint,
     onProgress: (i, total, preview) {
       final tag = i < _labels.length ? 'label ${_labels[i].label}' : 'doc';
-      stdout.writeln('  [${(i + 1).toString().padLeft(2)}/$total] $tag: '
-          '$preview');
+      stdout.writeln(
+        '  [${(i + 1).toString().padLeft(2)}/$total] $tag: '
+        '$preview',
+      );
     },
   );
   sw.stop();

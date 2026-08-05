@@ -49,128 +49,152 @@ import '_lm_encoder.dart';
 const List<({String text, String topic})> _corpus = [
   // ---- astronomy -----------------------------------------------------------
   (
-    text: 'The Andromeda Galaxy is on a collision course with the Milky Way, '
+    text:
+        'The Andromeda Galaxy is on a collision course with the Milky Way, '
         'expected to merge in about 4.5 billion years.',
     topic: 'astronomy',
   ),
   (
-    text: 'A neutron star packs the mass of the Sun into a sphere only about '
+    text:
+        'A neutron star packs the mass of the Sun into a sphere only about '
         '20 kilometres across, giving it extreme surface gravity.',
     topic: 'astronomy',
   ),
   (
-    text: 'The James Webb Space Telescope observes the universe in infrared '
+    text:
+        'The James Webb Space Telescope observes the universe in infrared '
         'from a stable orbit around the L2 Lagrange point.',
     topic: 'astronomy',
   ),
   (
-    text: 'A black hole event horizon is the boundary beyond which not even '
+    text:
+        'A black hole event horizon is the boundary beyond which not even '
         'light can escape the pull of the singularity.',
     topic: 'astronomy',
   ),
   (
-    text: 'Jupiter has more than 90 known moons; the four largest were first '
+    text:
+        'Jupiter has more than 90 known moons; the four largest were first '
         'observed by Galileo Galilei in 1610.',
     topic: 'astronomy',
   ),
   (
-    text: 'The Cosmic Microwave Background is thermal radiation left over '
+    text:
+        'The Cosmic Microwave Background is thermal radiation left over '
         'from the recombination epoch about 380,000 years after the Big Bang.',
     topic: 'astronomy',
   ),
 
   // ---- cooking -------------------------------------------------------------
   (
-    text: 'To make proper carbonara you emulsify egg yolks and pecorino with '
+    text:
+        'To make proper carbonara you emulsify egg yolks and pecorino with '
         'starchy pasta water off the heat; adding cream is heresy in Rome.',
     topic: 'cooking',
   ),
   (
-    text: 'Braise short ribs low and slow for four hours in red wine, '
+    text:
+        'Braise short ribs low and slow for four hours in red wine, '
         'aromatics and stock until the connective tissue turns to gelatin.',
     topic: 'cooking',
   ),
   (
-    text: 'A good sourdough loaf uses only flour, water, salt and a wild-yeast '
+    text:
+        'A good sourdough loaf uses only flour, water, salt and a wild-yeast '
         'starter, fermented slowly to develop flavour and structure.',
     topic: 'cooking',
   ),
   (
-    text: 'Deglaze the pan with dry white wine after searing the shallots, '
+    text:
+        'Deglaze the pan with dry white wine after searing the shallots, '
         'scraping up the fond to build the base of the sauce.',
     topic: 'cooking',
   ),
   (
-    text: 'Blanch green beans in heavily salted boiling water for two minutes, '
+    text:
+        'Blanch green beans in heavily salted boiling water for two minutes, '
         'then shock them in ice water to lock in the bright colour.',
     topic: 'cooking',
   ),
   (
-    text: 'Sear the steak over screaming-hot cast iron for a good crust, then '
+    text:
+        'Sear the steak over screaming-hot cast iron for a good crust, then '
         'rest it under foil for five minutes before slicing against the grain.',
     topic: 'cooking',
   ),
 
   // ---- programming ---------------------------------------------------------
   (
-    text: 'A binary search tree lets you find an element in a sorted '
+    text:
+        'A binary search tree lets you find an element in a sorted '
         'collection in O(log n) time on average when balanced.',
     topic: 'programming',
   ),
   (
-    text: 'Rust enforces memory safety at compile time through its ownership '
+    text:
+        'Rust enforces memory safety at compile time through its ownership '
         'and borrow-checker rules, eliminating whole classes of bugs.',
     topic: 'programming',
   ),
   (
-    text: 'A hash table gives amortised O(1) lookup by mapping keys to bucket '
+    text:
+        'A hash table gives amortised O(1) lookup by mapping keys to bucket '
         'indices via a hash function, handling collisions with chaining.',
     topic: 'programming',
   ),
   (
-    text: 'Immutability makes concurrent code easier to reason about because '
+    text:
+        'Immutability makes concurrent code easier to reason about because '
         'there is no shared mutable state that threads can race on.',
     topic: 'programming',
   ),
   (
-    text: 'Dynamic programming solves overlapping-subproblem recurrences by '
+    text:
+        'Dynamic programming solves overlapping-subproblem recurrences by '
         'memoising previously computed answers in a table.',
     topic: 'programming',
   ),
   (
-    text: 'Compilers translate high-level source code into machine '
+    text:
+        'Compilers translate high-level source code into machine '
         'instructions after lexing, parsing, type checking and optimisation.',
     topic: 'programming',
   ),
 
   // ---- sports --------------------------------------------------------------
   (
-    text: 'Real Madrid won the Champions League final on penalties after a '
+    text:
+        'Real Madrid won the Champions League final on penalties after a '
         'tense 1-1 draw over 120 minutes of football at Wembley Stadium.',
     topic: 'sports',
   ),
   (
-    text: 'She stuck the landing on a full-in, full-out double layout to '
+    text:
+        'She stuck the landing on a full-in, full-out double layout to '
         'secure the gold medal in the all-around gymnastics final.',
     topic: 'sports',
   ),
   (
-    text: 'The marathon world record fell again this weekend as the runner '
+    text:
+        'The marathon world record fell again this weekend as the runner '
         'crossed the finish line two seconds under the previous best.',
     topic: 'sports',
   ),
   (
-    text: 'The starting pitcher struck out ten batters and gave up only two '
+    text:
+        'The starting pitcher struck out ten batters and gave up only two '
         'earned runs over seven innings on the mound.',
     topic: 'sports',
   ),
   (
-    text: 'The point guard drove the lane and dished off a no-look pass for '
+    text:
+        'The point guard drove the lane and dished off a no-look pass for '
         'the alley-oop with three seconds left on the shot clock.',
     topic: 'sports',
   ),
   (
-    text: 'The Grand Slam final went to a fifth-set tiebreak after four hours '
+    text:
+        'The Grand Slam final went to a fifth-set tiebreak after four hours '
         'of grinding baseline tennis under the closed roof.',
     topic: 'sports',
   ),
@@ -192,8 +216,10 @@ void main(List<String> args) {
     tokenizer,
     _corpus.map((e) => e.text).toList(),
     onProgress: (i, total, preview) {
-      stdout.writeln('  [${(i + 1).toString().padLeft(2)}/$total] '
-          '(${_corpus[i].topic}) $preview');
+      stdout.writeln(
+        '  [${(i + 1).toString().padLeft(2)}/$total] '
+        '(${_corpus[i].topic}) $preview',
+      );
     },
   );
   sw.stop();
@@ -236,8 +262,10 @@ void main(List<String> args) {
     final purity = sorted.first.value / members.length;
     totalCorrect += sorted.first.value;
 
-    stdout.writeln('\nCluster #$c   size=${members.length}   '
-        'majority=$majority   purity=${(purity * 100).toStringAsFixed(0)}%');
+    stdout.writeln(
+      '\nCluster #$c   size=${members.length}   '
+      'majority=$majority   purity=${(purity * 100).toStringAsFixed(0)}%',
+    );
     for (final m in members) {
       final t = _corpus[m].topic;
       final marker = t == majority ? '  ' : '! ';

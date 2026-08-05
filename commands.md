@@ -467,3 +467,58 @@ ground-truth topic and an overall purity score (fraction assigned
 to the majority topic of their cluster; chance = 25%). Editable
 corpus at the top of
 [bin/vector_cluster_demo.dart](bin/vector_cluster_demo.dart).
+
+## R6. Chunked long-document RAG
+
+R1/R2 kept each "document" to a single short paragraph. Real
+articles run 5-50k tokens and won't fit a 1024-ctx window. This
+demo does what production RAG actually does: chunks each long doc
+into overlapping ~200-token windows, indexes chunks (not docs),
+groups hits back by parent doc.
+
+```sh
+dart run bin/vector_chunked_rag_demo.dart
+```
+
+Three inline articles (Roman Empire / neural networks / Apollo
+program) with topic drift within each doc; five questions target
+material buried in the middle of an article — the case
+doc-level embedding would miss. Editable at
+[bin/vector_chunked_rag_demo.dart](bin/vector_chunked_rag_demo.dart).
+
+## R7. Index-type benchmark
+
+Chapters 3-8 of [docs/vectors](docs/vectors/README.md) explain
+*why* ANN indexes exist. This is the one table that lets you see
+the tradeoff numerically: same synthetic Gaussian vectors, same
+queries, every index type. Reports build time, µs/query, recall@k
+against exact `IndexFlatL2` ground truth, and rough bytes/vec.
+
+```sh
+dart run bin/vector_index_benchmark_demo.dart
+```
+
+Default `N=5000` × `d=128` × `nq=200` finishes in seconds. Tune
+with `--n / --d / --nq / --k`. Uses synthetic vectors (worst case
+for ANN) so the numbers are conservative; real embeddings cluster
+naturally and score higher. Source:
+[bin/vector_index_benchmark_demo.dart](bin/vector_index_benchmark_demo.dart).
+
+## R8. Image-to-image similarity search
+
+Same vector-store story off the text axis. Trains a small
+`ViTClassifier` on `faces_gallery/` (~90 s CPU for 8 classes),
+drops the head, uses the backbone's CLS vector as a face
+embedding, `IndexFlatIP` over the gallery, queries with held-out
+val-set images.
+
+```sh
+dart run bin/vector_image_search_demo.dart
+```
+
+Prints top-5 nearest gallery photos per query with cosine scores
+and a "match / no match" marker, plus overall top-1 and same-
+identity hit-rate vs class-uniform baseline. `--all-classes` uses
+every subfolder; `--gallery PATH` points at a different
+folder-per-class dataset. Source:
+[bin/vector_image_search_demo.dart](bin/vector_image_search_demo.dart).

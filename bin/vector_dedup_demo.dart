@@ -190,8 +190,10 @@ void main(List<String> args) {
       ? entries.where((c) => c.length > 1).length
       : 0;
   stdout.writeln('\n=================================================');
-  stdout.writeln('${_corpus.length} passages -> '
-      '${entries.length} clusters ($dupSize with duplicates).');
+  stdout.writeln(
+    '${_corpus.length} passages -> '
+    '${entries.length} clusters ($dupSize with duplicates).',
+  );
 }
 
 const String _help = '''
