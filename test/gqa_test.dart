@@ -130,7 +130,9 @@ void main() {
       final cache = MHACache.empty(2);
       final rows = <double>[];
       for (int t = 0; t < 3; t++) {
-        final rowVals = <double>[for (int j = 0; j < 8; j++) xs.toList()[t * 8 + j]];
+        final rowVals = <double>[
+          for (int j = 0; j < 8; j++) xs.toList()[t * 8 + j],
+        ];
         final tok = Tensor.fromList([1, 8], rowVals);
         final yt = mha(tok, cache: cache, startPos: t);
         rows.addAll(yt.toList());
