@@ -192,36 +192,44 @@ void main(List<String> args) {
 
   // ---- 1. Chunk every document ----------------------------------
 
-  stdout.writeln('\nChunking ${_corpus.length} documents at '
-      '$_chunkTokens tokens (stride $_chunkStride)...');
+  stdout.writeln(
+    '\nChunking ${_corpus.length} documents at '
+    '$_chunkTokens tokens (stride $_chunkStride)...',
+  );
   final chunks = <_Chunk>[];
   for (var d = 0; d < _corpus.length; d++) {
     final full = tokenizer.encode(_corpus[d].body);
     if (full.length <= _chunkTokens) {
-      chunks.add(_Chunk(
-        docId: d,
-        startTok: 0,
-        endTok: full.length,
-        tokenIds: full,
-        text: _corpus[d].body,
-      ));
+      chunks.add(
+        _Chunk(
+          docId: d,
+          startTok: 0,
+          endTok: full.length,
+          tokenIds: full,
+          text: _corpus[d].body,
+        ),
+      );
       continue;
     }
     for (var start = 0; start < full.length; start += _chunkStride) {
       final end = math.min(start + _chunkTokens, full.length);
       final ids = full.sublist(start, end);
-      chunks.add(_Chunk(
-        docId: d,
-        startTok: start,
-        endTok: end,
-        tokenIds: ids,
-        text: tokenizer.decode(ids),
-      ));
+      chunks.add(
+        _Chunk(
+          docId: d,
+          startTok: start,
+          endTok: end,
+          tokenIds: ids,
+          text: tokenizer.decode(ids),
+        ),
+      );
       if (end == full.length) break;
     }
   }
-  stdout.writeln('Produced ${chunks.length} chunks from '
-      '${_corpus.length} docs.');
+  stdout.writeln(
+    'Produced ${chunks.length} chunks from '
+    '${_corpus.length} docs.',
+  );
   for (var d = 0; d < _corpus.length; d++) {
     final n = chunks.where((c) => c.docId == d).length;
     stdout.writeln('  doc $d "${_corpus[d].title}"  -> $n chunk(s)');
@@ -245,8 +253,10 @@ void main(List<String> args) {
     index.add([centerAndNormalize(v, mean)]);
   }
   sw.stop();
-  stdout.writeln('Indexed ${index.ntotal} chunk vectors in '
-      '${sw.elapsed.inMilliseconds} ms.');
+  stdout.writeln(
+    'Indexed ${index.ntotal} chunk vectors in '
+    '${sw.elapsed.inMilliseconds} ms.',
+  );
 
   // ---- 3. Ask each question --------------------------------------
 
@@ -289,8 +299,7 @@ void main(List<String> args) {
     for (var j = 0; j < ids.length; j++) {
       ctxLines.add('[${j + 1}] ${chunks[ids[j]].text.trim()}');
     }
-    final prompt =
-        'Context:\n${ctxLines.join('\n')}\n\nQuestion: $q\nAnswer:';
+    final prompt = 'Context:\n${ctxLines.join('\n')}\n\nQuestion: $q\nAnswer:';
     final promptIds = tokenizer.encode(prompt);
 
     if (promptIds.length + _maxNewTokens > cfg.maxCtx) {
@@ -331,8 +340,10 @@ void _generateAndPrint(
   );
   sw.stop();
 
-  final answerIds =
-      full.sublist(promptIds.length).map((d) => d.toInt()).toList();
+  final answerIds = full
+      .sublist(promptIds.length)
+      .map((d) => d.toInt())
+      .toList();
   final answer = tokenizer.decode(answerIds).trim();
   stdout.writeln('A: $answer');
   stdout.writeln(

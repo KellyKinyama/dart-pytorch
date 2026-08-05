@@ -69,11 +69,7 @@ const int _defaultMaxClasses = 8;
 // ---------------------------------------------------------------------------
 
 class _Opts {
-  _Opts({
-    required this.gallery,
-    required this.gpu,
-    required this.allClasses,
-  });
+  _Opts({required this.gallery, required this.gpu, required this.allClasses});
   final String gallery;
   final bool gpu;
   final bool allClasses;
@@ -118,7 +114,8 @@ _Opts _parseArgs(List<String> args) {
   return _Opts(gallery: gallery, gpu: gpu, allClasses: all);
 }
 
-const String _help = '''
+const String _help =
+    '''
 Image-to-image similarity search over a folder-per-class gallery.
 
 Usage:
@@ -240,8 +237,10 @@ void main(List<String> args) {
   // ---- 4. Query with val images ----------------------------------
 
   final numQueries = math.min(_maxQueries, val.length);
-  stdout.writeln('\nQuerying with $numQueries validation images '
-      '(top-$_topK cosine neighbours):');
+  stdout.writeln(
+    '\nQuerying with $numQueries validation images '
+    '(top-$_topK cosine neighbours):',
+  );
 
   var totalHits = 0;
   var top1Correct = 0;

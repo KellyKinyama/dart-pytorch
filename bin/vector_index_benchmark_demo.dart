@@ -268,16 +268,22 @@ void main(List<String> args) {
 
   // ---- 4. Print table ------------------------------------------
 
-  stdout.writeln('\nGround-truth (IndexFlatL2) search time: '
-      '${gtSw.elapsedMilliseconds} ms for ${opts.nq} queries.');
+  stdout.writeln(
+    '\nGround-truth (IndexFlatL2) search time: '
+    '${gtSw.elapsedMilliseconds} ms for ${opts.nq} queries.',
+  );
 
-  stdout.writeln('\n${'Index'.padRight(38)}  '
-      '${'build_ms'.padLeft(9)}  '
-      '${'us/query'.padLeft(9)}  '
-      '${'recall@${opts.k}'.padLeft(10)}  '
-      '${'bytes/vec'.padLeft(10)}');
-  stdout.writeln('${'-' * 38}  '
-      '${'-' * 9}  ${'-' * 9}  ${'-' * 10}  ${'-' * 10}');
+  stdout.writeln(
+    '\n${'Index'.padRight(38)}  '
+    '${'build_ms'.padLeft(9)}  '
+    '${'us/query'.padLeft(9)}  '
+    '${'recall@${opts.k}'.padLeft(10)}  '
+    '${'bytes/vec'.padLeft(10)}',
+  );
+  stdout.writeln(
+    '${'-' * 38}  '
+    '${'-' * 9}  ${'-' * 9}  ${'-' * 10}  ${'-' * 10}',
+  );
   for (final row in rows) {
     stdout.writeln(
       '${row.name.padRight(38)}  '

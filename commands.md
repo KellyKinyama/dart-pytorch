@@ -295,11 +295,53 @@ LD_LIBRARY_PATH=/usr/lib/wsl/lib \
   dart run bin/vit_object_detection_demo.dart --gpu
 ```
 
-## V4. vit_hungarian_matching_demo — DETR-style single image
+---
 
-Same detector, but predicted queries are Hungarian-matched to a
-variable set of GT objects each step. Unmatched queries fall to
-background with a masked box loss.
+# DETR (DEtection TRansformer)
+
+Three demos that build up to the full DETR training loop as
+introduced by Carion et al., *End-to-End Object Detection with
+Transformers* (Facebook AI, 2020). DETR reframes detection as
+**set prediction**: a fixed pool of `N` learnable *object queries*
+each produce a `(class, box)` prediction in parallel via a
+transformer decoder over patch features, and a **bipartite
+matching** loss pairs predictions to ground-truth boxes via the
+Hungarian algorithm before scoring.
+
+The three moving parts already live in the tree:
+
+  * [lib/core/nn/vision/vit_object_detector.dart](lib/core/nn/vision/vit_object_detector.dart) — patchify → ViT encoder → `numQueries` learnable slots → `(logits, boxes)`.
+  * [lib/core/utils/hungarian_algorithm.dart](lib/core/utils/hungarian_algorithm.dart) — `HungarianAlgorithm(costMatrix).getAssignment()` gives `assign[q] = gtIdx` in O(n³).
+  * [test/vit_object_detector_test.dart](test/vit_object_detector_test.dart) — coverage for both.
+
+D1 → D2 → D3 below walk the same architecture from "fixed
+targets, no matching" to "variable-count GT per image inside a
+mini-batch", which is the training loop DETR actually uses.
+
+## D1 / V3. Fixed-order detection (warm-up)
+
+Same as V3 above (kept for cross-references). 3 query slots, GT is
+a **fixed triple** at every step, no Hungarian — just position-`q`
+head predicts target-`q`. Loss = `CE(class) + 0.25 · MSE(box)`.
+Establishes that the detector converges before we complicate the
+loss with bipartite matching.
+
+Command: see V3.
+
+## D2 / V4. vit_hungarian_matching_demo — single-image bipartite matching
+
+Same [ViTObjectDetector](lib/core/nn/vision/vit_object_detector.dart)
+as V3, but every step draws a **variable-length** GT list
+`0 .. numQueries`. At each step:
+
+  1. Forward pass → `[logits, boxes]` for every query slot.
+  2. Build the `numQueries × numQueries` cost matrix
+     `-log p(class_gt) + λ · L1(box, gt_box)`, padding unmatched
+     GT columns with a large constant so Hungarian never prefers
+     them over a real match.
+  3. `HungarianAlgorithm(cost).getAssignment()` → `assign[q] = gtIdx`.
+  4. Backprop CE over all queries (unmatched → background class),
+     mask the box regression to matched slots only.
 
 ```sh
 # CPU
@@ -310,11 +352,16 @@ LD_LIBRARY_PATH=/usr/lib/wsl/lib \
   dart run bin/vit_hungarian_matching_demo.dart --gpu
 ```
 
-## V5. vit_hungarian_batch_demo — DETR-style variable-count batch
+## D3 / V5. vit_hungarian_batch_demo — variable-count DETR batch
 
-Extends V4 to a batch of images with GT counts 0..numQueries per
-step. Realistic DETR training loop. Uses `Tensor.abs` (needs the
-`abs_backward_op` GPU kernel — already wired in).
+Extends D2 to a full **batch** where each image in the batch has
+its own GT count `0..numQueries`. This is the realistic DETR
+training setup. Runs one Hungarian assignment per image inside the
+batch (they can't share since costs and GT counts differ), then
+sums the per-image losses.
+
+Uses `Tensor.abs` for the L1 box cost — its GPU backward kernel
+(`abs_backward_op`) is already wired into the CUDA FFI backend.
 
 ```sh
 # CPU
@@ -324,6 +371,16 @@ dart run bin/vit_hungarian_batch_demo.dart
 LD_LIBRARY_PATH=/usr/lib/wsl/lib \
   dart run bin/vit_hungarian_batch_demo.dart --gpu
 ```
+
+Together V3 → V4 → V5 (aka D1 → D2 → D3) cover the DETR loss
+factors: **fixed targets** → **bipartite matching on a single
+image** → **bipartite matching in a mini-batch**. Extending to
+Deformable-DETR (multi-scale features, sparse attention) or DINO
+would live in this same folder.
+
+---
+
+# ViT — real photo training
 
 ## V6. train_face_folder — real-photo face recognition
 
