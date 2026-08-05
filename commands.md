@@ -663,6 +663,13 @@ dart run bin/llama_chat.dart --preset llama-3.2-3b \
 # Custom system prompt, greedy decoding
 dart run bin/llama_chat.dart \
   --system "You are a Dart expert." --temperature 0.0
+
+# RAG over a folder of text/markdown notes
+dart run bin/llama_chat.dart --docs notes/ --docs README.md
+
+# RAG on GPU, chunkier windows, retrieve top-6
+LD_LIBRARY_PATH=/usr/lib/wsl/lib dart run bin/llama_chat.dart --gpu \
+  --docs docs/vectors/ --chunk-tokens 300 --top-k-docs 6
 ```
 
 Flags:
@@ -676,6 +683,12 @@ Flags:
 --max-new N        max tokens per reply (default: 256)
 --temperature F    0.0 = greedy (default 0.7)
 --top-k K          0 = disabled (default 40)
+
+# RAG (optional — no --docs = plain chat)
+--docs PATH        (repeatable) file, or dir walked for *.txt / *.md
+--chunk-tokens N   chunk size in tokens (default: 200)
+--chunk-stride N   sliding stride       (default: 100 = 50% overlap)
+--top-k-docs K     chunks retrieved per turn (default: 4)
 ```
 
 REPL commands (inside the running process):
@@ -684,7 +697,19 @@ REPL commands (inside the running process):
 :quit              exit
 :reset             wipe conversation history (system prompt kept)
 :sys <text>        replace system prompt and reset
+:sources           print the chunks retrieved for the last answer (RAG only)
 ```
+
+**How RAG works here.** On startup, every file under `--docs` is
+tokenized, split into ~200-token windows with 50 % overlap, and each
+window is embedded via the same last-token-hidden trick the RAG
+server uses (`lastTokenHiddenLlama`). Vectors are centred against
+the corpus mean and L2-normalised, so an `IndexFlatIP` search
+reports cosine similarity directly. Per user turn, the message is
+embedded the same way, top-K chunks are retrieved, and they get
+prepended to the user turn as an "Use the following excerpts…"
+context block *inside* the Llama-3 chat template. `:sources` shows
+which chunks fired for the last reply.
 
 ### VRAM note — will this fit on a 6 GB GPU?
 
