@@ -280,12 +280,7 @@ List<File> _resolveDocFiles(List<String> paths) {
       final text = tokenizer.decode(ids);
       final raw = lastTokenHiddenLlama(model, ids);
       chunks.add(
-        _RagChunk(
-          docTitle: title,
-          startTok: start,
-          endTok: end,
-          text: text,
-        ),
+        _RagChunk(docTitle: title, startTok: start, endTok: end, text: text),
       );
       rawVecs.add(raw);
     }
@@ -301,7 +296,9 @@ List<File> _resolveDocFiles(List<String> paths) {
         if (end == tokens.length) break;
       }
     }
-    stdout.writeln('[rag] $title -> ${tokens.length} tok, chunks so far: ${chunks.length}');
+    stdout.writeln(
+      '[rag] $title -> ${tokens.length} tok, chunks so far: ${chunks.length}',
+    );
   }
 
   if (chunks.isEmpty) return null;
@@ -394,7 +391,9 @@ void main(List<String> args) {
   if (opts.docs.isNotEmpty) {
     final files = _resolveDocFiles(opts.docs);
     if (files.isEmpty) {
-      stderr.writeln('[rag] no readable files under --docs — retrieval disabled');
+      stderr.writeln(
+        '[rag] no readable files under --docs — retrieval disabled',
+      );
     } else {
       stdout.writeln('[rag] embedding ${files.length} file(s)...');
       final built = _buildRagIndex(
