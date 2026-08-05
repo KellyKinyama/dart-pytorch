@@ -238,9 +238,7 @@ void main(List<String> args) {
       chatText = _systemPrefix(system);
       promptIds = tok.encode(chatText + _userTurn(trimmed));
       if (promptIds.length + opts.maxNew > cfg.maxCtx) {
-        stdout.writeln(
-          '[single turn still exceeds context — skipping]\n',
-        );
+        stdout.writeln('[single turn still exceeds context — skipping]\n');
         continue;
       }
     }

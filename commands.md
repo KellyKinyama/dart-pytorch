@@ -600,6 +600,13 @@ LD_LIBRARY_PATH=/usr/lib/wsl/lib dart run bin/rag_chat_server.dart \
   --path models/gpt2-medium/model.safetensors \
   --vocab models/gpt2-medium/tokenizer.json \
   --preset medium --gpu --port 8090
+
+# Llama-3.2-1B-Instruct on GPU (same RAG pipeline, different arch)
+LD_LIBRARY_PATH=/usr/lib/wsl/lib dart run bin/rag_chat_server.dart \
+  --arch llama \
+  --path models/llama-3.2-1b-instruct/model.safetensors \
+  --vocab models/llama-3.2-1b-instruct/tokenizer.json \
+  --preset llama-3.2-1b --gpu --port 8090
 ```
 
 Then open `http://127.0.0.1:8090/` in a browser: drop text files
@@ -608,13 +615,92 @@ panel under each reply to see which chunks were retrieved (doc
 title, token span, cosine score, preview). Endpoints:
 
 - `GET  /`          — HTML chat UI.
-- `GET  /health`    — `{model, device, embedDim, numLayers, maxCtx}`.
+- `GET  /health`    — `{arch, model, device, embedDim, numLayers, maxCtx}`.
 - `GET  /status`    — doc list + chunk counts.
 - `POST /upload`    — `text/plain` body, `x-filename` header.
 - `POST /chat`      — `{"message": "..."}` → `{reply, retrieved, ms, ...}`.
 - `POST /reset`     — wipe docs, chunks and history.
 
+`--arch gpt|llama` picks the backend (default `gpt`). Under
+`--arch llama` the `--path` / `--vocab` / `--preset` defaults
+switch to `models/llama-3.2-1b-instruct/…` and `llama-3.2-1b`;
+presets are `llama-3.2-1b | llama-3.2-3b | llama-3.1-8b`.
+Generation stops at the tokenizer's EOT (Llama-3 `<|eot_id|>` or
+GPT-2 `<|endoftext|>`). See the R10 Llama section for VRAM math
+before pointing this at the 3B/8B checkpoints on a 6 GB card.
+
 Limits: 5 MB per upload, 500 chunks total, last 3 turn-pairs of
 history retained, prompt overflow first drops history then
 chunks. Text/markdown only (no PDF ingest). Source:
 [bin/rag_chat_server.dart](bin/rag_chat_server.dart).
+
+---
+
+# Llama-3 chat (standalone CLI, no RAG)
+
+## R10. llama_chat — interactive Llama-3 REPL
+
+Companion to R9 without any of the retrieval plumbing: pure
+chat. Loads a Llama-3 instruct checkpoint (default:
+Llama-3.2-1B-Instruct), tokenizes each turn using the official
+Llama-3 chat template built from special-token literals, calls
+`Llama.generate`, and stops each reply at the first `<|eot_id|>`.
+Multi-turn history is kept as a raw string and re-tokenized every
+turn (so any turn can drop out cleanly on `:reset`).
+
+```sh
+# Llama-3.2-1B on CPU, defaults
+dart run bin/llama_chat.dart
+
+# Llama-3.2-1B on GPU (WSL2 needs the CUDA driver-stub prefix)
+LD_LIBRARY_PATH=/usr/lib/wsl/lib dart run bin/llama_chat.dart --gpu
+
+# Larger checkpoint (see VRAM note below before using --gpu on a 6 GB card)
+dart run bin/llama_chat.dart --preset llama-3.2-3b \
+  --path models/llama-3.2-3b-instruct/model.safetensors \
+  --vocab models/llama-3.2-3b-instruct/tokenizer.json
+
+# Custom system prompt, greedy decoding
+dart run bin/llama_chat.dart \
+  --system "You are a Dart expert." --temperature 0.0
+```
+
+Flags:
+
+```
+--path PATH        safetensors weights (default: models/llama-3.2-1b-instruct/model.safetensors)
+--vocab PATH       tokenizer.json      (default: models/llama-3.2-1b-instruct/tokenizer.json)
+--preset NAME      llama-3.2-1b | llama-3.2-3b | llama-3.1-8b  (default: llama-3.2-1b)
+--gpu              run on CUDA (default: CPU)
+--system "..."     initial system prompt
+--max-new N        max tokens per reply (default: 256)
+--temperature F    0.0 = greedy (default 0.7)
+--top-k K          0 = disabled (default 40)
+```
+
+REPL commands (inside the running process):
+
+```
+:quit              exit
+:reset             wipe conversation history (system prompt kept)
+:sys <text>        replace system prompt and reset
+```
+
+### VRAM note — will this fit on a 6 GB GPU?
+
+`dart_pytorch` stores every `Tensor` as fp32 on both CPU and
+GPU (`Float32List` under the hood, safetensors bf16 promoted on
+load). That means weight memory is exactly **4 bytes × params**:
+
+| preset | params | fp32 weights | 6 GB card? |
+|---|---|---|---|
+| `llama-3.2-1b` | ~1.24 B | ~4.96 GB | **borderline** — leaves ~500-800 MB for KV cache + activations + driver reserve |
+| `llama-3.2-3b` | ~3.2 B  | ~12.8 GB | **no** — will OOM at load |
+| `llama-3.1-8b` | ~8.0 B  | ~32 GB  | no |
+
+Practical rules on a 6 GB / RTX 3060-class card:
+
+- `llama-3.2-1b --gpu`: try it, keep prompts and `--max-new` modest.
+- `llama-3.2-3b` and `llama-3.1-8b`: drop `--gpu` and run on CPU (slow but correct).
+
+Source: [bin/llama_chat.dart](bin/llama_chat.dart).
