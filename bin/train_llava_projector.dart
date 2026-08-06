@@ -417,7 +417,9 @@ void main(List<String> args) {
   final validIdx = <int>[];
   final numImageTokens = vision.numImageTokens;
   final clipDim = clipCfg.embedDim;
-  stdout.writeln('[cache] pre-computing CLIP features for ${pairs.length} pairs...');
+  stdout.writeln(
+    '[cache] pre-computing CLIP features for ${pairs.length} pairs...',
+  );
   for (int i = 0; i < pairs.length; i++) {
     final patches = _decodeAndPatchify(
       pairs[i].image,

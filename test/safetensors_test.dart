@@ -69,6 +69,22 @@ Uint8List _bf16Bytes(List<double> vals) {
   return bd.buffer.asUint8List();
 }
 
+Uint8List _i32Bytes(List<int> vals) {
+  final bd = ByteData(vals.length * 4);
+  for (int i = 0; i < vals.length; i++) {
+    bd.setInt32(i * 4, vals[i], Endian.little);
+  }
+  return bd.buffer.asUint8List();
+}
+
+Uint8List _i64Bytes(List<int> vals) {
+  final bd = ByteData(vals.length * 8);
+  for (int i = 0; i < vals.length; i++) {
+    bd.setInt64(i * 8, vals[i], Endian.little);
+  }
+  return bd.buffer.asUint8List();
+}
+
 void main() {
   group('SafeTensors.loadBytes', () {
     test('reads a single F32 tensor with correct shape and values', () {
@@ -131,10 +147,41 @@ void main() {
     });
 
     test('rejects unsupported dtypes with a clear message', () {
+      // F80 is not a real safetensors dtype; use it as a genuinely
+      // unsupported placeholder now that I32/I64/U32/U64 are decoded
+      // (HF ships integer index buffers like `position_ids` we can
+      // safely ignore, but the reader still has to parse them).
       final buf = _makeSafetensors([
-        (name: 'x', dtype: 'I32', shape: [1], data: Uint8List(4)),
+        (name: 'x', dtype: 'F80', shape: [1], data: Uint8List(10)),
       ]);
       expect(() => SafeTensors.loadBytes(buf), throwsA(isA<ArgumentError>()));
+    });
+
+    test('decodes I32 (HF index buffers) as float rows', () {
+      final buf = _makeSafetensors([
+        (
+          name: 'idx',
+          dtype: 'I32',
+          shape: [4],
+          data: _i32Bytes([0, 1, -1, 12345]),
+        ),
+      ]);
+      final t = SafeTensors.loadBytes(buf)['idx']!;
+      expect(t.toList(), [0.0, 1.0, -1.0, 12345.0]);
+    });
+
+    test('decodes I64 (HF position_ids in CLIP/Llama) as float rows', () {
+      final buf = _makeSafetensors([
+        (
+          name: 'position_ids',
+          dtype: 'I64',
+          shape: [1, 3],
+          data: _i64Bytes([0, 1, 2]),
+        ),
+      ]);
+      final t = SafeTensors.loadBytes(buf)['position_ids']!;
+      expect(t.shape, [1, 3]);
+      expect(t.toList(), [0.0, 1.0, 2.0]);
     });
 
     test('rejects a short buffer', () {

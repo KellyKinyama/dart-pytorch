@@ -260,10 +260,47 @@ class SafeTensors {
               : b.toDouble();
         }
         break;
+      case 'I32':
+      case 'U32':
+        // 32-bit integer tensors. HF stores index buffers such as
+        // `position_ids` this way. Decoded to float so the file
+        // parses; downstream loaders leave these keys in
+        // `unusedKeys` (models compute positions on the fly).
+        if (byteLen != n * 4) {
+          throw ArgumentError(
+            'safetensors: "${e.name}" ${e.dtype} expected ${n * 4} bytes, got '
+            '$byteLen',
+          );
+        }
+        for (int i = 0; i < n; i++) {
+          data[i] = e.dtype == 'I32'
+              ? view.getInt32(i * 4, Endian.little).toDouble()
+              : view.getUint32(i * 4, Endian.little).toDouble();
+        }
+        break;
+      case 'I64':
+      case 'U64':
+        // 64-bit integer tensors. HF's `position_ids` buffers in
+        // CLIP / Llama safetensors are I64. Read via ByteData's
+        // low/high halves (Dart web doesn't guarantee full 64-bit
+        // ints, but native does; use getInt64 on native).
+        if (byteLen != n * 8) {
+          throw ArgumentError(
+            'safetensors: "${e.name}" ${e.dtype} expected ${n * 8} bytes, got '
+            '$byteLen',
+          );
+        }
+        for (int i = 0; i < n; i++) {
+          data[i] = e.dtype == 'I64'
+              ? view.getInt64(i * 8, Endian.little).toDouble()
+              : view.getUint64(i * 8, Endian.little).toDouble();
+        }
+        break;
       default:
         throw ArgumentError(
           'safetensors: unsupported dtype "${e.dtype}" for entry '
-          '"${e.name}" (supported: F32, F64, F16, BF16, U8, BOOL, I8)',
+          '"${e.name}" (supported: F32, F64, F16, BF16, U8, BOOL, I8, '
+          'I32, U32, I64, U64)',
         );
     }
     return Tensor.fromList(

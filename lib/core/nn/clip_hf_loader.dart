@@ -147,11 +147,9 @@ class ClipHFLoader {
     _copy(
       model.clsToken,
       _reshape(
-        _expectShape(
-          take('embeddings.class_embedding'),
-          [d],
-          'embeddings.class_embedding',
-        ),
+        _expectShape(take('embeddings.class_embedding'), [
+          d,
+        ], 'embeddings.class_embedding'),
         [1, d],
       ),
     );
@@ -188,9 +186,7 @@ class ClipHFLoader {
       );
       _copy(
         block.ln1.beta,
-        _expectShape(take('$p.layer_norm1.bias'), [
-          d,
-        ], '$p.layer_norm1.bias'),
+        _expectShape(take('$p.layer_norm1.bias'), [d], '$p.layer_norm1.bias'),
       );
 
       // layer_norm2 → ln2 (pre-FFN).
@@ -202,9 +198,7 @@ class ClipHFLoader {
       );
       _copy(
         block.ln2.beta,
-        _expectShape(take('$p.layer_norm2.bias'), [
-          d,
-        ], '$p.layer_norm2.bias'),
+        _expectShape(take('$p.layer_norm2.bias'), [d], '$p.layer_norm2.bias'),
       );
 
       // q_proj — [D, D] weight, [D] bias. Row-split into `h` heads.
@@ -282,10 +276,7 @@ class ClipHFLoader {
       // MLP fc1 [F, D] + bias [F].
       _copy(
         block.ffn1.weight,
-        _expectShape(take('$p.mlp.fc1.weight'), [
-          ffn,
-          d,
-        ], '$p.mlp.fc1.weight'),
+        _expectShape(take('$p.mlp.fc1.weight'), [ffn, d], '$p.mlp.fc1.weight'),
       );
       _copy(
         block.ffn1.bias!,
@@ -295,10 +286,7 @@ class ClipHFLoader {
       // MLP fc2 [D, F] + bias [D].
       _copy(
         block.ffn2.weight,
-        _expectShape(take('$p.mlp.fc2.weight'), [
-          d,
-          ffn,
-        ], '$p.mlp.fc2.weight'),
+        _expectShape(take('$p.mlp.fc2.weight'), [d, ffn], '$p.mlp.fc2.weight'),
       );
       _copy(
         block.ffn2.bias!,
@@ -309,9 +297,7 @@ class ClipHFLoader {
     // -------- post_layernorm --------
     _copy(
       model.encoder.finalNorm!.gamma,
-      _expectShape(take('post_layernorm.weight'), [
-        d,
-      ], 'post_layernorm.weight'),
+      _expectShape(take('post_layernorm.weight'), [d], 'post_layernorm.weight'),
     );
     _copy(
       model.encoder.finalNorm!.beta,
@@ -354,8 +340,7 @@ class ClipHFLoader {
   // Tensor helpers.
   // ---------------------------------------------------------------------
   static Tensor _expectShape(Tensor t, List<int> expected, String name) {
-    if (t.shape.length != expected.length ||
-        !_shapesEqual(t.shape, expected)) {
+    if (t.shape.length != expected.length || !_shapesEqual(t.shape, expected)) {
       throw ArgumentError(
         'clip loader: "$name" expected shape $expected, got ${t.shape}',
       );

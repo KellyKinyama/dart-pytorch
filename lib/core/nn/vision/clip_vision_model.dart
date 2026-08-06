@@ -83,8 +83,7 @@ class CLIPVisionConfig {
     this.seed = 0,
   });
 
-  int get numPatches =>
-      (imageSize ~/ patchSize) * (imageSize ~/ patchSize);
+  int get numPatches => (imageSize ~/ patchSize) * (imageSize ~/ patchSize);
 
   int get patchPixels => patchSize * patchSize * numChannels;
 }
@@ -187,6 +186,5 @@ class CLIPVisionModel extends Module implements VisionEncoder {
   ];
 
   @override
-  List<Module> submodules() =>
-      [patchProjection, preLayerNorm, encoder];
+  List<Module> submodules() => [patchProjection, preLayerNorm, encoder];
 }

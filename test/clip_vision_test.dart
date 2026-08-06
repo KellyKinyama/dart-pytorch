@@ -40,8 +40,7 @@ Map<String, Tensor> _syntheticState(
     final vals = List<double>.generate(n, (_) {
       final u1 = rng.nextDouble().clamp(1e-9, 1.0);
       final u2 = rng.nextDouble();
-      final z = math.sqrt(-2.0 * math.log(u1)) *
-          math.cos(2.0 * math.pi * u2);
+      final z = math.sqrt(-2.0 * math.log(u1)) * math.cos(2.0 * math.pi * u2);
       return z * 0.02;
     });
     return Tensor.fromList(shape, vals);
@@ -61,11 +60,17 @@ Map<String, Tensor> _syntheticState(
   final f = cfg.ffnDim;
   final out = <String, Tensor>{};
 
-  out['${prefix}embeddings.patch_embedding.weight'] =
-      rand([d, cfg.numChannels, cfg.patchSize, cfg.patchSize]);
+  out['${prefix}embeddings.patch_embedding.weight'] = rand([
+    d,
+    cfg.numChannels,
+    cfg.patchSize,
+    cfg.patchSize,
+  ]);
   out['${prefix}embeddings.class_embedding'] = rand([d]);
-  out['${prefix}embeddings.position_embedding.weight'] =
-      rand([cfg.numPatches + 1, d]);
+  out['${prefix}embeddings.position_embedding.weight'] = rand([
+    cfg.numPatches + 1,
+    d,
+  ]);
 
   out['${prefix}pre_layrnorm.weight'] = ones([d]);
   out['${prefix}pre_layrnorm.bias'] = zeros([d]);
@@ -124,8 +129,12 @@ void main() {
       );
       final model = CLIPVisionModel(cfg);
       expect(
-        () => model(Tensor.fromList([3, cfg.patchPixels],
-            List<double>.filled(3 * cfg.patchPixels, 0.0))),
+        () => model(
+          Tensor.fromList([
+            3,
+            cfg.patchPixels,
+          ], List<double>.filled(3 * cfg.patchPixels, 0.0)),
+        ),
         throwsArgumentError,
       );
     });
@@ -176,8 +185,10 @@ void main() {
       final model = CLIPVisionModel(cfg);
       final state = _syntheticState(cfg);
       state['logit_scale'] = Tensor.fromList([1], [1.0]);
-      state['text_model.embeddings.token_embedding.weight'] =
-          Tensor.fromList([2, 3], [0, 0, 0, 0, 0, 0]);
+      state['text_model.embeddings.token_embedding.weight'] = Tensor.fromList(
+        [2, 3],
+        [0, 0, 0, 0, 0, 0],
+      );
       final report = ClipHFLoader.loadMap(model, state);
       expect(report.unusedKeys, contains('logit_scale'));
       expect(
@@ -192,103 +203,101 @@ void main() {
       state.remove('vision_model.pre_layrnorm.weight');
       expect(
         () => ClipHFLoader.loadMap(model, state),
-        throwsA(isA<ArgumentError>().having(
-          (e) => e.message,
-          'message',
-          contains('pre_layrnorm.weight'),
-        )),
+        throwsA(
+          isA<ArgumentError>().having(
+            (e) => e.message,
+            'message',
+            contains('pre_layrnorm.weight'),
+          ),
+        ),
       );
     });
 
-    test(
-      'Conv→Linear permutation matches conv semantics on a single patch',
-      () {
-        // Sanity check: with an all-zero cls, zero posEmb, identity
-        // pre-LN, identity blocks, and identity post_layernorm, the
-        // patch row of the model output should equal the conv output
-        // for that patch.
-        //
-        // We build a minimal 1-layer CLIP-like model, zero out
-        // everything but the patch conv, then verify one patch
-        // produces the expected dot products.
+    test('Conv→Linear permutation matches conv semantics on a single patch', () {
+      // Sanity check: with an all-zero cls, zero posEmb, identity
+      // pre-LN, identity blocks, and identity post_layernorm, the
+      // patch row of the model output should equal the conv output
+      // for that patch.
+      //
+      // We build a minimal 1-layer CLIP-like model, zero out
+      // everything but the patch conv, then verify one patch
+      // produces the expected dot products.
 
-        const c = 3;
-        const p = 2;
-        const d = 4;
-        const cfg2 = CLIPVisionConfig(
-          imageSize: 4,
-          patchSize: p,
-          embedDim: d,
-          numLayers: 1,
-          numHeads: 2,
-          ffnDim: 8,
-        );
-        final model = CLIPVisionModel(cfg2);
-        final state = _syntheticState(cfg2, seed: 7);
+      const c = 3;
+      const p = 2;
+      const d = 4;
+      const cfg2 = CLIPVisionConfig(
+        imageSize: 4,
+        patchSize: p,
+        embedDim: d,
+        numLayers: 1,
+        numHeads: 2,
+        ffnDim: 8,
+      );
+      final model = CLIPVisionModel(cfg2);
+      final state = _syntheticState(cfg2, seed: 7);
 
-        // Force a known patch conv weight: W[o, cc, hh, ww] = o*100 + cc*10 + hh + ww*0.1
-        final convVals = <double>[];
-        for (int o = 0; o < d; o++) {
-          for (int cc = 0; cc < c; cc++) {
-            for (int hh = 0; hh < p; hh++) {
-              for (int ww = 0; ww < p; ww++) {
-                convVals.add(o * 100.0 + cc * 10.0 + hh + ww * 0.1);
-              }
+      // Force a known patch conv weight: W[o, cc, hh, ww] = o*100 + cc*10 + hh + ww*0.1
+      final convVals = <double>[];
+      for (int o = 0; o < d; o++) {
+        for (int cc = 0; cc < c; cc++) {
+          for (int hh = 0; hh < p; hh++) {
+            for (int ww = 0; ww < p; ww++) {
+              convVals.add(o * 100.0 + cc * 10.0 + hh + ww * 0.1);
             }
           }
         }
-        state['vision_model.embeddings.patch_embedding.weight'] =
-            Tensor.fromList([d, c, p, p], convVals);
+      }
+      state['vision_model.embeddings.patch_embedding.weight'] = Tensor.fromList(
+        [d, c, p, p],
+        convVals,
+      );
 
-        ClipHFLoader.loadMap(model, state);
+      ClipHFLoader.loadMap(model, state);
 
-        // Feed a single-patch image (well, a 4-patch one — build so
-        // that patch 0 has a known pattern and the rest are zero).
-        final flat = Float32List(cfg2.numPatches * cfg2.patchPixels);
-        // Patch 0 pixel(h=0, w=0, c=0..2) = 1, 2, 3;
-        //         pixel(h=0, w=1, c=0..2) = 4, 5, 6;
-        //         pixel(h=1, w=0, c=0..2) = 7, 8, 9;
-        //         pixel(h=1, w=1, c=0..2) = 10, 11, 12.
-        for (int i = 0; i < 12; i++) {
-          flat[i] = (i + 1).toDouble();
-        }
-        final img = Tensor.fromList(
-          [cfg2.numPatches, cfg2.patchPixels],
-          flat,
-        );
+      // Feed a single-patch image (well, a 4-patch one — build so
+      // that patch 0 has a known pattern and the rest are zero).
+      final flat = Float32List(cfg2.numPatches * cfg2.patchPixels);
+      // Patch 0 pixel(h=0, w=0, c=0..2) = 1, 2, 3;
+      //         pixel(h=0, w=1, c=0..2) = 4, 5, 6;
+      //         pixel(h=1, w=0, c=0..2) = 7, 8, 9;
+      //         pixel(h=1, w=1, c=0..2) = 10, 11, 12.
+      for (int i = 0; i < 12; i++) {
+        flat[i] = (i + 1).toDouble();
+      }
+      final img = Tensor.fromList([cfg2.numPatches, cfg2.patchPixels], flat);
 
-        // Expected: y[o] = sum_{cc,hh,ww} conv[o,cc,hh,ww] * patch0[cc,hh,ww]
-        // patch0 pixel layout in flat is (hh, ww, cc) with cc innermost.
-        final expected = <double>[];
-        for (int o = 0; o < d; o++) {
-          var s = 0.0;
-          for (int cc = 0; cc < c; cc++) {
-            for (int hh = 0; hh < p; hh++) {
-              for (int ww = 0; ww < p; ww++) {
-                final pixel = flat[hh * p * c + ww * c + cc];
-                final wConv = o * 100.0 + cc * 10.0 + hh + ww * 0.1;
-                s += pixel * wConv;
-              }
+      // Expected: y[o] = sum_{cc,hh,ww} conv[o,cc,hh,ww] * patch0[cc,hh,ww]
+      // patch0 pixel layout in flat is (hh, ww, cc) with cc innermost.
+      final expected = <double>[];
+      for (int o = 0; o < d; o++) {
+        var s = 0.0;
+        for (int cc = 0; cc < c; cc++) {
+          for (int hh = 0; hh < p; hh++) {
+            for (int ww = 0; ww < p; ww++) {
+              final pixel = flat[hh * p * c + ww * c + cc];
+              final wConv = o * 100.0 + cc * 10.0 + hh + ww * 0.1;
+              s += pixel * wConv;
             }
           }
-          expected.add(s);
         }
+        expected.add(s);
+      }
 
-        // Run only the patch projection, not the full model, since
-        // the transformer layers scramble things beyond checkability.
-        final projected = model.patchProjection(img);
-        final vals = projected.toList();
-        // Row 0 (first patch) should equal `expected`. Tolerance
-        // accommodates fp32 accumulation on values up to ~1e4.
-        for (int o = 0; o < d; o++) {
-          expect(
-            vals[o],
-            closeTo(expected[o], expected[o].abs() * 1e-4 + 1e-3),
-            reason: 'patch conv output for out-neuron $o',
-          );
-        }
-      },
-    );
+      // Run only the patch projection, not the full model, since
+      // the transformer layers scramble things beyond checkability.
+      final projected = model.patchProjection(img);
+      final vals = projected.toList();
+      // Row 0 (first patch) should equal `expected`. Tolerance
+      // accommodates fp32 accumulation on values up to ~1e4.
+      for (int o = 0; o < d; o++) {
+        expect(
+          vals[o],
+          closeTo(expected[o], expected[o].abs() * 1e-4 + 1e-3),
+          reason: 'patch conv output for out-neuron $o',
+        );
+      }
+    });
 
     test('bad state dict (no CLIP keys) fails prefix detection', () {
       final model = CLIPVisionModel(cfg);
@@ -297,11 +306,13 @@ void main() {
       };
       expect(
         () => ClipHFLoader.loadMap(model, state),
-        throwsA(isA<ArgumentError>().having(
-          (e) => e.message,
-          'message',
-          contains('patch_embedding.weight'),
-        )),
+        throwsA(
+          isA<ArgumentError>().having(
+            (e) => e.message,
+            'message',
+            contains('patch_embedding.weight'),
+          ),
+        ),
       );
     });
   });
