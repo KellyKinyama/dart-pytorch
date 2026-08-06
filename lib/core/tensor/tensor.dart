@@ -373,8 +373,7 @@ class Tensor implements ffi.Finalizable {
   ///
   /// After the call, `source` is left in a zombie state — its
   /// backing pointers have been moved out — and must not be used.
-  void adoptCpuStorageFrom(Tensor source) {
-    if (device != Device.CPU || source.device != Device.CPU) {
+  void adoptCpuStorageFrom(Tensor source) {    if (device != Device.CPU || source.device != Device.CPU) {
       throw StateError(
         'adoptCpuStorageFrom: both tensors must be CPU '
         '(dst=$device, src=${source.device})',
@@ -396,6 +395,41 @@ class Tensor implements ffi.Finalizable {
     requiresGrad = false;
     source._cpuData = null;
     source._cpuF16Bits = null;
+  }
+
+  /// Extract a row-slice `[start, end)` of a rank-2 CPU tensor into a
+  /// fresh CPU tensor of the same dtype. fp16 storage is preserved
+  /// bit-for-bit (no fp32 round-trip), which matters when a HF
+  /// loader has to split a big fp16 `[H·hd, D]` matrix into `H`
+  /// per-head `[hd, D]` slices at model-load time.
+  Tensor sliceRows(int start, int end) {
+    if (shape.length != 2) {
+      throw ArgumentError('sliceRows: expected rank 2, got $shape');
+    }
+    if (device != Device.CPU) {
+      throw StateError('sliceRows: only supported on CPU tensors');
+    }
+    if (start < 0 || end > shape[0] || start > end) {
+      throw ArgumentError(
+        'sliceRows: [start=$start, end=$end) out of range for rows=${shape[0]}',
+      );
+    }
+    final c = shape[1];
+    final n = (end - start) * c;
+    if (dtype == DType.fp16) {
+      final src = _cpuF16Bits!;
+      final out = Uint16List(n);
+      for (int i = 0; i < n; i++) {
+        out[i] = src[start * c + i];
+      }
+      return Tensor._cpuF16([end - start, c], out);
+    }
+    final src = _cpuData!;
+    final out = Float32List(n);
+    for (int i = 0; i < n; i++) {
+      out[i] = src[start * c + i];
+    }
+    return Tensor._cpu([end - start, c], out);
   }
 
   /// Releases GPU memory when applicable. Also disposes any accumulated

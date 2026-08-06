@@ -256,4 +256,76 @@ void main() {
       );
     });
   });
+
+  group('fp16-preserving ops', () {
+    test('transpose keeps fp16 storage', () {
+      final w = Tensor.fromList([2, 3], [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+      final wFp16 = w.toFp16();
+      final wt = wFp16.transpose();
+      expect(wt.dtype, DType.fp16);
+      expect(wt.shape, [3, 2]);
+      // Row-major [2,3] = [[1,2,3],[4,5,6]] transposed = [[1,4],[2,5],[3,6]].
+      final host = wt.toList();
+      expect(host[0], closeTo(1.0, 1e-3));
+      expect(host[1], closeTo(4.0, 1e-3));
+      expect(host[2], closeTo(2.0, 1e-3));
+      expect(host[3], closeTo(5.0, 1e-3));
+      expect(host[4], closeTo(3.0, 1e-3));
+      expect(host[5], closeTo(6.0, 1e-3));
+    });
+
+    test('sliceRows keeps fp16 storage', () {
+      // Simulate a `[H*hd, D]` = `[4, 3]` weight and slice per-head.
+      final vals = <double>[
+        1.0, 2.0, 3.0,
+        4.0, 5.0, 6.0,
+        7.0, 8.0, 9.0,
+        10.0, 11.0, 12.0,
+      ];
+      final w = Tensor.fromList([4, 3], vals).toFp16();
+      final head0 = w.sliceRows(0, 2);
+      final head1 = w.sliceRows(2, 4);
+      expect(head0.dtype, DType.fp16);
+      expect(head1.dtype, DType.fp16);
+      expect(head0.shape, [2, 3]);
+      expect(head1.shape, [2, 3]);
+      final h0 = head0.toList();
+      final h1 = head1.toList();
+      expect(h0[0], closeTo(1.0, 1e-3));
+      expect(h0[5], closeTo(6.0, 1e-3));
+      expect(h1[0], closeTo(7.0, 1e-3));
+      expect(h1[5], closeTo(12.0, 1e-3));
+    });
+
+    test('sliceRows fp32 fallback', () {
+      final w = Tensor.fromList([3, 2], [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+      final s = w.sliceRows(1, 3);
+      expect(s.dtype, DType.fp32);
+      expect(s.shape, [2, 2]);
+      expect(s.toList(), [3.0, 4.0, 5.0, 6.0]);
+    });
+
+    test('sliceRows out-of-range throws', () {
+      final w = Tensor.fromList([2, 2], [1.0, 2.0, 3.0, 4.0]);
+      expect(() => w.sliceRows(0, 3), throwsA(isA<ArgumentError>()));
+      expect(() => w.sliceRows(-1, 1), throwsA(isA<ArgumentError>()));
+    });
+
+    test('Linear-style x @ W.T + b with fp16 weight matches fp32', () {
+      final w = Tensor.fromList([3, 4], [
+        0.5, -0.25, 0.125, 0.75,
+        1.0, 0.0, -0.5, 0.25,
+        0.25, 0.75, -1.0, 0.5,
+      ]);
+      final b = Tensor.fromList([1, 3], [0.1, -0.1, 0.2]);
+      final x = Tensor.fromList([1, 4], [1.0, 2.0, 3.0, 4.0]);
+      final yFp32 = (x.matmul(w.transpose()) + b).toList();
+      final wHalf = w.toFp16();
+      final bHalf = b.toFp16();
+      final yFp16 = (x.matmul(wHalf.transpose()) + bHalf).toList();
+      for (int i = 0; i < yFp32.length; i++) {
+        expect(yFp16[i], closeTo(yFp32[i], yFp32[i].abs() * 1e-3 + 1e-3));
+      }
+    });
+  });
 }

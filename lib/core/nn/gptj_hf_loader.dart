@@ -351,19 +351,10 @@ class GPTJHFLoader {
     dst.assign(matched);
   }
 
-  static Tensor _sliceRows(Tensor t, int start, int end) {
-    if (t.shape.length != 2) {
-      throw ArgumentError('_sliceRows: expected rank 2, got ${t.shape}');
-    }
-    final c = t.shape[1];
-    final src = t.toList();
-    final n = (end - start) * c;
-    final out = Float32List(n);
-    for (int i = 0; i < n; i++) {
-      out[i] = src[start * c + i];
-    }
-    return Tensor.fromList([end - start, c], out.toList(), device: Device.CPU);
-  }
+  // Delegates to Tensor.sliceRows so fp16 storage is preserved
+  // through the per-head Q/K/V split.
+  static Tensor _sliceRows(Tensor t, int start, int end) =>
+      t.sliceRows(start, end);
 
   static Tensor _reshape1xN(Tensor v) {
     if (v.shape.length != 1) {

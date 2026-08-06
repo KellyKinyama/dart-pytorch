@@ -497,6 +497,20 @@ extension TensorOps on Tensor {
   }
 
   Tensor _transposeCpu(int r, int c) {
+    // fp16 transpose keeps the storage in fp16 — it's just a
+    // rearrangement of 16-bit values, no math involved. This is
+    // what lets `Linear.forward` (which calls `weight.transpose()`)
+    // work on fp16 weights without a fp32 blow-up.
+    if (dtype == DType.fp16) {
+      final src = _cpuF16Bits!;
+      final out = Uint16List(length);
+      for (int i = 0; i < r; i++) {
+        for (int j = 0; j < c; j++) {
+          out[j * r + i] = src[i * c + j];
+        }
+      }
+      return Tensor._cpuF16([c, r], out);
+    }
     final src = _cpuData!;
     final out = Float32List(length);
     for (int i = 0; i < r; i++) {
