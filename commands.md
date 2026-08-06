@@ -606,7 +606,8 @@ LD_LIBRARY_PATH=/usr/lib/wsl/lib dart run bin/rag_chat_server.dart \
   --arch llama \
   --path models/llama-3.2-1b-instruct/model.safetensors \
   --vocab models/llama-3.2-1b-instruct/tokenizer.json \
-  --preset llama-3.2-1b --gpu --port 8090
+  --preset llama-3.2-1b \
+  --gpu --port 8090
 ```
 
 Then open `http://127.0.0.1:8090/` in a browser: drop text files
