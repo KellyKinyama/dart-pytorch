@@ -223,4 +223,45 @@ void main() {
       },
     );
   });
+
+  group('Checkpoint fp16 compression', () {
+    test('fp16 save halves the data blob size', () {
+      final l = Linear(8, 4, seed: 7);
+      final f32Bytes = Checkpoint.saveBytes(l);
+      final f16Bytes = Checkpoint.saveBytes(l, fp16: true);
+      // Data blob: 8*4 (W) + 4 (b) = 36 scalars. fp32 = 144 bytes;
+      // fp16 = 72 bytes. Header also grows a bit because each param
+      // spec now carries `"dtype": "F16"` (~14 bytes each × 2 params
+      // = ~28 bytes), so net delta ≈ 44.
+      final dataDelta = f32Bytes.length - f16Bytes.length;
+      expect(dataDelta, greaterThan(30));
+      expect(dataDelta, lessThan(72));
+    });
+
+    test('fp16 save/load round-trips through half precision', () {
+      final l = Linear(4, 3, seed: 3);
+      final x = Tensor.fromList([2, 4], [1, 2, 3, 4, 5, 6, 7, 8]);
+      final yRef = l(x).toList();
+
+      final bytes = Checkpoint.saveBytes(l, fp16: true);
+      final l2 = Linear(4, 3, seed: 999);
+      Checkpoint.loadIntoBytes(l2, bytes);
+      final yLoaded = l2(x).toList();
+
+      // Small rounding error is expected (values passed through fp16),
+      // but outputs stay close.
+      for (int i = 0; i < yRef.length; i++) {
+        expect(yLoaded[i], closeTo(yRef[i], 1e-2));
+      }
+    });
+
+    test('old fp32 checkpoints (no dtype field) still load', () {
+      final l = Linear(3, 2, seed: 4);
+      final bytes = Checkpoint.saveBytes(l); // fp16 defaults to false
+      final l2 = Linear(3, 2, seed: 55);
+      Checkpoint.loadIntoBytes(l2, bytes);
+      final x = Tensor.fromList([1, 3], [1, 1, 1]);
+      expect(l2(x).toList(), l(x).toList());
+    });
+  });
 }

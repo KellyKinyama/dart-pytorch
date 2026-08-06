@@ -30,6 +30,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import '../tensor/dtype.dart';
 import '../tensor/tensor.dart';
 import 'module.dart';
 
@@ -42,19 +43,30 @@ class Checkpoint {
   static const int version = 1;
 
   /// Serialize a module's parameters to a fresh byte buffer.
-  static Uint8List saveBytes(Module module) {
+  ///
+  /// If [fp16] is true, every parameter's data is quantized to IEEE-754
+  /// half precision on save (halving file size). The header records
+  /// `"dtype": "F16"` per compressed parameter so [loadIntoBytes] can
+  /// decode back to fp32 automatically. Old checkpoints without any
+  /// `dtype` field continue to load as fp32.
+  static Uint8List saveBytes(Module module, {bool fp16 = false}) {
     final params = module.parameters();
     final header = jsonEncode({
       'version': version,
       'params': [
-        for (final p in params) {'shape': p.shape},
+        for (final p in params)
+          {
+            'shape': p.shape,
+            if (fp16) 'dtype': 'F16',
+          },
       ],
       'totalScalars': params.fold<int>(0, (a, p) => a + p.length),
     });
     final headerBytes = utf8.encode(header);
 
+    final bytesPerScalar = fp16 ? 2 : 4;
     final totalScalars = params.fold<int>(0, (a, p) => a + p.length);
-    final dataBytes = 4 * totalScalars;
+    final dataBytes = bytesPerScalar * totalScalars;
     final preamble = 4 + 4 + 4; // magic + version + headerLen
     final out = ByteData(preamble + headerBytes.length + dataBytes);
 
@@ -76,19 +88,26 @@ class Checkpoint {
     // Data blob. Downloading from GPU when needed happens via toList().
     for (final p in params) {
       final vals = p.toList();
-      for (int i = 0; i < vals.length; i++) {
-        out.setFloat32(off, vals[i], Endian.little);
-        off += 4;
+      if (fp16) {
+        for (int i = 0; i < vals.length; i++) {
+          out.setUint16(off, fp32ToFp16Bits(vals[i]), Endian.little);
+          off += 2;
+        }
+      } else {
+        for (int i = 0; i < vals.length; i++) {
+          out.setFloat32(off, vals[i], Endian.little);
+          off += 4;
+        }
       }
     }
     return out.buffer.asUint8List();
   }
 
   /// Write a checkpoint to disk. Creates parent directories as needed.
-  static void saveFile(Module module, String path) {
+  static void saveFile(Module module, String path, {bool fp16 = false}) {
     final f = File(path);
     f.parent.createSync(recursive: true);
-    f.writeAsBytesSync(saveBytes(module));
+    f.writeAsBytesSync(saveBytes(module, fp16: fp16));
   }
 
   /// Load a checkpoint from a byte buffer into an existing module.
@@ -136,6 +155,7 @@ class Checkpoint {
 
     // Verify all shapes match before writing anything (avoid partial
     // loads).
+    final paramDtypes = <DType>[];
     for (int i = 0; i < params.length; i++) {
       final want = (paramSpecs[i]['shape'] as List).cast<int>();
       final have = params[i].shape;
@@ -149,9 +169,27 @@ class Checkpoint {
           '$want vs module $have',
         );
       }
+      final dtypeStr = paramSpecs[i]['dtype'] as String?;
+      switch (dtypeStr) {
+        case null:
+        case 'F32':
+          paramDtypes.add(DType.fp32);
+        case 'F16':
+          paramDtypes.add(DType.fp16);
+        default:
+          throw ArgumentError(
+            'Checkpoint: unsupported dtype "$dtypeStr" for parameter '
+            '#$i (expected F32 or F16)',
+          );
+      }
     }
-    final expectedScalars = params.fold<int>(0, (a, p) => a + p.length);
-    final expectedDataLen = expectedScalars * 4;
+    final expectedDataLen = () {
+      var n = 0;
+      for (int i = 0; i < params.length; i++) {
+        n += params[i].length * paramDtypes[i].itemBytes;
+      }
+      return n;
+    }();
     if (bytes.length - headerEnd != expectedDataLen) {
       throw ArgumentError(
         'Checkpoint: data blob length ${bytes.length - headerEnd} '
@@ -161,12 +199,20 @@ class Checkpoint {
 
     // Copy in.
     var off = headerEnd;
-    for (final p in params) {
+    for (int i = 0; i < params.length; i++) {
+      final p = params[i];
       final n = p.length;
       final f32 = Float32List(n);
-      for (int i = 0; i < n; i++) {
-        f32[i] = view.getFloat32(off, Endian.little);
-        off += 4;
+      if (paramDtypes[i] == DType.fp16) {
+        for (int j = 0; j < n; j++) {
+          f32[j] = fp16BitsToFp32(view.getUint16(off, Endian.little));
+          off += 2;
+        }
+      } else {
+        for (int j = 0; j < n; j++) {
+          f32[j] = view.getFloat32(off, Endian.little);
+          off += 4;
+        }
       }
       final source = Tensor.fromList(p.shape, f32, device: p.device);
       p.assign(source);
