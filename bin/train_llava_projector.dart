@@ -83,6 +83,7 @@ class _Opts {
     required this.lr,
     required this.logEvery,
     required this.maxCaption,
+    required this.maxPairs,
   });
 
   final String path;
@@ -98,6 +99,7 @@ class _Opts {
   final double lr;
   final int logEvery;
   final int maxCaption;
+  final int? maxPairs;
 }
 
 _Opts _parseArgs(List<String> args) {
@@ -114,6 +116,7 @@ _Opts _parseArgs(List<String> args) {
   var lr = 1e-3;
   var logEvery = 25;
   var maxCaption = 32;
+  int? maxPairs;
 
   for (var i = 0; i < args.length; i++) {
     final a = args[i];
@@ -144,6 +147,8 @@ _Opts _parseArgs(List<String> args) {
         logEvery = int.parse(args[++i]);
       case '--max-caption':
         maxCaption = int.parse(args[++i]);
+      case '--max-pairs':
+        maxPairs = int.parse(args[++i]);
       case '-h' || '--help':
         stdout.writeln(_help);
         exit(0);
@@ -166,6 +171,7 @@ _Opts _parseArgs(List<String> args) {
     lr: lr,
     logEvery: logEvery,
     maxCaption: maxCaption,
+    maxPairs: maxPairs,
   );
 }
 
@@ -201,6 +207,9 @@ Training:
   --lr F                  Adam lr (default: 1e-3)
   --log-every N           print every N steps (default: 25)
   --max-caption N         truncate captions to N tokens (default: 32)
+  --max-pairs N           cap dataset to first N pairs after scanning
+                          (default: use all). Handy for CPU-only runs
+                          where CLIP feature caching dominates wall time.
 
 Example:
   LD_LIBRARY_PATH=/usr/lib/wsl/lib dart run bin/train_llava_projector.dart \\
@@ -402,12 +411,22 @@ void main(List<String> args) {
   vision.train();
 
   // ---- Data -------------------------------------------------------
-  final pairs = _scanPairs(opts.data!);
-  if (pairs.isEmpty) {
+  final allPairs = _scanPairs(opts.data!);
+  if (allPairs.isEmpty) {
     stderr.writeln('[data] no image+caption pairs found under ${opts.data}');
     exit(1);
   }
-  stdout.writeln('[data] ${pairs.length} image+caption pair(s)');
+  final pairs = (opts.maxPairs != null && opts.maxPairs! < allPairs.length)
+      ? allPairs.sublist(0, opts.maxPairs!)
+      : allPairs;
+  if (pairs.length < allPairs.length) {
+    stdout.writeln(
+      '[data] ${pairs.length} of ${allPairs.length} pair(s) '
+      '(capped by --max-pairs)',
+    );
+  } else {
+    stdout.writeln('[data] ${pairs.length} image+caption pair(s)');
+  }
 
   // ---- Pre-compute CLIP features per image (CLIP is frozen, so
   //      this is a one-time cost). Cache on CPU as Float32List to
