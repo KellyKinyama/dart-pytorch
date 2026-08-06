@@ -204,17 +204,54 @@ class Llama extends Module {
         'maxCtx=${config.maxCtx}',
       );
     }
-    var h = embedIn(tokens); // [N, D]
+    final h = embedIn(tokens); // [N, D]
+    return _forwardFromEmbeddings(h, startPos: startPos, cache: cache);
+  }
+
+  /// Forward pass starting from pre-computed token embeddings.
+  ///
+  /// `h` must be `[N, embedDim]`. Skips [embedIn] entirely; runs the
+  /// block stack, final norm, and output head. Used by multi-modal
+  /// wrappers ([LlamaVision]) that mix vision-projected tokens in with
+  /// text embeddings before the first block.
+  Tensor forwardFromEmbeddings(
+    Tensor h, {
+    int startPos = 0,
+    EncoderCache? cache,
+  }) {
+    if (h.shape.length != 2 || h.shape[1] != config.embedDim) {
+      throw ArgumentError(
+        'Llama.forwardFromEmbeddings: expected [N, ${config.embedDim}]; '
+        'got ${h.shape}',
+      );
+    }
+    final n = h.shape[0];
+    if (startPos + n > config.maxCtx) {
+      throw ArgumentError(
+        'Llama.forwardFromEmbeddings: window [$startPos, ${startPos + n}) '
+        'exceeds maxCtx=${config.maxCtx}',
+      );
+    }
+    return _forwardFromEmbeddings(h, startPos: startPos, cache: cache);
+  }
+
+  Tensor _forwardFromEmbeddings(
+    Tensor h, {
+    required int startPos,
+    EncoderCache? cache,
+  }) {
+    final n = h.shape[0];
     final mask = n > 1 ? causalMask(n, device: h.device) : null;
+    var x = h;
     for (int i = 0; i < blocks.length; i++) {
       final cacheI = cache?.layers[i];
-      h = blocks[i](h, mask: mask, cache: cacheI, startPos: startPos);
+      x = blocks[i](x, mask: mask, cache: cacheI, startPos: startPos);
     }
-    h = finalNorm(h);
+    x = finalNorm(x);
     if (config.tieWeights) {
-      return h.matmul(embedIn.weight.transpose());
+      return x.matmul(embedIn.weight.transpose());
     }
-    return untiedHead!(h);
+    return untiedHead!(x);
   }
 
   /// Autoregressive sampling. Same signature and behaviour as
