@@ -36,6 +36,7 @@ library;
 import 'dart:typed_data';
 
 import '../tensor/tensor.dart';
+import '../tensor/dtype.dart';
 import 'llama.dart';
 import 'safetensors.dart';
 
@@ -100,8 +101,20 @@ class LlamaHFLoader {
     seed: seed,
   );
 
-  static LlamaLoadReport loadFile(Llama model, String path) {
-    final state = SafeTensors.loadFile(path);
+  /// Load a `.safetensors` checkpoint into [model].
+  ///
+  /// When [keepFp16] is true, any `F16` tensors in the file are
+  /// held in fp16 storage inside the model (read-only). This halves
+  /// resident memory of large weight tensors — essential for
+  /// running Llama-3.1-8B / Llama-3.2-Vision in-process. Compute is
+  /// still fp32; ops decode fp16 → fp32 on read. fp16 parameters
+  /// cannot be trained; this path is inference-only.
+  static LlamaLoadReport loadFile(
+    Llama model,
+    String path, {
+    bool keepFp16 = false,
+  }) {
+    final state = SafeTensors.loadFile(path, keepFp16: keepFp16);
     return loadMap(model, state);
   }
 
@@ -277,6 +290,14 @@ class LlamaHFLoader {
         'llama loader: copy length mismatch — dst=${dst.shape} '
         '(${dst.length}), src=${src.shape} (${src.length})',
       );
+    }
+    // Fast path for fp16 storage: swap the CPU backing in place so
+    // the parameter tensor keeps its fp16 bits (half the RAM).
+    // Requires dst to be a CPU parameter — GPU parameters go through
+    // the fp32 upload path below.
+    if (src.dtype == DType.fp16 && dst.device == Device.CPU) {
+      dst.adoptCpuStorageFrom(src);
+      return;
     }
     final vals = src.toList();
     final matched = Tensor.fromList(dst.shape, vals, device: dst.device);

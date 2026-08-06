@@ -104,28 +104,25 @@ void main() {
     });
 
     test('assign into an fp16 tensor throws', () {
-      final t = Tensor.fromFp16Bits(
-        [2],
-        encodeFp16Bulk(Float32List.fromList([1.0, 2.0])),
-      );
+      final t = Tensor.fromFp16Bits([
+        2,
+      ], encodeFp16Bulk(Float32List.fromList([1.0, 2.0])));
       final src = Tensor.fromList([2], [3.0, 4.0]);
       expect(() => t.assign(src), throwsA(isA<StateError>()));
     });
 
     test('assign from an fp16 tensor throws', () {
       final dst = Tensor.fromList([2], [1.0, 2.0]);
-      final src = Tensor.fromFp16Bits(
-        [2],
-        encodeFp16Bulk(Float32List.fromList([3.0, 4.0])),
-      );
+      final src = Tensor.fromFp16Bits([
+        2,
+      ], encodeFp16Bulk(Float32List.fromList([3.0, 4.0])));
       expect(() => dst.assign(src), throwsA(isA<StateError>()));
     });
 
     test('clone of fp16 stays fp16 and independent', () {
-      final t = Tensor.fromFp16Bits(
-        [3],
-        encodeFp16Bulk(Float32List.fromList([1.0, 2.0, 3.0])),
-      );
+      final t = Tensor.fromFp16Bits([
+        3,
+      ], encodeFp16Bulk(Float32List.fromList([1.0, 2.0, 3.0])));
       final c = t.clone();
       expect(c.dtype, DType.fp16);
       expect(c.toList()[0], closeTo(1.0, 1e-3));
@@ -137,10 +134,18 @@ void main() {
       // x: [1, 4] fp32 activation; W: [4, 3] weight — compare fp32 vs fp16.
       final x = Tensor.fromList([1, 4], [1.0, 2.0, 3.0, 4.0]);
       final wVals = <double>[
-        0.5, -0.25, 0.125,
-        1.0, 0.0, -0.5,
-        0.25, 0.75, -1.0,
-        -0.5, 0.5, 0.25,
+        0.5,
+        -0.25,
+        0.125,
+        1.0,
+        0.0,
+        -0.5,
+        0.25,
+        0.75,
+        -1.0,
+        -0.5,
+        0.5,
+        0.25,
       ];
       final wFp32 = Tensor.fromList([4, 3], wVals);
       final wFp16 = wFp32.toFp16();
@@ -204,6 +209,51 @@ void main() {
       expect(kept['w']!.dtype, DType.fp16);
       expect(kept['w']!.length, 4);
       expect(kept['w']!.toList()[1], closeTo(2.0, 1e-3));
+    });
+  });
+
+  group('adoptCpuStorageFrom', () {
+    test('swaps a CPU parameter to fp16 backing in place', () {
+      // Start with a fp32 CPU "parameter" — matches what a Module
+      // constructor allocates for its weights.
+      final param = Tensor.fromList([2, 2], [1.0, 2.0, 3.0, 4.0]);
+      expect(param.dtype, DType.fp32);
+
+      final src = Tensor.fromFp16Bits(
+        [2, 2],
+        encodeFp16Bulk(Float32List.fromList([10.0, 20.0, 30.0, 40.0])),
+      );
+      param.adoptCpuStorageFrom(src);
+
+      expect(param.dtype, DType.fp16);
+      expect(param.shape, [2, 2]);
+      expect(param.length, 4);
+      expect(param.toList()[0], closeTo(10.0, 1e-2));
+      expect(param.toList()[3], closeTo(40.0, 1e-2));
+
+      // Source is now a zombie — accessing storage throws.
+      expect(() => src.toList(), throwsA(anything));
+    });
+
+    test('matmul with an adopted-fp16 param matches fp32 baseline', () {
+      final wRef = Tensor.fromList([2, 2], [0.5, -0.25, 1.0, 0.75]);
+      final wParam = Tensor.fromList([2, 2], [0.0, 0.0, 0.0, 0.0]);
+      wParam.adoptCpuStorageFrom(wRef.toFp16());
+      final x = Tensor.fromList([1, 2], [3.0, 4.0]);
+      final y1 = x.matmul(wRef).toList();
+      final y2 = x.matmul(wParam).toList();
+      for (int i = 0; i < y1.length; i++) {
+        expect(y2[i], closeTo(y1[i], y1[i].abs() * 1e-3 + 1e-4));
+      }
+    });
+
+    test('rejects length mismatch', () {
+      final dst = Tensor.fromList([4], [1.0, 2.0, 3.0, 4.0]);
+      final src = Tensor.fromList([3], [1.0, 2.0, 3.0]);
+      expect(
+        () => dst.adoptCpuStorageFrom(src),
+        throwsA(isA<ArgumentError>()),
+      );
     });
   });
 }

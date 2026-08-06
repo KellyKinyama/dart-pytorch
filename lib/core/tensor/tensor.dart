@@ -359,6 +359,45 @@ class Tensor implements ffi.Finalizable {
     }
   }
 
+  /// **In-place** replace this tensor's CPU storage with `source`'s
+  /// CPU storage, including its dtype. Both tensors must be CPU and
+  /// their `length` must match; `shape` is enforced element-count-only
+  /// (rank/layout on `this` is preserved).
+  ///
+  /// Unlike [assign], this transfers ownership of the backing buffer
+  /// rather than copying values, and it accepts (and produces) fp16
+  /// storage. Autograd state on `this` is cleared — the caller is
+  /// expected to be swapping in read-only weight data (e.g. from a
+  /// safetensors loader) at model-init time, before any training
+  /// begins.
+  ///
+  /// After the call, `source` is left in a zombie state — its
+  /// backing pointers have been moved out — and must not be used.
+  void adoptCpuStorageFrom(Tensor source) {
+    if (device != Device.CPU || source.device != Device.CPU) {
+      throw StateError(
+        'adoptCpuStorageFrom: both tensors must be CPU '
+        '(dst=$device, src=${source.device})',
+      );
+    }
+    if (source.length != length) {
+      throw ArgumentError(
+        'adoptCpuStorageFrom: length mismatch — got ${source.length}, '
+        'expected $length',
+      );
+    }
+    _cpuData = source._cpuData;
+    _cpuF16Bits = source._cpuF16Bits;
+    dtype = source.dtype;
+    _grad?.dispose();
+    _grad = null;
+    _children = const [];
+    _backward = null;
+    requiresGrad = false;
+    source._cpuData = null;
+    source._cpuF16Bits = null;
+  }
+
   /// Releases GPU memory when applicable. Also disposes any accumulated
   /// gradient. Idempotent; safe on CPU tensors.
   void dispose() {
