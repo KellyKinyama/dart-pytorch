@@ -828,3 +828,141 @@ NOT reliably distinguish two similar faces. For real semantic
 similarity, train a ViT on your gallery (e.g. via
 `bin/train_face_folder.dart`), save it, and pass `--vit-load`.
 Source: [bin/llama_image_rag.dart](bin/llama_image_rag.dart).
+
+
+# LLaVA-style Llama-3 with real CLIP vision
+
+## R12. llama_llava_demo + train_llava_projector
+
+Full LLaVA-style pipeline: freeze CLIP-ViT + Llama-3, train just the
+small `VisionProjector` MLP that translates CLIP features into
+Llama's embedding space, then chat with images attached via
+`:img PATH`.
+
+### One-time model downloads
+
+```sh
+# CLIP-ViT-B/32 (~350 MB fp32; ~600 MB safetensors on disk)
+mkdir -p models/clip-vit-base-patch32
+wget https://huggingface.co/openai/clip-vit-base-patch32/resolve/main/model.safetensors \
+  -O models/clip-vit-base-patch32/model.safetensors
+
+# Llama-3.2-1B-Instruct (already downloaded per R9/R10)
+```
+
+Presets supported by `--clip-preset`:
+
+| preset | patches | fp32 weights |
+|---|---|---|
+| `base32` | 49  | ~350 MB |
+| `base16` | 196 | ~350 MB |
+| `large14` | 256 | ~1.2 GB |
+
+### R12a. train_llava_projector — projector-only fine-tune
+
+Dataset layout: any directory of `image.{jpg,png}` + sibling
+`image.txt` (or `.caption`) files. The `.txt` file is the caption
+in plain text. Directory is walked recursively.
+
+```sh
+# Tiny local fine-tune on CPU (Llama on CPU stays ~5 GB RAM)
+dart run bin/train_llava_projector.dart \
+  --clip models/clip-vit-base-patch32/model.safetensors \
+  --data data/my_captions --out models/llava_projector.dptc \
+  --steps 500 --lr 1e-3
+
+# Bigger run on GPU
+LD_LIBRARY_PATH=/usr/lib/wsl/lib dart run bin/train_llava_projector.dart \
+  --clip models/clip-vit-base-patch32/model.safetensors \
+  --data data/coco_sample --out models/llava_projector.dptc \
+  --gpu --steps 2000 --lr 5e-4 --max-caption 32
+```
+
+Flags:
+
+```
+--path PATH             Llama safetensors  (default: models/llama-3.2-1b-instruct/model.safetensors)
+--vocab PATH            tokenizer.json     (default: models/llama-3.2-1b-instruct/tokenizer.json)
+--preset NAME           llama-3.2-1b | llama-3.2-3b | llama-3.1-8b (default: llama-3.2-1b)
+--gpu                   run on CUDA (default: CPU)
+--clip PATH             CLIP safetensors (required)
+--clip-preset NAME      base32 | base16 | large14 (default: base32)
+--projector-hidden N    projector hidden width (default: llama.embedDim)
+
+--data DIR              image + caption directory (required, recursive)
+--out PATH              save projector checkpoint (required, .dptc)
+--steps N               training steps (default: 500)
+--lr F                  Adam lr (default: 1e-3)
+--log-every N           log every N steps (default: 25)
+--max-caption N         truncate captions to N tokens (default: 32)
+```
+
+### R12b. llama_llava_demo — chat with images
+
+Loads a real CLIP-ViT, wires it to Llama-3 via a
+`VisionProjector`, and runs a REPL. `:img PATH` before your next
+text turn attaches an image; the image is decoded (224×224 for
+`base32`), patchified, encoded by CLIP, projected into Llama's
+embedding space, and prepended to the text token sequence as image
+tokens. The full sequence goes through Llama's causal stack.
+
+```sh
+# Random projector — output will be garbage, but the pipeline runs
+dart run bin/llama_llava_demo.dart \
+  --clip models/clip-vit-base-patch32/model.safetensors
+
+# With a trained projector, GPU
+LD_LIBRARY_PATH=/usr/lib/wsl/lib dart run bin/llama_llava_demo.dart \
+  --clip models/clip-vit-base-patch32/model.safetensors \
+  --projector-load models/llava_projector.dptc --gpu
+```
+
+Flags:
+
+```
+--path PATH             Llama safetensors  (default: models/llama-3.2-1b-instruct/model.safetensors)
+--vocab PATH            tokenizer.json     (default: models/llama-3.2-1b-instruct/tokenizer.json)
+--preset NAME           llama-3.2-1b | llama-3.2-3b | llama-3.1-8b (default: llama-3.2-1b)
+--gpu                   run on CUDA (default: CPU)
+
+--clip PATH             CLIP safetensors (required)
+--clip-preset NAME      base32 | base16 | large14 (default: base32)
+--projector-load PATH   trained projector checkpoint (default: random init → garbage)
+--projector-hidden N    projector hidden width (default: llama.embedDim)
+
+--system "..."          initial system prompt
+--max-new N             max tokens per reply (default: 128)
+--temperature F         0.0 = greedy         (default: 0.7)
+--top-k K               0 = disabled         (default: 40)
+```
+
+REPL commands:
+
+```
+:img PATH   attach an image for the NEXT text turn (consumed once)
+:quit       exit
+:reset      wipe history (system prompt kept)
+:sys TEXT   replace system prompt and reset
+```
+
+### VRAM note — B/32 with Llama-3.2-1B on 6 GB
+
+- CLIP-ViT-B/32 fp32: ~350 MB
+- Llama-3.2-1B fp32: ~4.96 GB
+- Projector (768→2048×2, SiLU MLP): ~3-6 MB
+- Total: ~5.4 GB — fits, but leaves less headroom for KV cache than
+  R9/R10. If it OOMs mid-generation, drop `--max-new` to 64.
+- CLIP-ViT-L/14 fp32 (~1.2 GB) + Llama-3.2-1B (~5 GB) = ~6.2 GB — will
+  not fit on 6 GB. Drop `--gpu` and run on CPU.
+
+### Random-projector output IS nonsense
+
+The whole point of the projector is to translate CLIP's feature
+manifold into whatever manifold Llama's block stack expects for its
+input embeddings. That translation must be learned. Skipping the
+`train_llava_projector.dart` step and going straight to
+`llama_llava_demo.dart` will give you Llama hallucinating over
+arbitrary poison-pill embeddings — instructive to run once,
+useless as a chat.
+Source: [bin/llama_llava_demo.dart](bin/llama_llava_demo.dart),
+[bin/train_llava_projector.dart](bin/train_llava_projector.dart).
