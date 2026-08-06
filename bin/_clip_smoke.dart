@@ -42,15 +42,15 @@ void main(List<String> args) {
     'unused=${report.unusedKeys.length} in ${sw.elapsedMilliseconds} ms',
   );
   if (report.unusedKeys.isNotEmpty) {
-    stdout.writeln(
-      'first unused: ${report.unusedKeys.take(5).toList()}',
-    );
+    stdout.writeln('first unused: ${report.unusedKeys.take(5).toList()}');
   }
 
   // Decode + normalise image the way CLIP expects (ImageNet mean/std).
   final patch = _decodeAndPatchify(imagePath, cfg);
-  stdout.writeln('patch shape: ${patch.shape}  '
-      '(want [${cfg.numPatches}, ${cfg.patchPixels}])');
+  stdout.writeln(
+    'patch shape: ${patch.shape}  '
+    '(want [${cfg.numPatches}, ${cfg.patchPixels}])',
+  );
 
   final swFwd = Stopwatch()..start();
   final Tensor out = Tensor.noGrad(() => model(patch));
@@ -69,11 +69,15 @@ void main(List<String> args) {
   }
   final std = math.sqrt(sq / n);
 
-  stdout.writeln('output shape: ${out.shape} '
-      '(want [${cfg.numPatches + 1}, ${cfg.embedDim}])');
-  stdout.writeln('output stats: mean=${mean.toStringAsFixed(4)} '
-      'std=${std.toStringAsFixed(4)} '
-      'min=${mn.toStringAsFixed(4)} max=${mx.toStringAsFixed(4)}');
+  stdout.writeln(
+    'output shape: ${out.shape} '
+    '(want [${cfg.numPatches + 1}, ${cfg.embedDim}])',
+  );
+  stdout.writeln(
+    'output stats: mean=${mean.toStringAsFixed(4)} '
+    'std=${std.toStringAsFixed(4)} '
+    'min=${mn.toStringAsFixed(4)} max=${mx.toStringAsFixed(4)}',
+  );
   stdout.writeln('forward: ${swFwd.elapsedMilliseconds} ms');
 
   // Sanity checks: post_layernorm means each row should be roughly zero-mean
@@ -97,9 +101,11 @@ void main(List<String> args) {
     rowStds.add(math.sqrt(s / cols));
   }
   final avgRowStd = rowStds.reduce((a, b) => a + b) / rowStds.length;
-  stdout.writeln('row std (mean over $rows rows): '
-      '${avgRowStd.toStringAsFixed(4)}  '
-      '(a random-init model with unit-variance LN affine would give ~1)');
+  stdout.writeln(
+    'row std (mean over $rows rows): '
+    '${avgRowStd.toStringAsFixed(4)}  '
+    '(a random-init model with unit-variance LN affine would give ~1)',
+  );
 
   // Difference between cls token (row 0) and patch tokens should be
   // meaningful, not zero.
@@ -108,8 +114,10 @@ void main(List<String> args) {
     final d = flat[c] - flat[cols + c];
     clsPatchL2 += d * d;
   }
-  stdout.writeln('L2(cls − patch[0]): '
-      '${math.sqrt(clsPatchL2).toStringAsFixed(4)}');
+  stdout.writeln(
+    'L2(cls − patch[0]): '
+    '${math.sqrt(clsPatchL2).toStringAsFixed(4)}',
+  );
 }
 
 /// Decode `imagePath`, resize to `cfg.imageSize`, apply CLIP ImageNet
@@ -159,9 +167,5 @@ Tensor _decodeAndPatchify(String path, CLIPVisionConfig cfg) {
       }
     }
   }
-  return Tensor.fromList(
-    [cfg.numPatches, rowStride],
-    data,
-    device: cfg.device,
-  );
+  return Tensor.fromList([cfg.numPatches, rowStride], data, device: cfg.device);
 }

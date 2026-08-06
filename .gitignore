@@ -15,3 +15,8 @@ faces_gallery/
 
 # Downloaded pretrained-model weights (large, regenerable).
 models/
+
+# COCO val2017 subset fetched by bin/_prep_coco_pairs.dart (32 MB × 200 pairs;
+# regenerable — see `bin/_prep_coco_pairs.dart --help`).
+data/coco_val*/
+data/coco_val_prep/
