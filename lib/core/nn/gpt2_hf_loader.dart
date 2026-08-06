@@ -46,6 +46,7 @@ library;
 import 'dart:typed_data';
 
 import '../tensor/tensor.dart';
+import '../tensor/dtype.dart';
 import 'gpt.dart';
 import 'safetensors.dart';
 import 'transformer.dart';
@@ -151,8 +152,15 @@ class GPT2HFLoader {
   ///
   /// Returns a report describing what was loaded, which HF keys were
   /// ignored, and which of `gpt`'s parameters had no matching HF key.
-  static GPT2LoadReport loadFile(GPT gpt, String path) {
-    final state = SafeTensors.loadFile(path);
+  /// Load a `.safetensors` checkpoint into [gpt]. When [keepFp16]
+  /// is true, `F16` entries are held in fp16 CPU storage (read-only,
+  /// halves resident RAM); the fp16 path is inference-only.
+  static GPT2LoadReport loadFile(
+    GPT gpt,
+    String path, {
+    bool keepFp16 = false,
+  }) {
+    final state = SafeTensors.loadFile(path, keepFp16: keepFp16);
     return loadMap(gpt, state);
   }
 
@@ -381,6 +389,10 @@ class GPT2HFLoader {
         'gpt2 loader: copy length mismatch — dst=${dst.shape} '
         '(${dst.length}), src=${src.shape} (${src.length})',
       );
+    }
+    if (src.dtype == DType.fp16 && dst.device == Device.CPU) {
+      dst.adoptCpuStorageFrom(src);
+      return;
     }
     final vals = src.toList();
     final matched = Tensor.fromList(dst.shape, vals, device: dst.device);

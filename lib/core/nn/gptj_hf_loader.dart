@@ -53,6 +53,7 @@ library;
 import 'dart:typed_data';
 
 import '../tensor/tensor.dart';
+import '../tensor/dtype.dart';
 import 'gptj.dart';
 import 'safetensors.dart';
 
@@ -117,8 +118,15 @@ class GPTJHFLoader {
     );
   }
 
-  static GPTJLoadReport loadFile(GPTJModel model, String path) {
-    final state = SafeTensors.loadFile(path);
+  /// Load a `.safetensors` checkpoint into [model]. When [keepFp16]
+  /// is true, `F16` entries are held in fp16 CPU storage (read-only,
+  /// halves resident RAM); the fp16 path is inference-only.
+  static GPTJLoadReport loadFile(
+    GPTJModel model,
+    String path, {
+    bool keepFp16 = false,
+  }) {
+    final state = SafeTensors.loadFile(path, keepFp16: keepFp16);
     return loadMap(model, state);
   }
 
@@ -333,6 +341,10 @@ class GPTJHFLoader {
         'gpt-j loader: copy length mismatch — dst=${dst.shape} '
         '(${dst.length}), src=${src.shape} (${src.length})',
       );
+    }
+    if (src.dtype == DType.fp16 && dst.device == Device.CPU) {
+      dst.adoptCpuStorageFrom(src);
+      return;
     }
     final vals = src.toList();
     final matched = Tensor.fromList(dst.shape, vals, device: dst.device);
