@@ -59,7 +59,7 @@ extension TensorEmbedding on Tensor {
   }
 
   Tensor _embeddingFwdCpu(Tensor indices, int v, int d, int n) {
-    final td = _cpuData!;
+    final td = _readAsFp32();
     final id = indices._cpuData!;
     final out = Float32List(n * d);
     for (int i = 0; i < n; i++) {

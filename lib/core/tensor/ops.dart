@@ -209,8 +209,8 @@ extension TensorOps on Tensor {
     double Function(double, double) f,
     String opName,
   ) {
-    final a = _cpuData!;
-    final b = other._cpuData!;
+    final a = _readAsFp32();
+    final b = other._readAsFp32();
     if (a.length == b.length) {
       final out = Float32List(a.length);
       for (int i = 0; i < a.length; i++) {

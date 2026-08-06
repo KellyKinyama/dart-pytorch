@@ -63,7 +63,7 @@ extension TensorRmsNorm on Tensor {
 
   Tensor _rmsNormFwdCpu(Tensor gamma, double eps, int r, int c) {
     final xd = _cpuData!;
-    final gd = gamma._cpuData!;
+    final gd = gamma._readAsFp32();
     final out = Float32List(r * c);
     final invC = 1.0 / c;
     for (int i = 0; i < r; i++) {

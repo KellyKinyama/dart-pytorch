@@ -77,8 +77,8 @@ extension TensorLayerNorm on Tensor {
 
   Tensor _layerNormFwdCpu(Tensor gamma, Tensor beta, double eps, int r, int c) {
     final xd = _cpuData!;
-    final gd = gamma._cpuData!;
-    final bd = beta._cpuData!;
+    final gd = gamma._readAsFp32();
+    final bd = beta._readAsFp32();
     final out = Float32List(r * c);
     for (int i = 0; i < r; i++) {
       double s = 0;

@@ -22,6 +22,7 @@ import 'dart:typed_data';
 import 'dart:ffi' as ffi;
 import 'package:ffi/ffi.dart';
 import 'cuda_engine.dart';
+import 'dtype.dart';
 
 part 'mat_mul.dart';
 part 'ops.dart';
@@ -47,8 +48,20 @@ class Tensor implements ffi.Finalizable {
   final int length;
   Device device;
 
-  // Backing store — exactly one of these is populated (dictated by [device]).
+  /// Storage precision. Compute is always fp32; when this is
+  /// [DType.fp16] the CPU backing lives in [_cpuF16Bits] as raw
+  /// half-precision bits and ops materialise a fp32 copy at read
+  /// time via [_readAsFp32]. GPU storage is always fp32 for now, so
+  /// fp16 tensors are CPU-only.
+  DType dtype;
+
+  // Backing store — exactly one of these is populated (dictated by
+  // [device] and [dtype]):
+  //   * fp32 CPU  → `_cpuData` non-null.
+  //   * fp16 CPU  → `_cpuF16Bits` non-null.
+  //   * GPU (any) → `_handle` non-null.
   Float32List? _cpuData;
+  Uint16List? _cpuF16Bits;
   ffi.Pointer<ffi.Void>? _handle;
 
   // Autograd state.
@@ -77,7 +90,15 @@ class Tensor implements ffi.Finalizable {
   Tensor._cpu(this.shape, Float32List data, {this.requiresGrad = false})
     : length = data.length,
       device = Device.CPU,
+      dtype = DType.fp32,
       _cpuData = data;
+
+  Tensor._cpuF16(this.shape, Uint16List bits)
+    : length = bits.length,
+      device = Device.CPU,
+      dtype = DType.fp16,
+      requiresGrad = false,
+      _cpuF16Bits = bits;
 
   Tensor._gpu(
     this.shape,
@@ -85,6 +106,7 @@ class Tensor implements ffi.Finalizable {
     this.requiresGrad = false,
   }) : length = shape.reduce((a, b) => a * b),
        device = Device.GPU,
+       dtype = DType.fp32,
        _handle = handle {
     // Register a native finalizer so autograd-graph intermediates and
     // other implicitly-owned GPU tensors get their handle freed when
@@ -171,25 +193,105 @@ class Tensor implements ffi.Finalizable {
     return h;
   }
 
+  /// Construct a **read-only fp16** CPU tensor directly from raw
+  /// IEEE-754 half-precision bits. Ops decode to fp32 on read via
+  /// [_readAsFp32]. See `dtype.dart` for the semantics — fp16 tensors
+  /// cannot be trainable leaves, cannot be assigned into, and are
+  /// promoted to fp32 on `.to(Device.GPU)`.
+  ///
+  /// The primary use is holding large read-only weights (e.g. loaded
+  /// straight from a HF safetensors `F16` block) without incurring
+  /// the 2× memory blow-up of the fp32 promotion. `bits.length` must
+  /// equal `shape.reduce(*)`.
+  factory Tensor.fromFp16Bits(List<int> shape, Uint16List bits) {
+    final expected = shape.reduce((a, b) => a * b);
+    if (bits.length != expected) {
+      throw ArgumentError(
+        'fromFp16Bits: shape $shape expects $expected values, got '
+        '${bits.length}',
+      );
+    }
+    return Tensor._cpuF16(shape, Uint16List.fromList(bits));
+  }
+
+  /// Materialise `this` as an fp32 CPU tensor. If already fp32, this
+  /// clones for safety (callers of a low-level "give me fp32" method
+  /// should not observe aliasing). Detached from the autograd graph.
+  Tensor toFp32() {
+    if (dtype == DType.fp32) {
+      return device == Device.CPU
+          ? Tensor._cpu(shape, Float32List.fromList(_cpuData!))
+          : Tensor._cpu(shape, Float32List.fromList(toList()));
+    }
+    // fp16 CPU → fp32 CPU (bulk decode).
+    return Tensor._cpu(shape, decodeFp16Bulk(_cpuF16Bits!));
+  }
+
+  /// Encode `this` (must be fp32 CPU) into an fp16 CPU tensor. Uses
+  /// round-to-nearest-even; values outside fp16 dynamic range saturate
+  /// to ±Inf. Detached from the autograd graph.
+  Tensor toFp16() {
+    if (device != Device.CPU) {
+      throw StateError(
+        'toFp16: only supported on CPU tensors (source device=$device)',
+      );
+    }
+    if (dtype == DType.fp16) {
+      return Tensor._cpuF16(shape, Uint16List.fromList(_cpuF16Bits!));
+    }
+    return Tensor._cpuF16(shape, encodeFp16Bulk(_cpuData!));
+  }
+
+  /// Materialise this tensor's data as a fp32 `Float32List` for the
+  /// duration of one op. On fp32 CPU tensors this is a zero-copy view
+  /// of the underlying storage; on fp16 tensors this **allocates and
+  /// decodes** each call. On GPU tensors this throws.
+  ///
+  /// Ops that read weight tensors (matmul, layernorm, rmsnorm,
+  /// embedding, elementwise-add of bias) route their reads through
+  /// this method so they transparently accept both fp32 and fp16
+  /// weights. Ops that mutate storage (in-place assign, optimizer
+  /// step) must not use this — they only ever see fp32.
+  Float32List _readAsFp32() {
+    if (device != Device.CPU) {
+      throw StateError('_readAsFp32: not a CPU tensor (device=$device)');
+    }
+    if (dtype == DType.fp32) return _cpuData!;
+    return decodeFp16Bulk(_cpuF16Bits!);
+  }
+
   /// Returns a new tensor placed on [target]. Returns `this` unchanged
   /// when already on that device. Involves an H<->D copy when crossing
   /// devices. The result is detached from the autograd graph.
+  ///
+  /// fp16 → GPU auto-promotes to fp32 (GPU storage is fp32-only).
   Tensor to(Device target) {
-    if (device == target) return this;
+    if (device == target && dtype == DType.fp32) return this;
     if (target == Device.CPU) {
+      if (device == Device.CPU) {
+        // Same device but dtype differs (fp16 CPU → asked for CPU).
+        // Callers who want fp32 should use `.toFp32()`; here we
+        // stay in the same storage format.
+        return this;
+      }
       final ptr = calloc<ffi.Float>(length);
       engine.getTensorData(_handle!, ptr);
       final data = Float32List.fromList(ptr.asTypedList(length));
       calloc.free(ptr);
       return Tensor._cpu(shape, data);
     }
-    return Tensor._gpu(shape, _uploadToGpu(shape, _cpuData!));
+    // target == GPU.
+    final srcFp32 = dtype == DType.fp32 ? _cpuData! : _readAsFp32();
+    return Tensor._gpu(shape, _uploadToGpu(shape, srcFp32));
   }
 
   /// Copies tensor data to host as a plain `List<double>`, regardless of
-  /// current device.
+  /// current device. fp16 storage is decoded to fp32 on the fly.
   List<double> toList() {
-    if (device == Device.CPU) return _cpuData!.toList();
+    if (device == Device.CPU) {
+      if (dtype == DType.fp16) return decodeFp16Bulk(_cpuF16Bits!).toList();
+      return _cpuData!.toList();
+    }
     final ptr = calloc<ffi.Float>(length);
     engine.getTensorData(_handle!, ptr);
     final out = ptr.asTypedList(length).toList();
@@ -200,6 +302,9 @@ class Tensor implements ffi.Finalizable {
   /// Returns a data-copy of this tensor with no autograd links.
   Tensor clone() {
     if (device == Device.CPU) {
+      if (dtype == DType.fp16) {
+        return Tensor._cpuF16(shape, Uint16List.fromList(_cpuF16Bits!));
+      }
       return Tensor._cpu(shape, Float32List.fromList(_cpuData!));
     }
     return Tensor._gpu(shape, _uploadToGpu(shape, toList()));
@@ -212,6 +317,10 @@ class Tensor implements ffi.Finalizable {
   /// Shape must match; `source` is consumed (its GPU handle is adopted
   /// and its handle field is nulled, so callers must not use it after).
   /// Autograd state on `this` (requiresGrad, grad) is preserved.
+  ///
+  /// fp16 tensors are read-only — assigning into (or from) an fp16
+  /// tensor throws. Promote with `.toFp32()` first if you need
+  /// mutability.
   void assign(Tensor source) {
     if (source.length != length) {
       throw ArgumentError(
@@ -222,6 +331,11 @@ class Tensor implements ffi.Finalizable {
       throw ArgumentError(
         'assign: device mismatch — got ${source.device}, expected $device. '
         'Call .to(...) on source first.',
+      );
+    }
+    if (dtype == DType.fp16 || source.dtype == DType.fp16) {
+      throw StateError(
+        'assign: fp16 tensors are read-only. Promote with .toFp32() first.',
       );
     }
     if (device == Device.CPU) {

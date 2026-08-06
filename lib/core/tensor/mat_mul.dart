@@ -76,8 +76,8 @@ extension TensorMatMul on Tensor {
   }
 
   Tensor _matmulCpu(Tensor o, int m, int k, int n) {
-    final a = _cpuData!;
-    final b = o._cpuData!;
+    final a = _readAsFp32();
+    final b = o._readAsFp32();
     final out = Float32List(m * n);
     for (int i = 0; i < m; i++) {
       for (int j = 0; j < n; j++) {

@@ -34,6 +34,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import '../tensor/tensor.dart';
+import '../tensor/dtype.dart';
 
 /// A single tensor entry parsed from a safetensors header, before the
 /// raw bytes have been decoded into a [Tensor].
@@ -67,18 +68,26 @@ class SafeTensors {
   /// The file is fully loaded into memory. For the models we can
   /// realistically run in-process this is fine (GPT-2 small is ~500 MB
   /// of fp32); for larger models you probably want to stream.
-  static Map<String, Tensor> loadFile(String path) {
+  ///
+  /// If [keepFp16] is true, `F16` entries are returned as
+  /// [DType.fp16] tensors (read-only, ~half the memory of the fp32
+  /// promotion). All other dtypes still promote to fp32. This is
+  /// intended for large read-only inference weights.
+  static Map<String, Tensor> loadFile(String path, {bool keepFp16 = false}) {
     final bytes = File(path).readAsBytesSync();
-    return loadBytes(bytes);
+    return loadBytes(bytes, keepFp16: keepFp16);
   }
 
   /// Parse safetensors from an in-memory byte buffer.
-  static Map<String, Tensor> loadBytes(Uint8List bytes) {
+  static Map<String, Tensor> loadBytes(
+    Uint8List bytes, {
+    bool keepFp16 = false,
+  }) {
     final entries = _parseHeader(bytes);
     final dataOffset = _dataOffset(bytes);
     final result = <String, Tensor>{};
     for (final e in entries) {
-      result[e.name] = _readTensor(bytes, dataOffset, e);
+      result[e.name] = _readTensor(bytes, dataOffset, e, keepFp16: keepFp16);
     }
     return result;
   }
@@ -179,8 +188,9 @@ class SafeTensors {
   static Tensor _readTensor(
     Uint8List bytes,
     int dataOffset,
-    SafeTensorEntry e,
-  ) {
+    SafeTensorEntry e, {
+    bool keepFp16 = false,
+  }) {
     final byteLen = e.dataEnd - e.dataStart;
     if (byteLen < 0 || dataOffset + e.dataEnd > bytes.length) {
       throw ArgumentError(
@@ -193,6 +203,23 @@ class SafeTensors {
       dataOffset + e.dataEnd,
     );
     final n = e.numElements;
+
+    // Fast-path: fp16 storage requested and the entry is F16 —
+    // stash raw bits directly, no fp32 allocation.
+    if (keepFp16 && e.dtype == 'F16') {
+      if (byteLen != n * 2) {
+        throw ArgumentError(
+          'safetensors: "${e.name}" F16 expected ${n * 2} bytes, got '
+          '$byteLen',
+        );
+      }
+      final bits = Uint16List(n);
+      for (int i = 0; i < n; i++) {
+        bits[i] = view.getUint16(i * 2, Endian.little);
+      }
+      return Tensor.fromFp16Bits(e.shape, bits);
+    }
+
     final data = Float32List(n);
     switch (e.dtype) {
       case 'F32':
