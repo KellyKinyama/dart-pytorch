@@ -373,7 +373,8 @@ class Tensor implements ffi.Finalizable {
   ///
   /// After the call, `source` is left in a zombie state — its
   /// backing pointers have been moved out — and must not be used.
-  void adoptCpuStorageFrom(Tensor source) {    if (device != Device.CPU || source.device != Device.CPU) {
+  void adoptCpuStorageFrom(Tensor source) {
+    if (device != Device.CPU || source.device != Device.CPU) {
       throw StateError(
         'adoptCpuStorageFrom: both tensors must be CPU '
         '(dst=$device, src=${source.device})',
@@ -431,6 +432,13 @@ class Tensor implements ffi.Finalizable {
     }
     return Tensor._cpu([end - start, c], out);
   }
+
+  /// Approximate resident bytes of this tensor's own storage. Counts
+  /// the primary backing buffer only — grad, autograd graph, and
+  /// FFI-side padding are not included. Used for planning memory
+  /// budgets when deciding whether a checkpoint fits (e.g. an fp16
+  /// weight tensor reports half of its fp32 equivalent).
+  int get residentBytes => length * dtype.itemBytes;
 
   /// Releases GPU memory when applicable. Also disposes any accumulated
   /// gradient. Idempotent; safe on CPU tensors.

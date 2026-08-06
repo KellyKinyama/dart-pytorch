@@ -164,6 +164,16 @@ class GPT2HFLoader {
     return loadMap(gpt, state);
   }
 
+  /// Load a sharded GPT-2 checkpoint via `model.safetensors.index.json`.
+  static GPT2LoadReport loadSharded(
+    GPT gpt,
+    String indexPath, {
+    bool keepFp16 = false,
+  }) {
+    final state = SafeTensors.loadSharded(indexPath, keepFp16: keepFp16);
+    return loadMap(gpt, state);
+  }
+
   /// Same as [loadFile] but takes a pre-parsed `state_dict` map.
   /// Useful for tests and for callers that want to preview / mutate
   /// the map before loading.

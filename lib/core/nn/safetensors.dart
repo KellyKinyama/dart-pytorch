@@ -38,8 +38,7 @@ import '../tensor/dtype.dart';
 
 /// A single tensor entry parsed from a safetensors header, before the
 /// raw bytes have been decoded into a [Tensor].
-class SafeTensorEntry {
-  final String name;
+class SafeTensorEntry {  final String name;
   final String dtype;
   final List<int> shape;
   final int dataStart;
@@ -54,6 +53,39 @@ class SafeTensorEntry {
   });
 
   int get numElements => shape.isEmpty ? 1 : shape.reduce((a, b) => a * b);
+}
+
+/// Parsed contents of a HuggingFace `model.safetensors.index.json`:
+/// which shard file each parameter lives in, plus any free-form
+/// metadata (typically `total_size`).
+class ShardIndex {
+  /// Absolute or relative path to the index file itself. Used as
+  /// the base for resolving shard filenames.
+  final String indexPath;
+
+  /// `param name` → `shard filename` (as written in the index —
+  /// resolved relative to `dirname(indexPath)` at load time).
+  final Map<String, String> weightMap;
+
+  /// Free-form metadata block. HF typically sets `total_size` here.
+  final Map<String, dynamic> metadata;
+
+  const ShardIndex({
+    required this.indexPath,
+    required this.weightMap,
+    this.metadata = const {},
+  });
+
+  /// Deduplicated list of shard filenames referenced by [weightMap],
+  /// in first-seen order.
+  List<String> get shardFiles {
+    final seen = <String>{};
+    final out = <String>[];
+    for (final v in weightMap.values) {
+      if (seen.add(v)) out.add(v);
+    }
+    return out;
+  }
 }
 
 /// Static helpers for reading safetensors files.
@@ -97,6 +129,118 @@ class SafeTensors {
   static List<SafeTensorEntry> listEntries(String path) {
     final bytes = File(path).readAsBytesSync();
     return _parseHeader(bytes);
+  }
+
+  /// Parse a HuggingFace `model.safetensors.index.json` file. The
+  /// on-disk layout is:
+  ///
+  /// ```json
+  /// {
+  ///   "metadata": { "total_size": 16060522496 },
+  ///   "weight_map": {
+  ///     "model.embed_tokens.weight": "model-00001-of-00004.safetensors",
+  ///     "model.layers.0.self_attn.q_proj.weight": "model-00001-of-00004.safetensors",
+  ///     ...
+  ///   }
+  /// }
+  /// ```
+  ///
+  /// Used to enumerate the shard files that together hold the full
+  /// state dict for models like Llama-3.1-8B (4 shards) and
+  /// Llama-3.3-70B (~30 shards).
+  static ShardIndex readShardIndex(String indexPath) {
+    final raw = File(indexPath).readAsStringSync();
+    final decoded = jsonDecode(raw);
+    if (decoded is! Map) {
+      throw ArgumentError(
+        'safetensors: shard index is not a JSON object (got '
+        '${decoded.runtimeType})',
+      );
+    }
+    final wm = decoded['weight_map'];
+    if (wm is! Map) {
+      throw ArgumentError(
+        'safetensors: shard index missing "weight_map" object',
+      );
+    }
+    final weightMap = <String, String>{};
+    for (final e in wm.entries) {
+      weightMap[e.key.toString()] = e.value.toString();
+    }
+    final md = decoded['metadata'];
+    final metadata = md is Map
+        ? md.map((k, v) => MapEntry(k.toString(), v))
+        : const <String, dynamic>{};
+    return ShardIndex(
+      weightMap: weightMap,
+      metadata: metadata,
+      indexPath: indexPath,
+    );
+  }
+
+  /// Load a sharded HuggingFace checkpoint into a single merged map.
+  ///
+  /// Reads `<indexPath>` (typically `model.safetensors.index.json`),
+  /// then loads every shard file it references (relative to the
+  /// index's own directory) and concatenates their tensor maps.
+  ///
+  /// `keepFp16` behaves the same as on [loadFile] — F16 blobs stay
+  /// as raw Uint16List bits so the resident RAM matches the on-disk
+  /// footprint. The caller still holds the entire merged map, so for
+  /// truly huge checkpoints (Llama-70B) prefer [streamSharded] which
+  /// invokes a callback shard-by-shard.
+  static Map<String, Tensor> loadSharded(
+    String indexPath, {
+    bool keepFp16 = false,
+  }) {
+    final index = readShardIndex(indexPath);
+    final baseDir = File(indexPath).parent.path;
+    final byShard = _groupByShard(index.weightMap);
+    final merged = <String, Tensor>{};
+    for (final shard in byShard.keys) {
+      final path = '$baseDir${Platform.pathSeparator}$shard';
+      final part = loadFile(path, keepFp16: keepFp16);
+      merged.addAll(part);
+    }
+    return merged;
+  }
+
+  /// Stream a sharded HuggingFace checkpoint one shard at a time,
+  /// invoking [onShard] with each shard's tensor map. The map handed
+  /// to [onShard] contains only the tensors from that one shard;
+  /// after the callback returns the map is dropped, so the caller
+  /// should either copy out what it needs or (preferably) use it to
+  /// populate a model with [Tensor.adoptCpuStorageFrom], which
+  /// transfers ownership without a second copy.
+  ///
+  /// This is the recommended path for Llama-3.1-8B / -70B where
+  /// holding the merged map in RAM alongside a fresh model's fp32
+  /// parameter init would blow past physical memory.
+  static void streamSharded(
+    String indexPath,
+    void Function(Map<String, Tensor> shardMap) onShard, {
+    bool keepFp16 = false,
+  }) {
+    final index = readShardIndex(indexPath);
+    final baseDir = File(indexPath).parent.path;
+    final byShard = _groupByShard(index.weightMap);
+    for (final shard in byShard.keys) {
+      final path = '$baseDir${Platform.pathSeparator}$shard';
+      final part = loadFile(path, keepFp16: keepFp16);
+      onShard(part);
+    }
+  }
+
+  /// Group a `{param name → shard file}` map into
+  /// `{shard file → [param names]}`, preserving first-seen order of
+  /// shards. Used by [loadSharded] / [streamSharded] to iterate
+  /// shards deterministically.
+  static Map<String, List<String>> _groupByShard(Map<String, String> wm) {
+    final byShard = <String, List<String>>{};
+    for (final e in wm.entries) {
+      byShard.putIfAbsent(e.value, () => <String>[]).add(e.key);
+    }
+    return byShard;
   }
 
   /// Read the free-form `__metadata__` block, if any.

@@ -112,6 +112,16 @@ class ClipHFLoader {
     return loadMap(model, state);
   }
 
+  /// Load a sharded CLIP checkpoint via `model.safetensors.index.json`.
+  static ClipLoadReport loadSharded(
+    CLIPVisionModel model,
+    String indexPath, {
+    bool keepFp16 = false,
+  }) {
+    final state = SafeTensors.loadSharded(indexPath, keepFp16: keepFp16);
+    return loadMap(model, state);
+  }
+
   static ClipLoadReport loadMap(
     CLIPVisionModel model,
     Map<String, Tensor> state,

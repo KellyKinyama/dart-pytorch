@@ -124,6 +124,16 @@ class PythiaHFLoader {
     return loadMap(model, state);
   }
 
+  /// Load a sharded Pythia checkpoint via `model.safetensors.index.json`.
+  static PythiaLoadReport loadSharded(
+    PythiaModel model,
+    String indexPath, {
+    bool keepFp16 = false,
+  }) {
+    final state = SafeTensors.loadSharded(indexPath, keepFp16: keepFp16);
+    return loadMap(model, state);
+  }
+
   static PythiaLoadReport loadMap(
     PythiaModel model,
     Map<String, Tensor> state,

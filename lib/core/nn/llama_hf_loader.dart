@@ -116,6 +116,21 @@ class LlamaHFLoader {
     return loadMap(model, state);
   }
 
+  /// Load a sharded HF checkpoint into [model] via a
+  /// `model.safetensors.index.json` file. All shards referenced by
+  /// the index are read and their tensors merged into one map
+  /// before binding. Peak RAM ≈ checkpoint size + model's fp32
+  /// parameter init; for Llama-3.1-8B (16 GB fp16 + 32 GB fp32 init
+  /// = 48 GB) you'll need a big machine.
+  static LlamaLoadReport loadSharded(
+    Llama model,
+    String indexPath, {
+    bool keepFp16 = false,
+  }) {
+    final state = SafeTensors.loadSharded(indexPath, keepFp16: keepFp16);
+    return loadMap(model, state);
+  }
+
   static LlamaLoadReport loadMap(Llama model, Map<String, Tensor> state) {
     final consumed = <String>{};
 

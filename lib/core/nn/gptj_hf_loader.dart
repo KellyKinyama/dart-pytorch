@@ -130,6 +130,16 @@ class GPTJHFLoader {
     return loadMap(model, state);
   }
 
+  /// Load a sharded GPT-J checkpoint via `model.safetensors.index.json`.
+  static GPTJLoadReport loadSharded(
+    GPTJModel model,
+    String indexPath, {
+    bool keepFp16 = false,
+  }) {
+    final state = SafeTensors.loadSharded(indexPath, keepFp16: keepFp16);
+    return loadMap(model, state);
+  }
+
   static GPTJLoadReport loadMap(GPTJModel model, Map<String, Tensor> state) {
     final consumed = <String>{};
 

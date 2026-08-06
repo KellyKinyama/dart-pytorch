@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:dart_pytorch/dart_pytorch.dart';
@@ -219,10 +220,10 @@ void main() {
       final param = Tensor.fromList([2, 2], [1.0, 2.0, 3.0, 4.0]);
       expect(param.dtype, DType.fp32);
 
-      final src = Tensor.fromFp16Bits(
-        [2, 2],
-        encodeFp16Bulk(Float32List.fromList([10.0, 20.0, 30.0, 40.0])),
-      );
+      final src = Tensor.fromFp16Bits([
+        2,
+        2,
+      ], encodeFp16Bulk(Float32List.fromList([10.0, 20.0, 30.0, 40.0])));
       param.adoptCpuStorageFrom(src);
 
       expect(param.dtype, DType.fp16);
@@ -250,10 +251,7 @@ void main() {
     test('rejects length mismatch', () {
       final dst = Tensor.fromList([4], [1.0, 2.0, 3.0, 4.0]);
       final src = Tensor.fromList([3], [1.0, 2.0, 3.0]);
-      expect(
-        () => dst.adoptCpuStorageFrom(src),
-        throwsA(isA<ArgumentError>()),
-      );
+      expect(() => dst.adoptCpuStorageFrom(src), throwsA(isA<ArgumentError>()));
     });
   });
 
@@ -277,10 +275,18 @@ void main() {
     test('sliceRows keeps fp16 storage', () {
       // Simulate a `[H*hd, D]` = `[4, 3]` weight and slice per-head.
       final vals = <double>[
-        1.0, 2.0, 3.0,
-        4.0, 5.0, 6.0,
-        7.0, 8.0, 9.0,
-        10.0, 11.0, 12.0,
+        1.0,
+        2.0,
+        3.0,
+        4.0,
+        5.0,
+        6.0,
+        7.0,
+        8.0,
+        9.0,
+        10.0,
+        11.0,
+        12.0,
       ];
       final w = Tensor.fromList([4, 3], vals).toFp16();
       final head0 = w.sliceRows(0, 2);
@@ -312,11 +318,10 @@ void main() {
     });
 
     test('Linear-style x @ W.T + b with fp16 weight matches fp32', () {
-      final w = Tensor.fromList([3, 4], [
-        0.5, -0.25, 0.125, 0.75,
-        1.0, 0.0, -0.5, 0.25,
-        0.25, 0.75, -1.0, 0.5,
-      ]);
+      final w = Tensor.fromList(
+        [3, 4],
+        [0.5, -0.25, 0.125, 0.75, 1.0, 0.0, -0.5, 0.25, 0.25, 0.75, -1.0, 0.5],
+      );
       final b = Tensor.fromList([1, 3], [0.1, -0.1, 0.2]);
       final x = Tensor.fromList([1, 4], [1.0, 2.0, 3.0, 4.0]);
       final yFp32 = (x.matmul(w.transpose()) + b).toList();
@@ -326,6 +331,144 @@ void main() {
       for (int i = 0; i < yFp32.length; i++) {
         expect(yFp16[i], closeTo(yFp32[i], yFp32[i].abs() * 1e-3 + 1e-3));
       }
+    });
+  });
+
+  group('Tensor.residentBytes', () {
+    test('fp32 tensor reports length * 4', () {
+      final t = Tensor.fromList([2, 3], [1, 2, 3, 4, 5, 6]);
+      expect(t.residentBytes, 24);
+    });
+
+    test('fp16 tensor reports length * 2', () {
+      final t = Tensor.fromFp16Bits([2, 3], Uint16List(6));
+      expect(t.residentBytes, 12);
+    });
+
+    test('fp16 halves resident bytes vs fp32 counterpart', () {
+      final t = Tensor.fromList([16], List<double>.filled(16, 1.0));
+      final tHalf = t.toFp16();
+      expect(tHalf.residentBytes, t.residentBytes ~/ 2);
+    });
+  });
+
+  group('SafeTensors sharded loader', () {
+    late Directory tmpDir;
+
+    setUp(() {
+      tmpDir = Directory.systemTemp.createTempSync('dart_pytorch_shard_');
+    });
+
+    tearDown(() {
+      if (tmpDir.existsSync()) tmpDir.deleteSync(recursive: true);
+    });
+
+    // Build a minimal single-tensor F16 safetensors blob for a shard.
+    Uint8List buildF16Blob(String name, List<int> shape, Float32List vals) {
+      final bits = encodeFp16Bulk(vals);
+      final payload = Uint8List(bits.length * 2);
+      final view = ByteData.sublistView(payload);
+      for (int i = 0; i < bits.length; i++) {
+        view.setUint16(i * 2, bits[i], Endian.little);
+      }
+      final headerJson = jsonEncode({
+        name: {
+          'dtype': 'F16',
+          'shape': shape,
+          'data_offsets': [0, payload.length],
+        },
+      });
+      final headerBytes = utf8.encode(headerJson);
+      final blob = BytesBuilder();
+      final lenBuf = ByteData(8)
+        ..setUint64(0, headerBytes.length, Endian.little);
+      blob.add(lenBuf.buffer.asUint8List());
+      blob.add(headerBytes);
+      blob.add(payload);
+      return blob.toBytes();
+    }
+
+    test('readShardIndex parses HF index.json', () {
+      final idx = File('${tmpDir.path}/model.safetensors.index.json');
+      idx.writeAsStringSync(
+        jsonEncode({
+          'metadata': {'total_size': 12345},
+          'weight_map': {
+            'model.embed.weight': 'model-00001-of-00002.safetensors',
+            'model.layer.0.w': 'model-00001-of-00002.safetensors',
+            'model.layer.1.w': 'model-00002-of-00002.safetensors',
+          },
+        }),
+      );
+      final parsed = SafeTensors.readShardIndex(idx.path);
+      expect(parsed.weightMap.length, 3);
+      expect(
+        parsed.weightMap['model.layer.1.w'],
+        'model-00002-of-00002.safetensors',
+      );
+      expect(parsed.metadata['total_size'], 12345);
+      expect(parsed.shardFiles, [
+        'model-00001-of-00002.safetensors',
+        'model-00002-of-00002.safetensors',
+      ]);
+    });
+
+    test('loadSharded merges tensors across shards, keepFp16 preserved', () {
+      final s1 = buildF16Blob('a', [2], Float32List.fromList([1.0, 2.0]));
+      final s2 = buildF16Blob('b', [3], Float32List.fromList([3.0, 4.0, 5.0]));
+      File(
+        '${tmpDir.path}/model-00001-of-00002.safetensors',
+      ).writeAsBytesSync(s1);
+      File(
+        '${tmpDir.path}/model-00002-of-00002.safetensors',
+      ).writeAsBytesSync(s2);
+
+      final idxPath = '${tmpDir.path}/model.safetensors.index.json';
+      File(idxPath).writeAsStringSync(
+        jsonEncode({
+          'metadata': {},
+          'weight_map': {
+            'a': 'model-00001-of-00002.safetensors',
+            'b': 'model-00002-of-00002.safetensors',
+          },
+        }),
+      );
+
+      final merged = SafeTensors.loadSharded(idxPath, keepFp16: true);
+      expect(merged.keys.toSet(), {'a', 'b'});
+      expect(merged['a']!.dtype, DType.fp16);
+      expect(merged['b']!.dtype, DType.fp16);
+      expect(merged['a']!.toList(), [
+        closeTo(1.0, 1e-3),
+        closeTo(2.0, 1e-3),
+      ]);
+      expect(merged['b']!.toList(), [
+        closeTo(3.0, 1e-3),
+        closeTo(4.0, 1e-3),
+        closeTo(5.0, 1e-3),
+      ]);
+    });
+
+    test('streamSharded invokes callback once per shard', () {
+      final s1 = buildF16Blob('a', [1], Float32List.fromList([7.0]));
+      final s2 = buildF16Blob('b', [1], Float32List.fromList([8.0]));
+      File('${tmpDir.path}/s1.safetensors').writeAsBytesSync(s1);
+      File('${tmpDir.path}/s2.safetensors').writeAsBytesSync(s2);
+      final idxPath = '${tmpDir.path}/model.safetensors.index.json';
+      File(idxPath).writeAsStringSync(
+        jsonEncode({
+          'weight_map': {'a': 's1.safetensors', 'b': 's2.safetensors'},
+        }),
+      );
+
+      final shardCalls = <Set<String>>[];
+      SafeTensors.streamSharded(idxPath, (m) {
+        shardCalls.add(m.keys.toSet());
+      }, keepFp16: true);
+      expect(shardCalls, [
+        {'a'},
+        {'b'},
+      ]);
     });
   });
 }
