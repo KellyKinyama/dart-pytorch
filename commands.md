@@ -730,3 +730,101 @@ Practical rules on a 6 GB / RTX 3060-class card:
 - `llama-3.2-3b` and `llama-3.1-8b`: drop `--gpu` and run on CPU (slow but correct).
 
 Source: [bin/llama_chat.dart](bin/llama_chat.dart).
+
+# Llama-3 chat with image-embedding retrieval
+
+## R11. llama_image_rag — image-attached Llama chat via retrieval
+
+Like R10 but with a `:img PATH` REPL command. On startup, every
+image under `--gallery` is decoded, resized to `--image-size`,
+patchified and fed through a `ViTFaceEmbedding`. The CLS embedding
+is centred against the gallery mean, L2-normalised, and packed into
+an `IndexFlatIP` so inner-product search is cosine similarity.
+
+When you type `:img PATH` the file is embedded the same way,
+the top-`--top-k-imgs` gallery captions come back, and they get
+prepended to your next user turn *inside* the Llama-3 chat template
+as an "This image resembles: [1] caption1 [2] caption2 ..." block.
+The model never sees pixels — it reasons only from captions.
+
+Gallery layouts (both auto-detected):
+
+```
+# Flat: sibling .txt / .caption files hold captions
+gallery/
+  apple.jpg
+  apple.txt        ← "a red apple on white background"
+  sunset.png
+  sunset.caption   ← "sunset over ocean"
+
+# Class-folder: parent directory name IS the caption
+gallery/
+  Brad Pitt/
+    sample_0.jpg
+    sample_1.jpg
+  Alia Bhatt/
+    sample_0.jpg
+```
+
+If neither is present, the filename stem is used with `_` / `-`
+replaced by spaces.
+
+```sh
+# Class-folder gallery, CPU
+dart run bin/llama_image_rag.dart --gallery faces_gallery
+
+# Class-folder gallery on GPU (WSL2 needs the CUDA driver-stub prefix)
+LD_LIBRARY_PATH=/usr/lib/wsl/lib dart run bin/llama_image_rag.dart \
+  --gallery faces_gallery --gpu
+
+# Trained ViT for real semantic similarity (random init is coarse)
+dart run bin/llama_image_rag.dart --gallery faces_gallery \
+  --vit-load models/vit_face.bin --image-size 64 --patch-size 8
+
+# Custom system prompt + greedy decoding
+dart run bin/llama_image_rag.dart --gallery data/gallery \
+  --system "You are an image forensics expert." --temperature 0.0
+```
+
+Flags:
+
+```
+--path PATH        safetensors weights (default: models/llama-3.2-1b-instruct/model.safetensors)
+--vocab PATH       tokenizer.json      (default: models/llama-3.2-1b-instruct/tokenizer.json)
+--preset NAME      llama-3.2-1b | llama-3.2-3b | llama-3.1-8b  (default: llama-3.2-1b)
+--gpu              run on CUDA (default: CPU)
+
+--gallery DIR      directory of images (required)
+--image-size N     resize target (default: 64)
+--patch-size N     ViT patch size (default: 16; must divide image-size)
+--vit-embed-dim N  ViT embed dim   (default: 64)
+--vit-layers N     ViT layers      (default: 2)
+--vit-heads N      ViT heads       (default: 4)
+--vit-load PATH    serialised ViT checkpoint (default: random init)
+--top-k-imgs K     captions retrieved per image turn (default: 3)
+
+--system "..."     initial system prompt
+--max-new N        max tokens per reply (default: 256)
+--temperature F    0.0 = greedy         (default: 0.7)
+--top-k K          0 = disabled         (default: 40)
+```
+
+REPL commands:
+
+```
+:img PATH          attach an image for the NEXT text turn (consumed once)
+:quit              exit
+:reset             wipe history (system prompt kept)
+:sys <text>        replace system prompt and reset
+:sources           captions retrieved for the last image turn
+```
+
+### Quality note — trained ViT vs random init
+
+With a random-init ViT the retrieval preserves only low-level
+signal (colour histogram, coarse composition). That is enough
+to distinguish e.g. a beach photo from a face crop, but it will
+NOT reliably distinguish two similar faces. For real semantic
+similarity, train a ViT on your gallery (e.g. via
+`bin/train_face_folder.dart`), save it, and pass `--vit-load`.
+Source: [bin/llama_image_rag.dart](bin/llama_image_rag.dart).

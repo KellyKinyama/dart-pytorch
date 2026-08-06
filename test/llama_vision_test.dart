@@ -33,10 +33,10 @@ void main() {
   group('VisionProjector', () {
     test('shape [N, inDim] -> [N, outDim]', () {
       final proj = VisionProjector(6, 10);
-      final x = Tensor.fromList(
-        [3, 6],
-        List<double>.generate(18, (i) => (i - 9) * 0.1),
-      );
+      final x = Tensor.fromList([
+        3,
+        6,
+      ], List<double>.generate(18, (i) => (i - 9) * 0.1));
       final y = proj(x);
       expect(y.shape, [3, 10]);
     });
@@ -130,12 +130,7 @@ void main() {
       final img = _fakeImage(vit);
       // Greedy on a tiny vocab: pick some token, then set it as stop
       // and confirm the loop ends immediately.
-      final probe = lv.generate(
-        img,
-        [1.0],
-        maxNewTokens: 1,
-        temperature: 0.0,
-      );
+      final probe = lv.generate(img, [1.0], maxNewTokens: 1, temperature: 0.0);
       final first = probe.last.toInt();
       final out = lv.generate(
         img,
