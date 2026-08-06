@@ -25,7 +25,11 @@ import 'attention/multi_head_attention.dart';
 ///   used by [TransformerLM]).
 /// * `geluTanh` — GPT-2 style GELU with the tanh approximation:
 ///   `0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))`.
-enum Activation { relu, geluTanh }
+/// * `quickGelu` — OpenAI CLIP's fast GELU approximation:
+///   `x * sigmoid(1.702 * x)`. Used by every CLIP vision / text
+///   transformer, hence needed to load HuggingFace `openai/clip-*`
+///   checkpoints without numerical drift.
+enum Activation { relu, geluTanh, quickGelu }
 
 class TransformerBlock extends Module {
   final int embedDim;
@@ -77,9 +81,11 @@ class TransformerBlock extends Module {
   Tensor call(Tensor x, {Tensor? mask, MHACache? cache}) {
     final h = x + dropout(mha(ln1(x), mask: mask, cache: cache));
     final inner = ffn1(ln2(h));
-    final activated = activation == Activation.relu
-        ? inner.relu()
-        : _geluTanh(inner);
+    final activated = switch (activation) {
+      Activation.relu => inner.relu(),
+      Activation.geluTanh => _geluTanh(inner),
+      Activation.quickGelu => _quickGelu(inner),
+    };
     final ff = ffn2(activated);
     return h + dropout(ff);
   }
@@ -93,6 +99,13 @@ class TransformerBlock extends Module {
     final inner = (x + x.pow(3.0) * 0.044715) * c;
     final t = inner.tanh();
     return x * (t + 1.0) * 0.5;
+  }
+
+  /// OpenAI CLIP QuickGELU: `x * sigmoid(1.702 * x)`. Cheap and used
+  /// throughout the CLIP family — matching it is required to load
+  /// HuggingFace CLIP safetensors without accuracy drift.
+  static Tensor _quickGelu(Tensor x) {
+    return x * (x * 1.702).sigmoid();
   }
 
   @override

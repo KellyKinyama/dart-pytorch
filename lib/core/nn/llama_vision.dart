@@ -31,11 +31,11 @@ import 'dart:math' as math;
 import '../tensor/tensor.dart';
 import 'llama.dart';
 import 'module.dart';
-import 'vision/vit_backbone.dart';
+import 'vision/vision_encoder.dart';
 import 'vision_projector.dart';
 
 class LlamaVision extends Module {
-  final ViTBackbone vit;
+  final VisionEncoder vit;
   final VisionProjector projector;
   final Llama llama;
 
@@ -59,7 +59,7 @@ class LlamaVision extends Module {
   /// the two backbones. All three pieces must already be on the same
   /// device.
   factory LlamaVision.build({
-    required ViTBackbone vit,
+    required VisionEncoder vit,
     required Llama llama,
     int? projectorHiddenDim,
     int seed = 0,

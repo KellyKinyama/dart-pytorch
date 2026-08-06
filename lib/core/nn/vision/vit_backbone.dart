@@ -31,14 +31,17 @@ import '../../tensor/tensor.dart';
 import '../linear.dart';
 import '../module.dart';
 import '../transformer_encoder.dart';
+import 'vision_encoder.dart';
 
-class ViTBackbone extends Module {
+class ViTBackbone extends Module implements VisionEncoder {
   final int imageSize;
   final int patchSize;
   final int numChannels;
+  @override
   final int embedDim;
   final int numLayers;
   final int numHeads;
+  @override
   final int numPatches;
 
   final Linear patchProjection;
@@ -114,6 +117,7 @@ class ViTBackbone extends Module {
   ///
   /// Returns the encoder output `[numPatches + 1, embedDim]` with the
   /// CLS token at row 0.
+  @override
   Tensor call(Tensor patchifiedImage) {
     final expectedPixels = patchSize * patchSize * numChannels;
     if (patchifiedImage.shape.length != 2 ||
