@@ -1,0 +1,20 @@
+{"text":"# API reference (summary)","source":"data/sample_docs/api.md"}
+{"text":"Requests to the REST API must be authenticated with an API key sent in the `Authorization: Bearer <key>` header. Keys are created and revoked from the Developer Console under Settings → API Access.","source":"data/sample_docs/api.md"}
+{"text":"Rate limits are enforced per API key: 60 requests per minute on the Free plan, 600 on Pro, and 6000 on Enterprise. When you exceed your bucket the API returns HTTP 429 with a `Retry-After` header measured in seconds.","source":"data/sample_docs/api.md"}
+{"text":"Uploaded files may be up to 100 MB each on Free, 2 GB on Pro, and 20 GB on Enterprise. Files are virus-scanned before they become downloadable. Uploads that fail scanning are quarantined and reported on the account activity log.","source":"data/sample_docs/api.md"}
+{"text":"Webhooks can be registered for the events `job.completed`, `job.failed`, `invoice.paid`, `invoice.failed`, and `alert.triggered`. Delivery is retried with exponential backoff for up to 24 hours; the payload is signed with an HMAC-SHA256 signature you can verify with your shared webhook secret.","source":"data/sample_docs/api.md"}
+{"text":"Backups of all customer data are retained for 30 days on the Free plan and 90 days on Pro and Enterprise. Point-in-time restore is available on Enterprise with an RPO of 5 minutes.","source":"data/sample_docs/api.md"}
+{"text":"# Billing","source":"data/sample_docs/billing.md"}
+{"text":"Our billing cycle runs monthly, on the day you originally subscribed. Invoices are sent to the primary email on the account 48 hours before the charge.","source":"data/sample_docs/billing.md"}
+{"text":"Your subscription can be canceled at any time from Account → Billing. The cancellation takes effect at the end of the current billing period, and you retain full access until then. Refund requests are honored within 30 days of the original charge if you have not yet used more than 10% of your monthly quota.","source":"data/sample_docs/billing.md"}
+{"text":"We accept Visa, Mastercard, American Express, Discover, Apple Pay, and Google Pay. We do not currently accept PayPal or cryptocurrency. Failed payments retry twice over five days; if the retries also fail your account moves to a grace-period tier with reduced quotas.","source":"data/sample_docs/billing.md"}
+{"text":"## Non-profit discounts","source":"data/sample_docs/billing.md"}
+{"text":"Registered 501(c)(3) organizations receive a 50% discount on the Pro plan. Contact sales@example.com with a copy of your determination letter to apply.","source":"data/sample_docs/billing.md"}
+{"text":"# Security","source":"data/sample_docs/security.md"}
+{"text":"## Encryption","source":"data/sample_docs/security.md"}
+{"text":"All customer data is encrypted in transit with TLS 1.3 and at rest with AES-256. Symmetric encryption keys are stored in AWS KMS and rotated every 90 days. Customers on the Enterprise plan can bring their own KMS key (BYOK) for tenant-level isolation.","source":"data/sample_docs/security.md"}
+{"text":"## Authentication","source":"data/sample_docs/security.md"}
+{"text":"Multi-factor authentication is available to every account and is required for admins on paid plans. Supported factors are authenticator apps (TOTP), SMS one-time codes, and hardware security keys (WebAuthn / FIDO2). Single Sign-On via SAML 2.0 or OIDC is available on the Enterprise plan and requires configuration by your IT administrator.","source":"data/sample_docs/security.md"}
+{"text":"## Compliance","source":"data/sample_docs/security.md"}
+{"text":"We are SOC 2 Type II certified. GDPR and CCPA compliance is standard on every plan; HIPAA compliance is available for eligible healthcare customers on the Enterprise plan and requires a signed Business Associate Agreement.","source":"data/sample_docs/security.md"}
+{"text":"Public trust reports and pen-test summaries are available at trust.example.com.","source":"data/sample_docs/security.md"}

@@ -1,16 +1,20 @@
 /// General-purpose semantic-QA tool built on all-MiniLM-L6-v2 +
 /// IndexFlat. Two subcommands:
 ///
-///   dart run bin/qa.dart build --corpus <path.txt> --out <dir>
-///     One passage per non-empty line. Encodes each with MiniLM,
-///     saves the index to <dir>/index.bin and the raw passages to
-///     <dir>/passages.txt so the two stay in sync.
+///   dart run bin/qa.dart build --corpus <path> --out <dir>
+///                              [--chunk-words 120] [--overlap-words 20]
+///     `--corpus` accepts either a single `.txt` / `.md` file or a
+///     directory (walked recursively; `.txt` and `.md` picked up).
+///     Each file is split on blank lines into paragraphs; any
+///     paragraph longer than `--chunk-words` is further sliced into
+///     overlapping windows. Encodes every chunk with MiniLM and
+///     writes `<dir>/{index.bin, passages.jsonl, meta.json}`.
 ///
 ///   dart run bin/qa.dart ask --index <dir> [--k 3] [--query "..."]
-///     Loads the persisted index. Without --query drops into an
-///     interactive REPL: type a question, hit Enter, see top-k.
-///     With --query "..." prints the top-k for that one question
-///     and exits.
+///     Loads the persisted index. Without `--query` drops into an
+///     interactive REPL: type a question, hit Enter, see top-k
+///     annotated with source file. With `--query "..."` prints the
+///     top-k for that one question and exits.
 ///
 /// Prerequisites (one-time model download, ~87 MB):
 ///
@@ -66,8 +70,11 @@ class _Encoder {
 void _usage() {
   stderr.writeln('''
 Usage:
-  dart run bin/qa.dart build --corpus <path.txt> --out <dir>
-  dart run bin/qa.dart ask   --index <dir> [--k 3] [--query "..."]
+  dart run bin/qa.dart build --corpus <path>  --out <dir>
+                             [--chunk-words 120] [--overlap-words 20]
+    <path> is either a .txt/.md file or a directory of them.
+
+  dart run bin/qa.dart ask   --index <dir>    [--k 3] [--query "..."]
 ''');
 }
 
@@ -94,17 +101,21 @@ Future<void> _build(Map<String, String> args) async {
     _usage();
     exit(64);
   }
-  final passages = File(corpusPath)
-      .readAsLinesSync()
-      .map((l) => l.trim())
-      .where((l) => l.isNotEmpty)
-      .toList();
+  final chunkWords = int.tryParse(args['chunk-words'] ?? '120') ?? 120;
+  final overlapWords = int.tryParse(args['overlap-words'] ?? '20') ?? 20;
+
+  final passages = _gatherPassages(
+    corpusPath,
+    chunkWords: chunkWords,
+    overlapWords: overlapWords,
+  );
   if (passages.isEmpty) {
-    stderr.writeln('qa build: $corpusPath has no non-empty lines.');
+    stderr.writeln('qa build: no passages found under $corpusPath');
     exit(1);
   }
   stdout.writeln(
-    'qa build: ${passages.length} passages from $corpusPath',
+    'qa build: ${passages.length} passages from $corpusPath '
+    '(chunk=$chunkWords words, overlap=$overlapWords).',
   );
 
   final encoder = _Encoder.load();
@@ -113,7 +124,7 @@ Future<void> _build(Map<String, String> args) async {
   final sw = Stopwatch()..start();
   final vecs = <Float32List>[];
   for (int i = 0; i < passages.length; i++) {
-    vecs.add(encoder.embed(passages[i]));
+    vecs.add(encoder.embed(passages[i].text));
     if ((i + 1) % 25 == 0 || i == passages.length - 1) {
       stdout.writeln(
         '  ${i + 1}/${passages.length}  '
@@ -127,22 +138,98 @@ Future<void> _build(Map<String, String> args) async {
 
   Directory(outDir).createSync(recursive: true);
   await saveIndex(index, '$outDir/index.bin');
-  File(
-    '$outDir/passages.txt',
-  ).writeAsStringSync(passages.map((p) => p).join('\n'));
+  // JSONL keeps text-with-newlines safe and carries per-passage source
+  // provenance without a second sidecar file.
+  final jsonl = StringBuffer();
+  for (final p in passages) {
+    jsonl.writeln(jsonEncode({'text': p.text, 'source': p.source}));
+  }
+  File('$outDir/passages.jsonl').writeAsStringSync(jsonl.toString());
   File('$outDir/meta.json').writeAsStringSync(
     jsonEncode({
       'model': 'sentence-transformers/all-MiniLM-L6-v2',
       'embedDim': encoder.enc.embedDim,
       'passages': passages.length,
       'metric': 'innerProduct',
+      'chunkWords': chunkWords,
+      'overlapWords': overlapWords,
     }),
   );
   stdout.writeln(
-    'qa build: saved $outDir/{index.bin,passages.txt,meta.json} '
+    'qa build: saved $outDir/{index.bin,passages.jsonl,meta.json} '
     '(${sw.elapsedMilliseconds} ms total).',
   );
 }
+
+class _Passage {
+  final String text;
+  final String source;
+  _Passage(this.text, this.source);
+}
+
+List<_Passage> _gatherPassages(
+  String path, {
+  required int chunkWords,
+  required int overlapWords,
+}) {
+  final entity = FileSystemEntity.typeSync(path);
+  final files = <String>[];
+  if (entity == FileSystemEntityType.directory) {
+    for (final f in Directory(path).listSync(recursive: true)) {
+      if (f is File) {
+        final p = f.path.toLowerCase();
+        if (p.endsWith('.txt') || p.endsWith('.md')) {
+          files.add(f.path);
+        }
+      }
+    }
+    files.sort();
+  } else if (entity == FileSystemEntityType.file) {
+    files.add(path);
+  } else {
+    stderr.writeln('qa build: $path not found');
+    exit(1);
+  }
+
+  final passages = <_Passage>[];
+  for (final f in files) {
+    final raw = File(f).readAsStringSync();
+    // Split on blank lines -> logical paragraphs; each paragraph is
+    // then word-chunked if it exceeds `chunkWords`.
+    final paragraphs = raw
+        .split(RegExp(r'\n\s*\n'))
+        .map((p) => p.replaceAll(RegExp(r'\s+'), ' ').trim())
+        .where((p) => p.isNotEmpty)
+        .toList();
+    for (final para in paragraphs) {
+      for (final chunk in _wordChunks(para, chunkWords, overlapWords)) {
+        passages.add(_Passage(chunk, f));
+      }
+    }
+  }
+  return passages;
+}
+
+Iterable<String> _wordChunks(
+  String text,
+  int chunkWords,
+  int overlapWords,
+) sync* {
+  final words = text.split(' ').where((w) => w.isNotEmpty).toList();
+  if (words.length <= chunkWords) {
+    yield text;
+    return;
+  }
+  final step = (chunkWords - overlapWords).clamp(1, chunkWords);
+  var i = 0;
+  while (i < words.length) {
+    final end = (i + chunkWords).clamp(0, words.length);
+    yield words.sublist(i, end).join(' ');
+    if (end == words.length) break;
+    i += step;
+  }
+}
+
 
 Future<void> _ask(Map<String, String> args) async {
   final indexDir = args['index'];
@@ -152,7 +239,24 @@ Future<void> _ask(Map<String, String> args) async {
   }
   final k = int.tryParse(args['k'] ?? '3') ?? 3;
 
-  final passages = File('$indexDir/passages.txt').readAsLinesSync();
+  final passages = <_Passage>[];
+  final jsonlPath = '$indexDir/passages.jsonl';
+  final legacyPath = '$indexDir/passages.txt';
+  if (File(jsonlPath).existsSync()) {
+    for (final line in File(jsonlPath).readAsLinesSync()) {
+      if (line.isEmpty) continue;
+      final m = jsonDecode(line) as Map<String, dynamic>;
+      passages.add(_Passage(m['text'] as String, m['source'] as String? ?? ''));
+    }
+  } else if (File(legacyPath).existsSync()) {
+    for (final line in File(legacyPath).readAsLinesSync()) {
+      if (line.isEmpty) continue;
+      passages.add(_Passage(line, ''));
+    }
+  } else {
+    stderr.writeln('qa ask: no passages.jsonl or passages.txt under $indexDir');
+    exit(1);
+  }
   final index = await loadIndex('$indexDir/index.bin');
   final encoder = _Encoder.load();
   stdout.writeln(
@@ -167,13 +271,14 @@ Future<void> _ask(Map<String, String> args) async {
       final id = res.ids[0][i];
       if (id < 0) break;
       final score = res.distances[0][i];
+      final p = passages[id];
+      final tag = p.source.isEmpty ? '' : ' [${p.source}]';
       stdout.writeln(
-        '  #${i + 1}  (cos=${score.toStringAsFixed(3)})  '
-        '${passages[id]}',
+        '  #${i + 1}  (cos=${score.toStringAsFixed(3)})$tag  ${p.text}',
       );
     }
     final best = res.ids[0][0];
-    if (best >= 0) stdout.writeln('A: ${passages[best]}');
+    if (best >= 0) stdout.writeln('A: ${passages[best].text}');
   }
 
   final oneShot = args['query'];
