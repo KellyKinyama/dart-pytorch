@@ -1,22 +1,35 @@
-/// General-purpose semantic-QA tool built on all-MiniLM-L6-v2 +
-/// IndexFlat. Two subcommands:
+/// General-purpose semantic-QA tool built on all-MiniLM-L6-v2. Two
+/// subcommands, two storage backends (pick one at build/ask time).
 ///
-///   dart run bin/qa.dart build --corpus <path> --out <dir>
+///   dart run bin/qa.dart build --corpus <path>
+///                              [--out <dir> | --db-host H --db-port P
+///                               --table qa_vectors]
 ///                              [--chunk-words 120] [--overlap-words 20]
 ///     `--corpus` accepts either a single `.txt` / `.md` file or a
 ///     directory (walked recursively; `.txt` and `.md` picked up).
 ///     Each file is split on blank lines into paragraphs; any
 ///     paragraph longer than `--chunk-words` is further sliced into
-///     overlapping windows. Encodes every chunk with MiniLM and
-///     writes `<dir>/{index.bin, passages.jsonl, meta.json}`.
+///     overlapping windows. Every chunk is encoded with MiniLM.
+///     Storage:
+///       * File backend (`--out`) writes
+///         `<dir>/{index.bin, passages.jsonl, meta.json}` — self-
+///         contained, no server needed.
+///       * DB backend (`--db-host` + `--db-port`) streams rows to a
+///         running `dart-db-server` over its JSON-line TCP
+///         protocol. Schema:
+///           CREATE TABLE <table> (
+///             id     INTEGER PRIMARY KEY AUTOINCREMENT,
+///             source TEXT, passage TEXT, vec TEXT)
+///         where `vec` is a JSON array of `embedDim` floats.
 ///
-///   dart run bin/qa.dart ask --index <dir> [--k 3] [--query "..."]
-///     Loads the persisted index. Without `--query` drops into an
-///     interactive REPL: type a question, hit Enter, see top-k
-///     annotated with source file. With `--query "..."` prints the
-///     top-k for that one question and exits.
+///   dart run bin/qa.dart ask   [--index <dir> | --db-host H --db-port P
+///                               --table qa_vectors]
+///                              [--k 3] [--query "..."]
+///     Loads the persisted vectors (from the file backend or from
+///     the DB), encodes the query, ranks by cosine, prints top-k.
+///     Without `--query` drops into an interactive REPL.
 ///
-/// Prerequisites (one-time model download, ~87 MB):
+/// Prerequisites (one-time MiniLM download, ~87 MB):
 ///
 ///   mkdir -p models/minilm && cd models/minilm
 ///   for f in config.json tokenizer_config.json vocab.txt \
@@ -24,8 +37,14 @@
 ///     curl -sSL -O \
 ///       "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/$f"
 ///   done
+///
+/// DB-backend prerequisites (start a `dart-db-server` in another
+/// shell, e.g. from the sibling `dart-db-server` repo):
+///
+///   dart run bin/dart_db_server.dart --port 4555 --file qa.json
 library;
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -70,13 +89,71 @@ class _Encoder {
 void _usage() {
   stderr.writeln('''
 Usage:
-  dart run bin/qa.dart build --corpus <path>  --out <dir>
+  dart run bin/qa.dart build --corpus <path>
+                             [--out <dir> | --db-host H --db-port P
+                              --table qa_vectors]
                              [--chunk-words 120] [--overlap-words 20]
     <path> is either a .txt/.md file or a directory of them.
 
-  dart run bin/qa.dart ask   --index <dir>    [--k 3] [--query "..."]
+  dart run bin/qa.dart ask   [--index <dir> | --db-host H --db-port P
+                              --table qa_vectors]
+                             [--k 3] [--query "..."]
 ''');
 }
+
+// -------- tiny dart-db-server TCP client (JSON line protocol) --------
+
+class _DbClient {
+  final Socket _socket;
+  final StreamIterator<String> _lines;
+  int _nextId = 1;
+
+  _DbClient._(this._socket, this._lines);
+
+  static Future<_DbClient> connect(String host, int port) async {
+    final s = await Socket.connect(host, port);
+    final lines = StreamIterator(
+      s
+          .cast<List<int>>()
+          .transform(utf8.decoder)
+          .transform(const LineSplitter()),
+    );
+    return _DbClient._(s, lines);
+  }
+
+  Future<Map<String, Object?>> exec(String sql) async {
+    final id = _nextId++;
+    _socket.write('${jsonEncode({'id': id, 'sql': sql})}\n');
+    if (!await _lines.moveNext()) {
+      throw StateError('qa: dart-db-server connection closed');
+    }
+    final reply = jsonDecode(_lines.current) as Map<String, Object?>;
+    if (reply['ok'] != true) {
+      throw StateError(
+        'qa: dart-db-server error: ${reply['error']} (sql: $sql)',
+      );
+    }
+    return reply;
+  }
+
+  Future<void> close() async {
+    await _lines.cancel();
+    _socket.destroy();
+  }
+}
+
+String _sqlEscape(String s) => "'${s.replaceAll("'", "''")}'";
+
+bool _wantsDbBackend(Map<String, String> args) =>
+    args.containsKey('db-host') || args.containsKey('table');
+
+({String host, int port, String table}) _dbTarget(Map<String, String> args) {
+  final host = args['db-host'] ?? '127.0.0.1';
+  final port = int.tryParse(args['db-port'] ?? '4555') ?? 4555;
+  final table = args['table'] ?? 'qa_vectors';
+  return (host: host, port: port, table: table);
+}
+
 
 Map<String, String> _parseArgs(List<String> args) {
   final out = <String, String>{};
@@ -96,8 +173,9 @@ Map<String, String> _parseArgs(List<String> args) {
 
 Future<void> _build(Map<String, String> args) async {
   final corpusPath = args['corpus'];
+  final wantsDb = _wantsDbBackend(args);
   final outDir = args['out'];
-  if (corpusPath == null || outDir == null) {
+  if (corpusPath == null || (!wantsDb && outDir == null)) {
     _usage();
     exit(64);
   }
@@ -133,13 +211,29 @@ Future<void> _build(Map<String, String> args) async {
     }
   }
 
-  final index = IndexFlat(encoder.enc.embedDim, Metric.innerProduct);
-  index.add(vecs);
+  if (wantsDb) {
+    await _buildIntoDb(args, passages, vecs, encoder.enc.embedDim);
+  } else {
+    await _buildIntoDir(outDir!, passages, vecs, encoder.enc.embedDim,
+        chunkWords: chunkWords, overlapWords: overlapWords);
+  }
+  stdout.writeln(
+    'qa build: done (${sw.elapsedMilliseconds} ms total).',
+  );
+}
 
+Future<void> _buildIntoDir(
+  String outDir,
+  List<_Passage> passages,
+  List<Float32List> vecs,
+  int embedDim, {
+  required int chunkWords,
+  required int overlapWords,
+}) async {
+  final index = IndexFlat(embedDim, Metric.innerProduct);
+  index.add(vecs);
   Directory(outDir).createSync(recursive: true);
   await saveIndex(index, '$outDir/index.bin');
-  // JSONL keeps text-with-newlines safe and carries per-passage source
-  // provenance without a second sidecar file.
   final jsonl = StringBuffer();
   for (final p in passages) {
     jsonl.writeln(jsonEncode({'text': p.text, 'source': p.source}));
@@ -148,7 +242,7 @@ Future<void> _build(Map<String, String> args) async {
   File('$outDir/meta.json').writeAsStringSync(
     jsonEncode({
       'model': 'sentence-transformers/all-MiniLM-L6-v2',
-      'embedDim': encoder.enc.embedDim,
+      'embedDim': embedDim,
       'passages': passages.length,
       'metric': 'innerProduct',
       'chunkWords': chunkWords,
@@ -156,8 +250,49 @@ Future<void> _build(Map<String, String> args) async {
     }),
   );
   stdout.writeln(
-    'qa build: saved $outDir/{index.bin,passages.jsonl,meta.json} '
-    '(${sw.elapsedMilliseconds} ms total).',
+    'qa build: saved $outDir/{index.bin,passages.jsonl,meta.json}.',
+  );
+}
+
+Future<void> _buildIntoDb(
+  Map<String, String> args,
+  List<_Passage> passages,
+  List<Float32List> vecs,
+  int embedDim,
+) async {
+  final tgt = _dbTarget(args);
+  stdout.writeln(
+    'qa build: connecting to dart-db-server at '
+    '${tgt.host}:${tgt.port}, table `${tgt.table}` ...',
+  );
+  final db = await _DbClient.connect(tgt.host, tgt.port);
+  try {
+    await db.exec('DROP TABLE IF EXISTS ${tgt.table}');
+    await db.exec(
+      'CREATE TABLE ${tgt.table} ('
+      'id INTEGER PRIMARY KEY AUTOINCREMENT, '
+      'source TEXT, '
+      'passage TEXT, '
+      'vec TEXT)',
+    );
+    for (int i = 0; i < passages.length; i++) {
+      final vecJson = jsonEncode(vecs[i].toList());
+      await db.exec(
+        'INSERT INTO ${tgt.table} (source, passage, vec) VALUES '
+        '(${_sqlEscape(passages[i].source)}, '
+        '${_sqlEscape(passages[i].text)}, '
+        '${_sqlEscape(vecJson)})',
+      );
+      if ((i + 1) % 25 == 0 || i == passages.length - 1) {
+        stdout.writeln('  wrote ${i + 1}/${passages.length}');
+      }
+    }
+  } finally {
+    await db.close();
+  }
+  stdout.writeln(
+    'qa build: wrote ${passages.length} rows (embedDim=$embedDim) to '
+    'table `${tgt.table}` on ${tgt.host}:${tgt.port}.',
   );
 }
 
@@ -231,53 +366,122 @@ Iterable<String> _wordChunks(
 }
 
 Future<void> _ask(Map<String, String> args) async {
+  final wantsDb = _wantsDbBackend(args);
   final indexDir = args['index'];
-  if (indexDir == null) {
+  if (!wantsDb && indexDir == null) {
     _usage();
     exit(64);
   }
   final k = int.tryParse(args['k'] ?? '3') ?? 3;
 
+  // Load passages + brute-force scorer as a closure so the DB and file
+  // backends share the same 'answer'/REPL path.
   final passages = <_Passage>[];
-  final jsonlPath = '$indexDir/passages.jsonl';
-  final legacyPath = '$indexDir/passages.txt';
-  if (File(jsonlPath).existsSync()) {
-    for (final line in File(jsonlPath).readAsLinesSync()) {
-      if (line.isEmpty) continue;
-      final m = jsonDecode(line) as Map<String, dynamic>;
-      passages.add(_Passage(m['text'] as String, m['source'] as String? ?? ''));
-    }
-  } else if (File(legacyPath).existsSync()) {
-    for (final line in File(legacyPath).readAsLinesSync()) {
-      if (line.isEmpty) continue;
-      passages.add(_Passage(line, ''));
+  Float32List Function(int idx) vecAt;
+  int rowCount;
+  int embedDim;
+
+  if (wantsDb) {
+    final tgt = _dbTarget(args);
+    final db = await _DbClient.connect(tgt.host, tgt.port);
+    try {
+      final res = await db.exec(
+        'SELECT source, passage, vec FROM ${tgt.table} ORDER BY id',
+      );
+      final rows = res['rows'] as List;
+      final storedVecs = <Float32List>[];
+      for (final r in rows) {
+        final row = r as List;
+        final source = (row[0] as String?) ?? '';
+        final text = (row[1] as String?) ?? '';
+        final vec = (jsonDecode(row[2] as String) as List)
+            .map((v) => (v as num).toDouble())
+            .toList();
+        passages.add(_Passage(text, source));
+        storedVecs.add(Float32List.fromList(vec));
+      }
+      rowCount = passages.length;
+      embedDim = storedVecs.isEmpty ? 0 : storedVecs.first.length;
+      vecAt = (i) => storedVecs[i];
+      stdout.writeln(
+        'qa ask: ${rowCount} rows loaded from ${tgt.host}:${tgt.port} '
+        'table `${tgt.table}` (embedDim=$embedDim).',
+      );
+    } finally {
+      await db.close();
     }
   } else {
-    stderr.writeln('qa ask: no passages.jsonl or passages.txt under $indexDir');
+    final jsonlPath = '$indexDir/passages.jsonl';
+    final legacyPath = '$indexDir/passages.txt';
+    if (File(jsonlPath).existsSync()) {
+      for (final line in File(jsonlPath).readAsLinesSync()) {
+        if (line.isEmpty) continue;
+        final m = jsonDecode(line) as Map<String, dynamic>;
+        passages.add(
+          _Passage(m['text'] as String, m['source'] as String? ?? ''),
+        );
+      }
+    } else if (File(legacyPath).existsSync()) {
+      for (final line in File(legacyPath).readAsLinesSync()) {
+        if (line.isEmpty) continue;
+        passages.add(_Passage(line, ''));
+      }
+    } else {
+      stderr.writeln(
+        'qa ask: no passages.jsonl or passages.txt under $indexDir',
+      );
+      exit(1);
+    }
+    final index = await loadIndex('$indexDir/index.bin');
+    if (index is! IndexFlat) {
+      stderr.writeln('qa ask: expected an IndexFlat blob at $indexDir/index.bin');
+      exit(1);
+    }
+    rowCount = passages.length;
+    embedDim = index.d;
+    vecAt = (i) => index.reconstruct(i);
+    stdout.writeln(
+      'qa ask: ${rowCount} passages loaded from $indexDir '
+      '(embedDim=$embedDim).',
+    );
+  }
+
+  final encoder = _Encoder.load();
+  if (embedDim != 0 && embedDim != encoder.enc.embedDim) {
+    stderr.writeln(
+      'qa ask: embedDim mismatch — index reports $embedDim, model '
+      'produces ${encoder.enc.embedDim}. Rebuild.',
+    );
     exit(1);
   }
-  final index = await loadIndex('$indexDir/index.bin');
-  final encoder = _Encoder.load();
-  stdout.writeln(
-    'qa ask: ${passages.length} passages loaded, embedDim '
-    '${encoder.enc.embedDim}.',
-  );
+
+  List<({int id, double score})> topK(Float32List q) {
+    final scored = <({int id, double score})>[];
+    for (int i = 0; i < rowCount; i++) {
+      final v = vecAt(i);
+      var s = 0.0;
+      for (int j = 0; j < q.length; j++) {
+        s += q[j] * v[j];
+      }
+      scored.add((id: i, score: s));
+    }
+    scored.sort((a, b) => b.score.compareTo(a.score));
+    return scored.take(k).toList();
+  }
 
   void answer(String q) {
     final qVec = encoder.embed(q);
-    final res = index.search([qVec], k);
-    for (int i = 0; i < k; i++) {
-      final id = res.ids[0][i];
-      if (id < 0) break;
-      final score = res.distances[0][i];
+    final hits = topK(qVec);
+    for (int i = 0; i < hits.length; i++) {
+      final id = hits[i].id;
+      final score = hits[i].score;
       final p = passages[id];
       final tag = p.source.isEmpty ? '' : ' [${p.source}]';
       stdout.writeln(
         '  #${i + 1}  (cos=${score.toStringAsFixed(3)})$tag  ${p.text}',
       );
     }
-    final best = res.ids[0][0];
-    if (best >= 0) stdout.writeln('A: ${passages[best].text}');
+    if (hits.isNotEmpty) stdout.writeln('A: ${passages[hits[0].id].text}');
   }
 
   final oneShot = args['query'];
