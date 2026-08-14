@@ -1,9 +1,18 @@
-/// General-purpose semantic-QA tool built on all-MiniLM-L6-v2. Two
-/// subcommands, two storage backends (pick one at build/ask time).
+/// General-purpose semantic-QA tool built on all-MiniLM-L6-v2.
+///
+/// Two subcommands. The **file backend is the recommended default** —
+/// self-contained, zero external processes, and re-open times are
+/// dominated by the MiniLM model load, not the index. The
+/// **dart-db-server backend** is a second option intended for the
+/// case where a DB is already your system of record and you want the
+/// embeddings to sit alongside your other tables (permissions,
+/// document metadata, audit trail, SQL joins). Storage is the only
+/// difference; encoding, chunking, and ranking are shared.
 ///
 ///   dart run bin/qa.dart build --corpus <path>
-///                              [--out <dir> | --db-host H --db-port P
-///                               --table qa_vectors]
+///                              [--out <dir>                          # default
+///                               | --db-host H --db-port P
+///                                 --table qa_vectors]
 ///                              [--chunk-words 120] [--overlap-words 20]
 ///     `--corpus` accepts either a single `.txt` / `.md` file or a
 ///     directory (walked recursively; `.txt` and `.md` picked up).
@@ -11,23 +20,22 @@
 ///     paragraph longer than `--chunk-words` is further sliced into
 ///     overlapping windows. Every chunk is encoded with MiniLM.
 ///     Storage:
-///       * File backend (`--out`) writes
-///         `<dir>/{index.bin, passages.jsonl, meta.json}` — self-
-///         contained, no server needed.
-///       * DB backend (`--db-host` + `--db-port`) streams rows to a
-///         running `dart-db-server` over its JSON-line TCP
-///         protocol. Schema:
+///       * File backend (`--out`, recommended) writes
+///         `<dir>/{index.bin, passages.jsonl, meta.json}`.
+///       * DB backend (`--db-host` + `--db-port`) streams rows into a
+///         running `dart-db-server`:
 ///           CREATE TABLE <table> (
 ///             id     INTEGER PRIMARY KEY AUTOINCREMENT,
 ///             source TEXT, passage TEXT, vec TEXT)
 ///         where `vec` is a JSON array of `embedDim` floats.
 ///
-///   dart run bin/qa.dart ask   [--index <dir> | --db-host H --db-port P
-///                               --table qa_vectors]
+///   dart run bin/qa.dart ask   [--index <dir>                         # default
+///                               | --db-host H --db-port P
+///                                 --table qa_vectors]
 ///                              [--k 3] [--query "..."]
-///     Loads the persisted vectors (from the file backend or from
-///     the DB), encodes the query, ranks by cosine, prints top-k.
-///     Without `--query` drops into an interactive REPL.
+///     Loads the persisted vectors, encodes the query, ranks by
+///     cosine, prints top-k. Without `--query` drops into an
+///     interactive REPL.
 ///
 /// Prerequisites (one-time MiniLM download, ~87 MB):
 ///
@@ -89,15 +97,18 @@ class _Encoder {
 void _usage() {
   stderr.writeln('''
 Usage:
-  dart run bin/qa.dart build --corpus <path>
-                             [--out <dir> | --db-host H --db-port P
-                              --table qa_vectors]
+  # File backend (recommended: self-contained, no server needed)
+  dart run bin/qa.dart build --corpus <path> --out <dir>
                              [--chunk-words 120] [--overlap-words 20]
-    <path> is either a .txt/.md file or a directory of them.
+  dart run bin/qa.dart ask   --index <dir> [--k 3] [--query "..."]
 
-  dart run bin/qa.dart ask   [--index <dir> | --db-host H --db-port P
-                              --table qa_vectors]
+  # dart-db-server backend (when the DB is already your source of truth)
+  dart run bin/qa.dart build --corpus <path>
+                             --db-host H --db-port P --table qa_vectors
+  dart run bin/qa.dart ask   --db-host H --db-port P --table qa_vectors
                              [--k 3] [--query "..."]
+
+  <path> is either a .txt/.md file or a directory of them.
 ''');
 }
 
@@ -153,7 +164,6 @@ bool _wantsDbBackend(Map<String, String> args) =>
   final table = args['table'] ?? 'qa_vectors';
   return (host: host, port: port, table: table);
 }
-
 
 Map<String, String> _parseArgs(List<String> args) {
   final out = <String, String>{};
@@ -214,12 +224,16 @@ Future<void> _build(Map<String, String> args) async {
   if (wantsDb) {
     await _buildIntoDb(args, passages, vecs, encoder.enc.embedDim);
   } else {
-    await _buildIntoDir(outDir!, passages, vecs, encoder.enc.embedDim,
-        chunkWords: chunkWords, overlapWords: overlapWords);
+    await _buildIntoDir(
+      outDir!,
+      passages,
+      vecs,
+      encoder.enc.embedDim,
+      chunkWords: chunkWords,
+      overlapWords: overlapWords,
+    );
   }
-  stdout.writeln(
-    'qa build: done (${sw.elapsedMilliseconds} ms total).',
-  );
+  stdout.writeln('qa build: done (${sw.elapsedMilliseconds} ms total).');
 }
 
 Future<void> _buildIntoDir(
@@ -434,7 +448,9 @@ Future<void> _ask(Map<String, String> args) async {
     }
     final index = await loadIndex('$indexDir/index.bin');
     if (index is! IndexFlat) {
-      stderr.writeln('qa ask: expected an IndexFlat blob at $indexDir/index.bin');
+      stderr.writeln(
+        'qa ask: expected an IndexFlat blob at $indexDir/index.bin',
+      );
       exit(1);
     }
     rowCount = passages.length;
