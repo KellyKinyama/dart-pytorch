@@ -15,10 +15,11 @@ import '../../tensor/tensor.dart';
 import '../embedding.dart';
 import '../module.dart';
 import '../positional.dart';
+import '../sentence/sentence_encoder.dart' show TokenEncoder;
 import '../transformer_encoder.dart';
 import 'audio_transformer.dart' show meanRows;
 
-class TextTransformer extends Module {
+class TextTransformer extends Module implements TokenEncoder {
   final int vocabSize;
   final int maxSeqLen;
   final int embedDim;

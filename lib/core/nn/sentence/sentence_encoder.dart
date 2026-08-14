@@ -17,6 +17,15 @@ import '../module.dart';
 
 enum PoolingMode { mean, cls }
 
+/// Anything that maps `[seqLen]` token indices to a `[seqLen, embedDim]`
+/// feature matrix and reports its output width. Both [TextTransformer]
+/// and the BERT-style `BertModel` implement this so [SentenceEncoder]
+/// and [CrossEncoder] can wrap either backbone.
+abstract class TokenEncoder implements Module {
+  int get embedDim;
+  Tensor call(Tensor tokens);
+}
+
 /// Pool a token feature matrix `[seqLen, embedDim]` to a sentence
 /// vector `[1, embedDim]`.
 ///
@@ -60,14 +69,12 @@ Tensor l2NormalizeRow(Tensor x, {double eps = 1e-12}) {
 }
 
 class SentenceEncoder extends Module {
-  final TextTransformer backbone;
+  final TokenEncoder backbone;
   final PoolingMode pooling;
   final bool normalize;
   final double eps;
 
   int get embedDim => backbone.embedDim;
-  int get vocabSize => backbone.vocabSize;
-  int get maxSeqLen => backbone.maxSeqLen;
 
   SentenceEncoder({
     required int vocabSize,

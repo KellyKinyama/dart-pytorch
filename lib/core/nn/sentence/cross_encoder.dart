@@ -20,10 +20,8 @@ import '../../tensor/tensor.dart';
 import '../linear.dart';
 import '../modalities/text_transformer.dart';
 import '../module.dart';
-import 'sentence_encoder.dart';
-
-class CrossEncoder extends Module {
-  final TextTransformer backbone;
+import 'sentence_encoder.dart';class CrossEncoder extends Module {
+  final TokenEncoder backbone;
   final Linear head;
   final PoolingMode pooling;
   final int numLabels;
@@ -64,12 +62,13 @@ class CrossEncoder extends Module {
     this.backbone, {
     this.pooling = PoolingMode.cls,
     this.numLabels = 1,
+    Device device = Device.CPU,
     int seed = 424242,
   }) : head = Linear(
          backbone.embedDim,
          numLabels,
          bias: true,
-         device: backbone.tokenEmbed.weight.device,
+         device: device,
          seed: seed,
        );
 
