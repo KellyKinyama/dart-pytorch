@@ -230,7 +230,6 @@ Iterable<String> _wordChunks(
   }
 }
 
-
 Future<void> _ask(Map<String, String> args) async {
   final indexDir = args['index'];
   if (indexDir == null) {
