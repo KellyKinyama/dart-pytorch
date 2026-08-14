@@ -31,10 +31,7 @@ import 'safetensors.dart';
 class BertLoadReport {
   final int consumedCount;
   final List<String> unusedKeys;
-  const BertLoadReport({
-    required this.consumedCount,
-    required this.unusedKeys,
-  });
+  const BertLoadReport({required this.consumedCount, required this.unusedKeys});
 
   @override
   String toString() =>
@@ -107,17 +104,19 @@ class BertHFLoader {
     // ---- embeddings ----
     _copy(
       model.embeddings.wordEmbeddings.weight,
-      _expectShape(take('embeddings.word_embeddings.weight'), [
-        cfg.vocabSize,
-        d,
-      ], 'embeddings.word_embeddings.weight'),
+      _expectShape(
+        take('embeddings.word_embeddings.weight'),
+        [cfg.vocabSize, d],
+        'embeddings.word_embeddings.weight',
+      ),
     );
     _copy(
       model.embeddings.positionEmbeddings.weight,
-      _expectShape(take('embeddings.position_embeddings.weight'), [
-        cfg.maxPositionEmbeddings,
-        d,
-      ], 'embeddings.position_embeddings.weight'),
+      _expectShape(
+        take('embeddings.position_embeddings.weight'),
+        [cfg.maxPositionEmbeddings, d],
+        'embeddings.position_embeddings.weight',
+      ),
     );
     final typeTable = _expectShape(
       take('embeddings.token_type_embeddings.weight'),
@@ -147,59 +146,41 @@ class BertHFLoader {
       final p = 'encoder.layer.$i';
 
       // Self-attention: query/key/value are separate [D, D] weights.
-      final qW = _expectShape(
-        take('$p.attention.self.query.weight'),
-        [d, d],
-        '$p.attention.self.query.weight',
-      );
-      final qB = _expectShape(
-        take('$p.attention.self.query.bias'),
-        [d],
-        '$p.attention.self.query.bias',
-      );
-      final kW = _expectShape(
-        take('$p.attention.self.key.weight'),
-        [d, d],
-        '$p.attention.self.key.weight',
-      );
-      final kB = _expectShape(
-        take('$p.attention.self.key.bias'),
-        [d],
-        '$p.attention.self.key.bias',
-      );
-      final vW = _expectShape(
-        take('$p.attention.self.value.weight'),
-        [d, d],
-        '$p.attention.self.value.weight',
-      );
-      final vB = _expectShape(
-        take('$p.attention.self.value.bias'),
-        [d],
-        '$p.attention.self.value.bias',
-      );
+      final qW = _expectShape(take('$p.attention.self.query.weight'), [
+        d,
+        d,
+      ], '$p.attention.self.query.weight');
+      final qB = _expectShape(take('$p.attention.self.query.bias'), [
+        d,
+      ], '$p.attention.self.query.bias');
+      final kW = _expectShape(take('$p.attention.self.key.weight'), [
+        d,
+        d,
+      ], '$p.attention.self.key.weight');
+      final kB = _expectShape(take('$p.attention.self.key.bias'), [
+        d,
+      ], '$p.attention.self.key.bias');
+      final vW = _expectShape(take('$p.attention.self.value.weight'), [
+        d,
+        d,
+      ], '$p.attention.self.value.weight');
+      final vB = _expectShape(take('$p.attention.self.value.bias'), [
+        d,
+      ], '$p.attention.self.value.bias');
       for (int hh = 0; hh < h; hh++) {
         final start = hh * headDim;
         final end = start + headDim;
-        _copy(
-          layer.attention.wq[hh].weight,
-          _sliceRows(qW, start, end),
-        );
+        _copy(layer.attention.wq[hh].weight, _sliceRows(qW, start, end));
         _copy(
           layer.attention.wq[hh].bias!,
           _reshapeVectorTo1xN(_sliceVector(qB, start, end)),
         );
-        _copy(
-          layer.attention.wk[hh].weight,
-          _sliceRows(kW, start, end),
-        );
+        _copy(layer.attention.wk[hh].weight, _sliceRows(kW, start, end));
         _copy(
           layer.attention.wk[hh].bias!,
           _reshapeVectorTo1xN(_sliceVector(kB, start, end)),
         );
-        _copy(
-          layer.attention.wv[hh].weight,
-          _sliceRows(vW, start, end),
-        );
+        _copy(layer.attention.wv[hh].weight, _sliceRows(vW, start, end));
         _copy(
           layer.attention.wv[hh].bias!,
           _reshapeVectorTo1xN(_sliceVector(vB, start, end)),
@@ -209,32 +190,39 @@ class BertHFLoader {
       // Attention output projection.
       _copy(
         layer.attention.wo.weight,
-        _expectShape(take('$p.attention.output.dense.weight'), [
-          d,
-          d,
-        ], '$p.attention.output.dense.weight'),
+        _expectShape(
+          take('$p.attention.output.dense.weight'),
+          [d, d],
+          '$p.attention.output.dense.weight',
+        ),
       );
       _copy(
         layer.attention.wo.bias!,
         _reshapeVectorTo1xN(
-          _expectShape(take('$p.attention.output.dense.bias'), [
-            d,
-          ], '$p.attention.output.dense.bias'),
+          _expectShape(
+            take('$p.attention.output.dense.bias'),
+            [d],
+            '$p.attention.output.dense.bias',
+          ),
         ),
       );
 
       // Post-attention LayerNorm.
       _copy(
         layer.attentionOutputLn.gamma,
-        _expectShape(take('$p.attention.output.LayerNorm.weight'), [
-          d,
-        ], '$p.attention.output.LayerNorm.weight'),
+        _expectShape(
+          take('$p.attention.output.LayerNorm.weight'),
+          [d],
+          '$p.attention.output.LayerNorm.weight',
+        ),
       );
       _copy(
         layer.attentionOutputLn.beta,
-        _expectShape(take('$p.attention.output.LayerNorm.bias'), [
-          d,
-        ], '$p.attention.output.LayerNorm.bias'),
+        _expectShape(
+          take('$p.attention.output.LayerNorm.bias'),
+          [d],
+          '$p.attention.output.LayerNorm.bias',
+        ),
       );
 
       // FFN.
@@ -290,18 +278,18 @@ class BertHFLoader {
       'pooler.dense.bias',
       'embeddings.position_ids',
     };
-    final unused = state.keys
-        .where((k) => !consumed.contains(k) && !ignored.contains(k))
-        .toList()
-      ..sort();
+    final unused =
+        state.keys
+            .where((k) => !consumed.contains(k) && !ignored.contains(k))
+            .toList()
+          ..sort();
     return BertLoadReport(consumedCount: consumed.length, unusedKeys: unused);
   }
 
   // ------------ tensor helpers ------------
 
   static Tensor _expectShape(Tensor t, List<int> expected, String name) {
-    if (t.shape.length != expected.length ||
-        !_shapesEqual(t.shape, expected)) {
+    if (t.shape.length != expected.length || !_shapesEqual(t.shape, expected)) {
       throw ArgumentError(
         'bert loader: "$name" expected shape $expected, got ${t.shape}',
       );

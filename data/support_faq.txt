@@ -1,0 +1,20 @@
+Our support hours are Monday through Friday, 9am to 6pm Pacific time. We are closed on major US holidays.
+To reset your password, click the "Forgot password?" link on the sign-in page and follow the emailed instructions.
+Your subscription can be canceled at any time from the Account -> Billing page. Cancellations take effect at the end of the current billing period.
+We accept Visa, Mastercard, American Express, Discover, Apple Pay, and Google Pay. We do not currently accept PayPal or cryptocurrency.
+All plans include a 14-day free trial. You will not be charged until the trial ends and can cancel at any time before then without a fee.
+Refund requests are honored within 30 days of the original charge if you have not yet used more than 10% of your monthly quota.
+Multi-factor authentication is available via authenticator apps (TOTP), SMS, or hardware security keys (WebAuthn/FIDO2).
+Data is encrypted in transit with TLS 1.3 and at rest with AES-256. Encryption keys are rotated every 90 days.
+We are SOC 2 Type II certified and comply with GDPR, CCPA, and HIPAA for eligible customers on our Enterprise plan.
+The mobile app is available on the App Store for iOS 15 and later and on Google Play for Android 9 (Pie) and later.
+API requests are rate-limited to 60 requests per minute for the Free plan, 600 for Pro, and 6000 for Enterprise.
+API keys can be created and revoked from the Developer Console under Settings -> API Access.
+Uploaded files may be up to 100 MB each on the Free plan, 2 GB on Pro, and 20 GB on Enterprise.
+We retain backups for 30 days on the Free plan and 90 days on Pro and Enterprise.
+Support tickets can be opened by email at support@example.com or through the in-app help widget. Enterprise plans include a dedicated Slack channel.
+Live phone support is available for Enterprise customers only, at +1-800-555-0199, 24 hours a day.
+Your team can invite additional members from the Team Settings page. The Pro plan includes up to 10 seats; the Enterprise plan is unlimited.
+Single Sign-On (SSO) via SAML or OIDC is available on the Enterprise plan and requires configuration by your IT administrator.
+We offer a free Non-Profit discount of 50% for registered 501(c)(3) organizations. Contact sales to apply.
+The status page at status.example.com reports live uptime, ongoing incidents, and scheduled maintenance for every region.

@@ -20,7 +20,9 @@ import '../../tensor/tensor.dart';
 import '../linear.dart';
 import '../modalities/text_transformer.dart';
 import '../module.dart';
-import 'sentence_encoder.dart';class CrossEncoder extends Module {
+import 'sentence_encoder.dart';
+
+class CrossEncoder extends Module {
   final TokenEncoder backbone;
   final Linear head;
   final PoolingMode pooling;

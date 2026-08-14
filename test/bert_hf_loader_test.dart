@@ -60,9 +60,7 @@ void main() {
       final anchor = _toTokens(tok.encode('A man is playing guitar.'));
       final paraphrase = _toTokens(tok.encode('Someone is playing a guitar.'));
       final topical = _toTokens(tok.encode('A woman is playing violin.'));
-      final unrelated = _toTokens(
-        tok.encode('The stock market rose today.'),
-      );
+      final unrelated = _toTokens(tok.encode('The stock market rose today.'));
 
       final scores = Tensor.noGrad(() {
         final a = encoder(anchor);
