@@ -432,9 +432,7 @@ String _findNativeLib() {
     name = 'libmat_mul.so';
   }
 
-  final candidates = <String>[
-    '${Directory.current.path}/native/lib/$name',
-  ];
+  final candidates = <String>['${Directory.current.path}/native/lib/$name'];
   try {
     final exeDir = File(Platform.resolvedExecutable).parent.path;
     candidates

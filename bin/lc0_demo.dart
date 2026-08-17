@@ -30,23 +30,24 @@ import 'dart:math' as math;
 import 'package:dart_pytorch/dart_pytorch.dart';
 
 const _weightsPath = 'models/lc0/744706.pb.gz';
+const _weightsUrl =
+    'https://storage.lczero.org/files/networks-contrib/744706.pb.gz';
 
-void main(List<String> args) {
-  if (!File(_weightsPath).existsSync()) {
-    stderr.writeln(
-      'lc0_demo: missing $_weightsPath.\n'
-      'Download the network first:\n'
-      '  mkdir -p models/lc0 && cd models/lc0 && \\\n'
-      '    curl -sSL -O \\\n'
-      '      "https://storage.lczero.org/files/networks-contrib/744706.pb.gz"',
-    );
+Future<void> main(List<String> args) async {
+  // Parse --cpu / --gpu / -y flags and remove them from the FEN args.
+  final device = args.contains('--cpu') ? Device.CPU : Device.GPU;
+  final noPrompt = args.contains('-y') || args.contains('--yes');
+  final fenArgs = args
+      .where((a) => a != '--cpu' && a != '--gpu' && a != '-y' && a != '--yes')
+      .toList();
+  final fen = fenArgs.isNotEmpty ? fenArgs.join(' ') : startFen;
+
+  try {
+    await _ensureWeights(prompt: !noPrompt);
+  } catch (e) {
+    stderr.writeln('lc0_demo: $e');
     exit(64);
   }
-
-  // Parse --cpu / --gpu flag and remove it from the FEN args.
-  final device = args.contains('--cpu') ? Device.CPU : Device.GPU;
-  final fenArgs = args.where((a) => a != '--cpu' && a != '--gpu').toList();
-  final fen = fenArgs.isNotEmpty ? fenArgs.join(' ') : startFen;
 
   stdout.writeln(
     'Loading LC0 network from $_weightsPath on ${device.name.toUpperCase()} ...',
@@ -115,3 +116,61 @@ void main(List<String> args) {
     );
   }
 }
+
+Future<void> _ensureWeights({required bool prompt}) async {
+  final file = File(_weightsPath);
+  if (await file.exists()) return;
+
+  stderr.writeln('lc0: weights not found at $_weightsPath');
+  stderr.writeln('lc0: source     $_weightsUrl');
+  if (prompt && stdin.hasTerminal) {
+    stderr.write('lc0: download now? [Y/n] ');
+    final line = stdin.readLineSync()?.trim().toLowerCase() ?? 'y';
+    if (line.isNotEmpty && line != 'y' && line != 'yes') {
+      throw StateError('user declined download');
+    }
+  }
+  await file.parent.create(recursive: true);
+  final client = HttpClient()..userAgent = 'dart_pytorch/lc0_demo';
+  try {
+    final req = await client.getUrl(Uri.parse(_weightsUrl));
+    final resp = await req.close();
+    if (resp.statusCode != 200) {
+      throw HttpException(
+        'HTTP ${resp.statusCode} fetching $_weightsUrl',
+        uri: Uri.parse(_weightsUrl),
+      );
+    }
+    final tmp = File('$_weightsPath.part');
+    final sink = tmp.openWrite();
+    final total = resp.contentLength;
+    var got = 0;
+    var lastPct = -1;
+    await for (final chunk in resp) {
+      sink.add(chunk);
+      got += chunk.length;
+      if (total > 0) {
+        final pct = (got * 100 / total).floor();
+        if (pct != lastPct && pct % 5 == 0) {
+          stderr.write(
+            '\rlc0: downloading ${_mb(got)} / ${_mb(total)}  $pct%',
+          );
+          lastPct = pct;
+        }
+      }
+    }
+    await sink.flush();
+    await sink.close();
+    stderr.writeln('\rlc0: downloaded ${_mb(got)}                    ');
+    final head = await tmp.openRead(0, 2).expand((b) => b).toList();
+    if (head.length < 2 || head[0] != 0x1f || head[1] != 0x8b) {
+      await tmp.delete();
+      throw StateError('downloaded file is not a gzip stream');
+    }
+    await tmp.rename(_weightsPath);
+  } finally {
+    client.close(force: true);
+  }
+}
+
+String _mb(int bytes) => '${(bytes / 1024 / 1024).toStringAsFixed(1)} MB';
