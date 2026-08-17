@@ -145,6 +145,20 @@ class Lc0Net extends Module {
 
   Tensor _applyBn(Tensor x, Lc0ConvBlock cb) {
     // x: [N, C, H, W]; cb.bnMeans/bnStddivs/bnGammas/bnBetas: [C].
+    //
+    // WARNING: BN interpretation for LC0's classical .pb.gz format is
+    // subtle. Different LC0 versions store `bn_stddivs` differently
+    // (sqrt(var+eps) vs 1/sqrt(var+eps) vs already-fused gamma/std),
+    // and dead channels with near-zero variance blow up (divide) or
+    // vanish (multiply) if you pick wrong. This implementation uses
+    // the "multiply by stored value" fold that matches recent
+    // lczero-training exports:
+    //   y = ((x + bias) - mean) * bn_stddivs * gamma + beta
+    // For 744706 the output magnitudes are stable and the shapes are
+    // right, but the numerical values do not match what stock LC0
+    // produces on the same position — the pipeline runs end-to-end
+    // but the BN convention almost certainly needs cross-checking
+    // against LC0's own loader C++ before this can be trusted.
     final n = x.shape[0];
     final c = x.shape[1];
     final h = x.shape[2];
@@ -168,7 +182,7 @@ class Lc0Net extends Module {
         final g = gamma[ci];
         final bt = beta[ci];
         final bi = biases[ci];
-        final scale = s == 0 ? 0.0 : (g / s);
+        final scale = g * s;
         final shift = bt - (m - bi) * scale;
         final base = ((ni * c) + ci) * h * wSp;
         for (int p = 0; p < h * wSp; p++) {
