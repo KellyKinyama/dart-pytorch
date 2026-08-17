@@ -7,6 +7,8 @@ library;
 
 export 'core/tensor/tensor.dart';
 export 'core/tensor/dtype.dart' show DType;
+export 'core/tensor/native_lib_download.dart'
+    show ensureNativeLib, kDartPytorchVersion, kDefaultReleaseUrlBase;
 export 'core/nn/module.dart';
 export 'core/nn/layer_norm.dart';
 export 'core/nn/rms_norm.dart';

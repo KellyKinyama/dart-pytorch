@@ -1,3 +1,18 @@
+## 0.1.1
+
+- `ensureNativeLib({version, urlBase, prompt})` auto-downloads the
+  prebuilt CUDA library from the corresponding GitHub Release into
+  `<cwd>/native/lib/` on first GPU use. Set
+  `DART_PYTORCH_AUTO_DOWNLOAD=0` to disable, or
+  `DART_PYTORCH_NATIVE_LIB=<path>` to point at a hand-built copy.
+- Release CI now tags assets as `libmat_mul-linux-x86_64.so` and
+  `mat_mul-windows-x86_64.dll` (matches the download URL scheme).
+- `Tensor.fromFloat32List` + `Tensor.toFloat32List` — zero-boxing
+  round-trip for typed hot paths.
+- LC0 inference path (`Lc0Net`, `Lc0Reader`, `Lc0Input`) with a
+  native `im2col_nhwc` CUDA kernel and batched forward
+  (`Lc0Net.callBatch`) reaching ~3.5 ms/pos at B=32 on RTX 3060.
+
 ## 0.1.0
 
 Initial pub.dev release. Highlights since the pre-release history:

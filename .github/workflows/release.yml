@@ -62,10 +62,14 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+      - name: Rename to platform-tagged asset names
+        run: |
+          mv dist/libmat_mul.so   dist/libmat_mul-linux-x86_64.so
+          mv dist/mat_mul.dll     dist/mat_mul-windows-x86_64.dll
       - uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/libmat_mul.so
-            dist/mat_mul.dll
+            dist/libmat_mul-linux-x86_64.so
+            dist/mat_mul-windows-x86_64.dll
           fail_on_unmatched_files: true
           generate_release_notes: true

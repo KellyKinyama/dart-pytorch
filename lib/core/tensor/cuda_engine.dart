@@ -414,11 +414,17 @@ class CudaEngine {
 
 /// Resolves the platform-specific native library. Search order:
 ///   1. `DART_PYTORCH_NATIVE_LIB` env var (full path, wins outright).
-///   2. `<cwd>/native/lib/<name>` — the in-repo build location.
+///   2. `<cwd>/native/lib/<name>` — the in-repo build location or
+///      where `ensureNativeLib()` writes prebuilt downloads.
 ///   3. `<executable dir>/native/lib/<name>` and `<executable dir>/<name>`
 ///      — for `dart compile exe` artifacts distributed alongside the lib.
 ///   4. Bare `<name>` — falls back to the OS loader search path
 ///      (LD_LIBRARY_PATH / PATH / DYLD_LIBRARY_PATH).
+///
+/// If none exist, returns the bare name so `DynamicLibrary.open` gets
+/// to throw the familiar "cannot open shared object file" error. Users
+/// on a pub.dev install should `await ensureNativeLib()` from `main`
+/// before touching GPU tensors.
 String _findNativeLib() {
   final envPath = Platform.environment['DART_PYTORCH_NATIVE_LIB'];
   if (envPath != null && envPath.isNotEmpty) return envPath;

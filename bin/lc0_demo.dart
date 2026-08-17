@@ -152,9 +152,7 @@ Future<void> _ensureWeights({required bool prompt}) async {
       if (total > 0) {
         final pct = (got * 100 / total).floor();
         if (pct != lastPct && pct % 5 == 0) {
-          stderr.write(
-            '\rlc0: downloading ${_mb(got)} / ${_mb(total)}  $pct%',
-          );
+          stderr.write('\rlc0: downloading ${_mb(got)} / ${_mb(total)}  $pct%');
           lastPct = pct;
         }
       }
