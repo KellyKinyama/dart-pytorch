@@ -1,4 +1,4 @@
-/// LC0 classical CNN (with optional SE units) — inference-only.
+/// LC0 classical CNN (with optional SE units) — GPU inference.
 ///
 /// Assembles the network described by an [Lc0Weights] value into a
 /// forward pass. BN is folded into the preceding conv's weights and
@@ -9,15 +9,19 @@
 ///   new_weight[o, ...] = weight[o, ...] * new_gamma[o]
 ///   new_bias[o]        = -new_gamma[o] * (mean[o] - old_bias[o]) + beta[o]
 ///
-/// where the misleadingly-named `bn_stddivs` field stores per-channel
-/// VARIANCE. Residual block with SE follows se_unit.cc :: ApplySEUnit.
+/// Runtime layout: NHWC-flat `[H*W, C]` throughout the tower. This
+/// shape lets bias-add, skip-add, and SE's per-channel gate use the
+/// existing GPU row-broadcast (`[H*W, C] + [1, C]`), and it means
+/// Conv2d's matmul output can flow straight into the next layer
+/// without a host-side NCHW permute.
+///
+/// Reference: lc0/src/neural/backends/blas/{network_blas.cc, se_unit.cc}.
 library;
 
 import 'dart:math' as math;
 import 'dart:typed_data';
 
 import '../tensor/tensor.dart';
-import 'conv2d.dart';
 import 'lc0_proto.dart';
 import 'module.dart';
 
@@ -34,35 +38,114 @@ class Lc0Output {
   }
 }
 
-class _FoldedConv {
-  final Conv2d conv;
-  final Float32List bias;
-  const _FoldedConv(this.conv, this.bias);
+class _ConvGpu {
+  final int cin;
+  final int cout;
+  final int k;
+  final int pad;
+  final Tensor wT; // [Cin*K*K, Cout] on GPU, pre-transposed for `cols @ wT`.
+  final Tensor bias; // [1, Cout] on GPU.
+  const _ConvGpu({
+    required this.cin,
+    required this.cout,
+    required this.k,
+    required this.pad,
+    required this.wT,
+    required this.bias,
+  });
+}
+
+class _SEGpu {
+  final Tensor w1; // [C, seHidden]
+  final Tensor b1; // [1, seHidden]
+  final Tensor w2Gamma; // [seHidden, C]
+  final Tensor w2Beta; // [seHidden, C]
+  final Tensor b2Gamma; // [1, C]
+  final Tensor b2Beta; // [1, C]
+  const _SEGpu({
+    required this.w1,
+    required this.b1,
+    required this.w2Gamma,
+    required this.w2Beta,
+    required this.b2Gamma,
+    required this.b2Beta,
+  });
 }
 
 class Lc0Net extends Module {
   final Lc0Weights w;
 
-  final _FoldedConv inputConv;
-  final List<_FoldedConv> resConvA;
-  final List<_FoldedConv> resConvB;
-  final _FoldedConv policy1;
-  final _FoldedConv policyOut;
-  final _FoldedConv valueConv;
+  final _ConvGpu inputConv;
+  final List<_ConvGpu> resA;
+  final List<_ConvGpu> resB;
+  final List<_SEGpu?> se;
+  final _ConvGpu policy1;
+  final _ConvGpu policyOut;
+  final _ConvGpu valueConv;
+
+  final Tensor ip1ValWT; // [Vf*64, FCUnits] on GPU
+  final Tensor ip1ValB; // [1, FCUnits] on GPU
+  final Tensor ip2ValWT; // [FCUnits, wdl] on GPU
+  final Tensor ip2ValB; // [1, wdl] on GPU
+
+  // Cached `[64, 1]` ones for broadcasting the SE gate to [64, C].
+  final Tensor _ones64x1;
+  // Cached `[1, 64]` uniform vector for global-average pool via matmul.
+  final Tensor _avgWeights;
 
   Lc0Net(this.w)
-    : inputConv = _fold(w.input, 112, w.filters, 3, 1),
-      resConvA = [
-        for (final r in w.residual) _fold(r.conv1, w.filters, w.filters, 3, 1),
+    : inputConv = _makeConv(w.input, 112, w.filters, 3, 1),
+      resA = [
+        for (final r in w.residual)
+          _makeConv(r.conv1, w.filters, w.filters, 3, 1),
       ],
-      resConvB = [
-        for (final r in w.residual) _fold(r.conv2, w.filters, w.filters, 3, 1),
+      resB = [
+        for (final r in w.residual)
+          _makeConv(r.conv2, w.filters, w.filters, 3, 1),
       ],
-      policy1 = _fold(w.policy1, w.filters, w.filters, 3, 1),
-      policyOut = _fold(w.policyOut, w.filters, w.policyOutputPlanes, 3, 1),
-      valueConv = _fold(w.valueConv, w.filters, w.valueFilters, 1, 0);
+      se = [
+        for (final r in w.residual)
+          r.se == null ? null : _makeSE(r.se!, w.filters),
+      ],
+      policy1 = _makeConv(w.policy1, w.filters, w.filters, 3, 1),
+      policyOut = _makeConv(
+        w.policyOut,
+        w.filters,
+        w.policyOutputPlanes,
+        3,
+        1,
+      ),
+      valueConv = _makeConv(w.valueConv, w.filters, w.valueFilters, 1, 0),
+      ip1ValWT = Tensor.fromList(
+        [w.valueFilters * 64, w.valueFCUnits],
+        _transpose2d(w.ip1ValW.toList(), w.valueFCUnits, w.valueFilters * 64),
+        device: Device.GPU,
+      ),
+      ip1ValB = Tensor.fromList(
+        [1, w.valueFCUnits],
+        w.ip1ValB.toList(),
+        device: Device.GPU,
+      ),
+      ip2ValWT = Tensor.fromList(
+        [w.valueFCUnits, w.wdl],
+        _transpose2d(w.ip2ValW.toList(), w.wdl, w.valueFCUnits),
+        device: Device.GPU,
+      ),
+      ip2ValB = Tensor.fromList(
+        [1, w.wdl],
+        w.ip2ValB.toList(),
+        device: Device.GPU,
+      ),
+      _ones64x1 = Tensor.fill([64, 1], 1.0, device: Device.GPU),
+      _avgWeights = Tensor.fill([1, 64], 1.0 / 64.0, device: Device.GPU);
 
-  static _FoldedConv _fold(Lc0ConvBlock cb, int cin, int cout, int k, int pad) {
+  static _ConvGpu _makeConv(
+    Lc0ConvBlock cb,
+    int cin,
+    int cout,
+    int k,
+    int pad,
+  ) {
     const eps = 1e-5;
     final rawW = cb.weights.toList();
     final rawB = cb.biases.toList();
@@ -83,18 +166,79 @@ class Lc0Net extends Module {
       foldedB[o] = -newGamma * (mean[o] - rawB[o]) + beta[o];
     }
 
-    final conv = Conv2d(
-      cin,
-      cout,
-      kernel: k,
-      padding: pad,
-      bias: false,
-      device: Device.GPU,
+    final wT = _transpose2d(foldedW, cout, inputsPerOutput);
+
+    return _ConvGpu(
+      cin: cin,
+      cout: cout,
+      k: k,
+      pad: pad,
+      wT: Tensor.fromList(
+        [inputsPerOutput, cout],
+        wT.toList(),
+        device: Device.GPU,
+      ),
+      bias: Tensor.fromList(
+        [1, cout],
+        foldedB.toList(),
+        device: Device.GPU,
+      ),
     );
-    conv.weight.assign(
-      Tensor.fromList([cout, cin, k, k], foldedW.toList(), device: Device.GPU),
+  }
+
+  static _SEGpu _makeSE(Lc0SEUnit u, int cout) {
+    final w2Host = u.w2.toList();
+    final seHidden = u.w2.shape[0];
+    final twoC = 2 * cout;
+    final wG = Float32List(seHidden * cout);
+    final wB = Float32List(seHidden * cout);
+    for (int m = 0; m < seHidden; m++) {
+      for (int c = 0; c < cout; c++) {
+        wG[m * cout + c] = w2Host[m * twoC + c];
+        wB[m * cout + c] = w2Host[m * twoC + cout + c];
+      }
+    }
+    final b2Host = u.b2.toList();
+    final bG = Float32List(cout);
+    final bB = Float32List(cout);
+    for (int c = 0; c < cout; c++) {
+      bG[c] = b2Host[c];
+      bB[c] = b2Host[cout + c];
+    }
+    return _SEGpu(
+      w1: Tensor.fromList(u.w1.shape, u.w1.toList(), device: Device.GPU),
+      b1: Tensor.fromList([1, seHidden], u.b1.toList(), device: Device.GPU),
+      w2Gamma: Tensor.fromList(
+        [seHidden, cout],
+        wG.toList(),
+        device: Device.GPU,
+      ),
+      w2Beta: Tensor.fromList(
+        [seHidden, cout],
+        wB.toList(),
+        device: Device.GPU,
+      ),
+      b2Gamma: Tensor.fromList(
+        [1, cout],
+        bG.toList(),
+        device: Device.GPU,
+      ),
+      b2Beta: Tensor.fromList(
+        [1, cout],
+        bB.toList(),
+        device: Device.GPU,
+      ),
     );
-    return _FoldedConv(conv, foldedB);
+  }
+
+  static Float32List _transpose2d(List<double> src, int rows, int cols) {
+    final out = Float32List(rows * cols);
+    for (int r = 0; r < rows; r++) {
+      for (int c = 0; c < cols; c++) {
+        out[c * rows + r] = src[r * cols + c];
+      }
+    }
+    return out;
   }
 
   Lc0Output call(Tensor input) {
@@ -108,144 +252,111 @@ class Lc0Net extends Module {
       );
     }
     return Tensor.noGrad(() {
-      var h = _applyBiasRelu(inputConv.conv(input), inputConv.bias);
-      for (int i = 0; i < w.residual.length; i++) {
-        h = _residualForward(h, i);
-      }
-      final p1 = _applyBiasRelu(policy1.conv(h), policy1.bias);
-      final policy = _applyBias(policyOut.conv(p1), policyOut.bias);
+      final nhwc = _initialNHWC(input);
+      var h = (_convForward(nhwc, inputConv) + inputConv.bias).relu();
 
-      var v = _applyBiasRelu(valueConv.conv(h), valueConv.bias);
-      final vf = w.valueFilters;
-      v = v.reshape([1, vf * 64]);
-      v =
-          (v.matmul(w.ip1ValW.transpose()) +
-                  w.ip1ValB.reshape([1, w.valueFCUnits]))
-              .relu();
-      v = v.matmul(w.ip2ValW.transpose()) + w.ip2ValB.reshape([1, w.wdl]);
+      for (int i = 0; i < w.residual.length; i++) {
+        h = _residual(h, i);
+      }
+
+      final p1 = (_convForward(h, policy1) + policy1.bias).relu();
+      final policyFlat = _convForward(p1, policyOut) + policyOut.bias;
+      // NHWC-flat [64, P] -> NCHW [1, P, 8, 8] for the caller (matches
+      // the layout LC0's policy-map table expects).
+      final policyNCHW = policyFlat.transpose().reshape([
+        1,
+        w.policyOutputPlanes,
+        8,
+        8,
+      ]);
+
+      var v = (_convForward(h, valueConv) + valueConv.bias).relu();
+      // Channel-major flatten so the FC weight layout lines up.
+      v = v.transpose().reshape([1, w.valueFilters * 64]);
+      v = (v.matmul(ip1ValWT) + ip1ValB).relu();
+      v = v.matmul(ip2ValWT) + ip2ValB;
       if (w.wdl == 3) v = v.softmax();
-      return Lc0Output(policy, v);
+
+      return Lc0Output(policyNCHW, v);
     });
   }
 
-  Tensor _residualForward(Tensor skip, int i) {
-    var h = _applyBiasRelu(resConvA[i].conv(skip), resConvA[i].bias);
-    final h2 = resConvB[i].conv(h);
-    final conv2Bias = resConvB[i].bias;
-
-    final se = w.residual[i].se;
-    if (se == null) {
-      return _addBiasAndSkipRelu(h2, conv2Bias, skip);
+  Tensor _residual(Tensor h, int i) {
+    final skip = h;
+    final hA = (_convForward(h, resA[i]) + resA[i].bias).relu();
+    final hB = _convForward(hA, resB[i]);
+    final seU = se[i];
+    if (seU == null) {
+      return ((hB + resB[i].bias) + skip).relu();
     }
-    return _seForward(h2, conv2Bias, skip, se);
+    return _seForward(hB, resB[i], seU, skip);
   }
 
-  // Port of lc0/src/neural/backends/blas/se_unit.cc :: ApplySEUnit,
-  // with the "activation" fixed to ReLU (classical net default).
-  Tensor _seForward(
-    Tensor h2,
-    Float32List conv2Bias,
-    Tensor skip,
-    Lc0SEUnit se,
-  ) {
-    final c = h2.shape[1];
-    const hw = 64;
-    final hData = h2.toList();
-    final sData = skip.toList();
-
-    final pool = Float32List(c);
-    for (int ch = 0; ch < c; ch++) {
-      double acc = 0;
-      final base = ch * hw;
-      for (int p = 0; p < hw; p++) {
-        acc += hData[base + p];
-      }
-      pool[ch] = acc / hw + conv2Bias[ch];
-    }
-
-    final w1 = se.w1.toList();
-    final b1 = se.b1.toList();
-    final seHidden = se.w1.shape[1];
-    final fc1 = Float32List(seHidden);
-    for (int j = 0; j < seHidden; j++) {
-      double acc = b1[j];
-      for (int ch = 0; ch < c; ch++) {
-        acc += pool[ch] * w1[ch * seHidden + j];
-      }
-      fc1[j] = acc > 0 ? acc : 0;
-    }
-
-    final w2 = se.w2.toList();
-    final b2 = se.b2.toList();
-    final twoC = 2 * c;
-    final fc2 = Float32List(twoC);
-    for (int j = 0; j < twoC; j++) {
-      double acc = b2[j];
-      for (int m = 0; m < seHidden; m++) {
-        acc += fc1[m] * w2[m * twoC + j];
-      }
-      fc2[j] = acc;
-    }
-
-    final out = Float32List(c * hw);
-    for (int ch = 0; ch < c; ch++) {
-      final gamma = 1.0 / (1.0 + math.exp(-fc2[ch]));
-      final beta = fc2[ch + c] + gamma * conv2Bias[ch];
-      final base = ch * hw;
-      for (int p = 0; p < hw; p++) {
-        final v = gamma * hData[base + p] + beta + sData[base + p];
-        out[base + p] = v > 0 ? v : 0;
-      }
-    }
-    return Tensor.fromList([1, c, 8, 8], out.toList(), device: Device.CPU);
+  Tensor _seForward(Tensor hB, _ConvGpu convB, _SEGpu seU, Tensor skip) {
+    // Global-average pool + per-channel bias: [1, 64] @ [64, C] + [1, C].
+    final pool = _avgWeights.matmul(hB) + convB.bias;
+    // FC1 + ReLU.
+    final fc1 = (pool.matmul(seU.w1) + seU.b1).relu();
+    // FC2 split into gamma / beta halves at load time.
+    final gammaPre = fc1.matmul(seU.w2Gamma) + seU.b2Gamma;
+    final betaPre = fc1.matmul(seU.w2Beta) + seU.b2Beta;
+    // gamma = sigmoid(pre); beta = betaPre + gamma * conv2Bias
+    //   (both `[1, C]`, so plain elementwise mul, no broadcast).
+    final gamma = gammaPre.sigmoid();
+    final beta = betaPre + gamma * convB.bias;
+    // `[64, C] * [1, C]` isn't a wired GPU row-broadcast for `*`, so
+    // materialise gamma at full spatial width via a broadcast matmul:
+    // `[64, 1] @ [1, C] = [64, C]`.
+    final gammaFull = _ones64x1.matmul(gamma);
+    return ((hB * gammaFull + beta) + skip).relu();
   }
 
-  Tensor _applyBias(Tensor x, Float32List bias) {
-    final c = x.shape[1];
-    const hw = 64;
-    final src = x.toList();
-    final out = Float32List(src.length);
-    for (int ch = 0; ch < c; ch++) {
-      final base = ch * hw;
-      final b = bias[ch];
-      for (int p = 0; p < hw; p++) {
-        out[base + p] = src[base + p] + b;
-      }
-    }
-    return Tensor.fromList(x.shape, out.toList(), device: Device.CPU);
+  Tensor _convForward(Tensor input, _ConvGpu conv) {
+    final cols = _im2colNHWC(input, conv.cin, conv.k, conv.pad);
+    return cols.matmul(conv.wT);
   }
 
-  Tensor _applyBiasRelu(Tensor x, Float32List bias) {
-    final c = x.shape[1];
-    const hw = 64;
-    final src = x.toList();
-    final out = Float32List(src.length);
-    for (int ch = 0; ch < c; ch++) {
-      final base = ch * hw;
-      final b = bias[ch];
-      for (int p = 0; p < hw; p++) {
-        final v = src[base + p] + b;
-        out[base + p] = v > 0 ? v : 0;
+  Tensor _im2colNHWC(Tensor input, int cin, int k, int pad) {
+    final data = input.toList();
+    const w = 8;
+    const h = 8;
+    final rows = h * w;
+    final colsWidth = cin * k * k;
+    final out = Float32List(rows * colsWidth);
+    var rowOff = 0;
+    for (int y = 0; y < h; y++) {
+      for (int x = 0; x < w; x++) {
+        var colOff = rowOff;
+        for (int c = 0; c < cin; c++) {
+          for (int ky = 0; ky < k; ky++) {
+            final yin = y + ky - pad;
+            for (int kx = 0; kx < k; kx++) {
+              final xin = x + kx - pad;
+              if (yin >= 0 && yin < h && xin >= 0 && xin < w) {
+                out[colOff] = data[(yin * w + xin) * cin + c];
+              }
+              colOff++;
+            }
+          }
+        }
+        rowOff += colsWidth;
       }
     }
-    return Tensor.fromList(x.shape, out.toList(), device: Device.CPU);
+    return Tensor.fromList([rows, colsWidth], out.toList(), device: Device.GPU);
   }
 
-  Tensor _addBiasAndSkipRelu(Tensor x, Float32List bias, Tensor skip) {
-    final c = x.shape[1];
-    const hw = 64;
-    final src = x.toList();
-    final sk = skip.toList();
-    final out = Float32List(src.length);
-    for (int ch = 0; ch < c; ch++) {
-      final base = ch * hw;
-      final b = bias[ch];
+  // Take [1, 112, 8, 8] NCHW input and emit [64, 112] NHWC-flat on
+  // GPU (one host-side permute, then a single upload).
+  Tensor _initialNHWC(Tensor input) {
+    final data = input.toList();
+    const c = 112, hw = 64;
+    final out = Float32List(hw * c);
+    for (int ci = 0; ci < c; ci++) {
       for (int p = 0; p < hw; p++) {
-        final v = src[base + p] + b + sk[base + p];
-        out[base + p] = v > 0 ? v : 0;
+        out[p * c + ci] = data[ci * hw + p];
       }
     }
-    return Tensor.fromList(x.shape, out.toList(), device: Device.CPU);
+    return Tensor.fromList([hw, c], out.toList(), device: Device.GPU);
   }
 
   @override
