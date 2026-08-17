@@ -44,37 +44,125 @@ const _pieceIndex = <String, int>{
 class Lc0Input {
   /// Parse a FEN into a `[1, 112, 8, 8]` CPU tensor ready to feed
   /// into [Lc0Net].
-  static Tensor fromFen(String fen) {
-    final parts = fen.trim().split(RegExp(r'\s+'));
-    if (parts.isEmpty) {
-      throw ArgumentError('Lc0Input: empty FEN');
+  ///
+  /// This is a convenience wrapper around [fromFens] with a
+  /// single-position history (all older history planes zeroed —
+  /// LC0's `FillEmptyHistory::NO` behavior).
+  static Tensor fromFen(String fen) => fromFens(<String>[fen]);
+
+  /// Encode up to 8 game positions with proper LC0 `kMoveHistory`
+  /// layout: `fens[0]` = current position, `fens[k]` = k plies ago.
+  /// Missing history plies (fewer than 8 FENs) leave those planes
+  /// zeroed, matching LC0's `FillEmptyHistory::NO` policy for
+  /// engine play.
+  ///
+  /// Per-slot layout (13 planes each, base = slot * 13):
+  ///   base+0..5    STM's pieces (P N B R Q K), current-STM POV
+  ///   base+6..11   opponent's pieces
+  ///   base+12      set to 1.0 if this position is a repetition of a
+  ///                later ancestor position (2-fold detection)
+  ///
+  /// Auxiliary planes 104..111 are computed from the current FEN
+  /// (castling, side-to-move, rule50, constant-1).
+  static Tensor fromFens(List<String> fens) {
+    if (fens.isEmpty) {
+      throw ArgumentError('Lc0Input.fromFens: at least one FEN required');
     }
+    final data = Float32List(112 * 8 * 8);
+
+    // Parse the current position's meta (STM, castling, rule50) once.
+    final current = _parseFen(fens[0]);
+    final blackToMove = current.blackToMove;
+
+    // Compute board hashes for repetition detection across history.
+    final hashes = <int>[];
+    for (final f in fens) {
+      hashes.add(_parseFen(f).boardHash);
+    }
+
+    // Fill up to 8 history slots. i=0 is current, i=7 is 7 plies back.
+    for (int i = 0; i < 8 && i < fens.length; i++) {
+      final base = i * 13;
+      final parsed = i == 0 ? current : _parseFen(fens[i]);
+      _fillPiecePlanes(data, parsed, base, blackToMove);
+      // Repetition flag: set if this slot's board hash matches any
+      // strictly-later slot (i.e. an earlier ply in time). Mirrors
+      // LC0's `GetRepetitions() >= 1` check at encoder.cc:290.
+      final h = hashes[i];
+      for (int j = i + 1; j < fens.length; j++) {
+        if (hashes[j] == h) {
+          _fillPlane(data, base + 12, 1.0);
+          break;
+        }
+      }
+    }
+
+    // Aux planes computed from the CURRENT position only.
+    if (current.stmQ) _fillPlane(data, 104, 1.0);
+    if (current.stmK) _fillPlane(data, 105, 1.0);
+    if (current.oppQ) _fillPlane(data, 106, 1.0);
+    if (current.oppK) _fillPlane(data, 107, 1.0);
+    _fillPlane(data, 108, blackToMove ? 1.0 : 0.0);
+    _fillPlane(data, 109, current.rule50.toDouble());
+    _fillPlane(data, 110, 0.0);
+    _fillPlane(data, 111, 1.0);
+
+    return Tensor.fromFloat32List(
+      [1, 112, 8, 8],
+      data,
+      device: Device.CPU,
+    );
+  }
+
+  /// Parses a FEN's fields we care about and computes a lightweight
+  /// hash of just the board placement (used for repetition detection
+  /// across the history).
+  static _ParsedFen _parseFen(String fen) {
+    final parts = fen.trim().split(RegExp(r'\s+'));
+    if (parts.isEmpty) throw ArgumentError('Lc0Input: empty FEN');
     final placement = parts[0];
     final stm = parts.length > 1 ? parts[1] : 'w';
     final castling = parts.length > 2 ? parts[2] : '-';
     final rule50 = parts.length > 4 ? int.tryParse(parts[4]) ?? 0 : 0;
-    final fullMove = parts.length > 5 ? int.tryParse(parts[5]) ?? 1 : 1;
-
     if (stm != 'w' && stm != 'b') {
       throw ArgumentError('Lc0Input: side-to-move must be w or b, got "$stm"');
     }
     final blackToMove = stm == 'b';
+    final wK = castling.contains('K');
+    final wQ = castling.contains('Q');
+    final bK = castling.contains('k');
+    final bQ = castling.contains('q');
+    return _ParsedFen(
+      placement: placement,
+      blackToMove: blackToMove,
+      stmK: blackToMove ? bK : wK,
+      stmQ: blackToMove ? bQ : wQ,
+      oppK: blackToMove ? wK : bK,
+      oppQ: blackToMove ? wQ : bQ,
+      rule50: rule50,
+      boardHash: Object.hashAll([placement, blackToMove]),
+    );
+  }
 
-    final data = Float32List(112 * 8 * 8);
-
-    // Piece placement is given top-down (rank 8 first). Store into
-    // whitePOV[rank][file] with rank 0 = white's back rank (a1),
-    // rank 7 = black's back rank (a8).
-    final ranks = placement.split('/');
+  /// Fill piece planes `[base..base+11]` for the given position,
+  /// mirrored vertically + colours swapped iff the CURRENT position
+  /// (root of the history) has black to move.
+  static void _fillPiecePlanes(
+    Float32List data,
+    _ParsedFen p,
+    int base,
+    bool currentIsBlackToMove,
+  ) {
+    final ranks = p.placement.split('/');
     if (ranks.length != 8) {
       throw ArgumentError(
         'Lc0Input: expected 8 ranks in placement, got ${ranks.length}',
       );
     }
-    // Fill piece planes 0..11 in white POV first, then mirror below
-    // if it's black to move.
+    // Encode white-POV into a temp block first, then mirror if needed.
+    final block = Float32List(12 * 64);
     for (int fenRank = 0; fenRank < 8; fenRank++) {
-      final rank = 7 - fenRank; // rank index in white-POV coords
+      final rank = 7 - fenRank;
       final row = ranks[fenRank];
       int file = 0;
       for (int k = 0; k < row.length; k++) {
@@ -88,61 +176,40 @@ class Lc0Input {
         if (idx == null) {
           throw ArgumentError('Lc0Input: bad FEN char "$ch"');
         }
-        _set(data, idx, rank, file, 1.0);
+        block[idx * 64 + rank * 8 + file] = 1.0;
         file++;
       }
     }
-
-    // If black to move, mirror board vertically and swap piece colours
-    // so STM's back rank sits at rank 0.
-    if (blackToMove) {
-      _mirrorForBlack(data);
+    if (currentIsBlackToMove) _mirrorForBlackBlock(block);
+    for (int i = 0; i < 12; i++) {
+      final srcOff = i * 64;
+      final dstOff = (base + i) * 64;
+      for (int j = 0; j < 64; j++) {
+        data[dstOff + j] = block[srcOff + j];
+      }
     }
-
-    // Castling rights, INPUT_CLASSICAL_112_PLANE layout (see
-    // lc0/src/neural/encoder.cc EncodePositionForNN):
-    //   plane 104 = our queenside (000)
-    //   plane 105 = our kingside  (00)
-    //   plane 106 = their queenside
-    //   plane 107 = their kingside
-    final wK = castling.contains('K');
-    final wQ = castling.contains('Q');
-    final bK = castling.contains('k');
-    final bQ = castling.contains('q');
-    final stmK = blackToMove ? bK : wK;
-    final stmQ = blackToMove ? bQ : wQ;
-    final oppK = blackToMove ? wK : bK;
-    final oppQ = blackToMove ? wQ : bQ;
-    if (stmQ) _fillPlane(data, 104, 1.0);
-    if (stmK) _fillPlane(data, 105, 1.0);
-    if (oppQ) _fillPlane(data, 106, 1.0);
-    if (oppK) _fillPlane(data, 107, 1.0);
-
-    // Plane 108 = "we_are_black" (1.0 iff STM is black).
-    _fillPlane(data, 108, blackToMove ? 1.0 : 0.0);
-
-    // Plane 109 = rule-50 half-move counter, RAW (not normalized) for
-    // the classical INPUT_CLASSICAL_112_PLANE format. LC0 only
-    // divides by 100 in the "hectoplies" input formats.
-    _fillPlane(data, 109, rule50.toDouble());
-
-    // Plane 110 used to be a movecount plane; the modern encoder
-    // leaves it zero for the classical format.
-    _fillPlane(data, 110, 0.0);
-
-    // Plane 111 = constant ones (helps the network find board edges).
-    _fillPlane(data, 111, 1.0);
-
-    // fullMove parameter is intentionally unused for the classical
-    // format — LC0's own encoder does not put it anywhere.
-    // ignore: unused_local_variable
-    final _ = fullMove;
-
-    return Tensor.fromList([1, 112, 8, 8], data.toList(), device: Device.CPU);
   }
 
-  static void _set(Float32List d, int plane, int rank, int file, double v) {
-    d[plane * 64 + rank * 8 + file] = v;
+  /// [_mirrorForBlack] on a standalone 12*64 block.
+  static void _mirrorForBlackBlock(Float32List block) {
+    final tmp = Float32List(64);
+    for (int i = 0; i < 6; i++) {
+      final aBase = i * 64;
+      final bBase = (i + 6) * 64;
+      for (int r = 0; r < 8; r++) {
+        for (int f = 0; f < 8; f++) {
+          tmp[(7 - r) * 8 + f] = block[aBase + r * 8 + f];
+        }
+      }
+      for (int r = 0; r < 8; r++) {
+        for (int f = 0; f < 8; f++) {
+          block[aBase + r * 8 + f] = block[bBase + (7 - r) * 8 + f];
+        }
+      }
+      for (int j = 0; j < 64; j++) {
+        block[bBase + j] = tmp[j];
+      }
+    }
   }
 
   static void _fillPlane(Float32List d, int plane, double v) {
@@ -151,30 +218,28 @@ class Lc0Input {
       d[base + i] = v;
     }
   }
-
-  static void _mirrorForBlack(Float32List d) {
-    // Swap white / black piece planes (0..5 <-> 6..11) AND flip each
-    // board vertically (rank -> 7-rank).
-    final tmp = Float32List(64);
-    for (int i = 0; i < 6; i++) {
-      final aBase = i * 64;
-      final bBase = (i + 6) * 64;
-      for (int r = 0; r < 8; r++) {
-        for (int f = 0; f < 8; f++) {
-          tmp[(7 - r) * 8 + f] = d[aBase + r * 8 + f];
-        }
-      }
-      for (int r = 0; r < 8; r++) {
-        for (int f = 0; f < 8; f++) {
-          d[aBase + r * 8 + f] = d[bBase + (7 - r) * 8 + f];
-        }
-      }
-      for (int j = 0; j < 64; j++) {
-        d[bBase + j] = tmp[j];
-      }
-    }
-  }
 }
 
 /// Standard chess starting position in FEN.
 const startFen = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+
+class _ParsedFen {
+  final String placement;
+  final bool blackToMove;
+  final bool stmK;
+  final bool stmQ;
+  final bool oppK;
+  final bool oppQ;
+  final int rule50;
+  final int boardHash;
+  const _ParsedFen({
+    required this.placement,
+    required this.blackToMove,
+    required this.stmK,
+    required this.stmQ,
+    required this.oppK,
+    required this.oppQ,
+    required this.rule50,
+    required this.boardHash,
+  });
+}
