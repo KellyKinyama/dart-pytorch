@@ -370,19 +370,19 @@ class Lc0Reader {
       weights: _dequantizeLayer(d, wF, convShape),
       biases: bF != null
           ? _dequantizeLayer(d, bF, [cOut])
-          : Tensor.fill([cOut], 0.0),
+          : Tensor.fill([cOut], 0.0, device: Device.CPU),
       bnMeans: mF != null
           ? _dequantizeLayer(d, mF, [cOut])
-          : Tensor.fill([cOut], 0.0),
+          : Tensor.fill([cOut], 0.0, device: Device.CPU),
       bnStddivs: sF != null
           ? _dequantizeLayer(d, sF, [cOut])
-          : Tensor.fill([cOut], 1.0),
+          : Tensor.fill([cOut], 1.0, device: Device.CPU),
       bnGammas: gF != null
           ? _dequantizeLayer(d, gF, [cOut])
-          : Tensor.fill([cOut], 1.0),
+          : Tensor.fill([cOut], 1.0, device: Device.CPU),
       bnBetas: bnF != null
           ? _dequantizeLayer(d, bnF, [cOut])
-          : Tensor.fill([cOut], 0.0),
+          : Tensor.fill([cOut], 0.0, device: Device.CPU),
     );
   }
 
@@ -478,7 +478,7 @@ class Lc0Reader {
           out[j++] = buf.getFloat32(0, Endian.little);
         }
     }
-    return Tensor.fromList(shape, out);
+    return Tensor.fromList(shape, out, device: Device.CPU);
   }
 
   // ------- protobuf wire helpers -------

@@ -15,6 +15,7 @@ export 'core/nn/embedding.dart';
 export 'core/nn/linear.dart';
 export 'core/nn/conv2d.dart';
 export 'core/nn/lc0_proto.dart';
+export 'core/nn/lc0.dart';
 export 'core/nn/dropout.dart';
 export 'core/nn/attention/multi_head_attention.dart';
 export 'core/nn/attention/multi_head_cross_attention.dart';
