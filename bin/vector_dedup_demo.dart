@@ -21,7 +21,7 @@
 ///   1. Load a pretrained GPT as an encoder.
 ///   2. `embedCorpus(...)` — last-token pool + corpus-mean centre +
 ///      L2-normalise, all as covered in
-///      docs/vectors/12-RAG-NUTS-AND-BOLTS.md §12.3-12.4.
+///      doc/vectors/12-RAG-NUTS-AND-BOLTS.md §12.3-12.4.
 ///   3. `IndexFlatIP(d).add(vecs)`.
 ///   4. `index.rangeSearch(vecs, radius=_threshold)` — for each doc
 ///      returns every other doc with cosine >= threshold.

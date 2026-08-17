@@ -13,7 +13,7 @@
 ///   * `lastTokenHidden(model, ids)` — run the transformer stack
 ///     (no LM head), return the last-position hidden state as a
 ///     `Float32List`. This is the "encoder-only" trick — see
-///     docs/vectors/12-RAG-NUTS-AND-BOLTS.md §12.3.
+///     doc/vectors/12-RAG-NUTS-AND-BOLTS.md §12.3.
 ///   * `meanVector(vecs, d)`         — compute the corpus mean.
 ///   * `centerAndNormalize(v, mean)` — subtract mean and L2-normalise,
 ///     turning inner product into cosine similarity. See §12.4-12.5.

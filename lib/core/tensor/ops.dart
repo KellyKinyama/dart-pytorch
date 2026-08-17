@@ -11,7 +11,7 @@ typedef _GpuOp2 =
 /// Basic tensor operations with autograd wiring.
 ///
 /// Forward: dispatches by input [Tensor.device]. Binary ops require
-/// both operands on the same device (see `docs/device-placement.md`).
+/// both operands on the same device (see `doc/device-placement.md`).
 ///
 /// Backward: every op wires a `_backward` closure on its output when at
 /// least one input has `requiresGrad = true`. Gradient math is composed

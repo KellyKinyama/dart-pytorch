@@ -303,8 +303,8 @@ class Lc0Net extends Module {
       if (w.wdl == 3) v = v.softmax();
 
       // Split per-batch on CPU — policy is [B*64, P], value is [B, wdl].
-      final polHost = policyFlat.toList();
-      final valHost = v.toList();
+      final polHost = policyFlat.toFloat32List();
+      final valHost = v.toFloat32List();
       final p = w.policyOutputPlanes;
       final results = <Lc0Output>[];
       for (int bi = 0; bi < b; bi++) {
@@ -322,8 +322,8 @@ class Lc0Net extends Module {
         }
         results.add(
           Lc0Output(
-            Tensor.fromList([1, p, 8, 8], polNCHW.toList(), device: Device.CPU),
-            Tensor.fromList([1, w.wdl], valSlice.toList(), device: Device.CPU),
+            Tensor.fromFloat32List([1, p, 8, 8], polNCHW, device: Device.CPU),
+            Tensor.fromFloat32List([1, w.wdl], valSlice, device: Device.CPU),
           ),
         );
       }
@@ -447,7 +447,7 @@ class Lc0Net extends Module {
   }
 
   Tensor _initialNHWC(Tensor input) {
-    final data = input.toList();
+    final data = input.toFloat32List();
     const c = 112, hw = 64;
     final out = Float32List(hw * c);
     for (int ci = 0; ci < c; ci++) {
@@ -455,7 +455,7 @@ class Lc0Net extends Module {
         out[p * c + ci] = data[ci * hw + p];
       }
     }
-    return Tensor.fromList([hw, c], out.toList(), device: device);
+    return Tensor.fromFloat32List([hw, c], out, device: device);
   }
 
   Tensor _initialNHWCBatch(List<Tensor> inputs) {
@@ -464,7 +464,7 @@ class Lc0Net extends Module {
     final b = inputs.length;
     final out = Float32List(b * hw * c);
     for (int bi = 0; bi < b; bi++) {
-      final data = inputs[bi].toList();
+      final data = inputs[bi].toFloat32List();
       final batchOff = bi * hw * c;
       for (int ci = 0; ci < c; ci++) {
         for (int p = 0; p < hw; p++) {
@@ -472,7 +472,7 @@ class Lc0Net extends Module {
         }
       }
     }
-    return Tensor.fromList([b * hw, c], out.toList(), device: device);
+    return Tensor.fromFloat32List([b * hw, c], out, device: device);
   }
 
   @override

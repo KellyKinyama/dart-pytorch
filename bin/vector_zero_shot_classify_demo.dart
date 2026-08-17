@@ -10,7 +10,7 @@
 /// classification" popularised by SBERT / instructor-xl. It works with
 /// any encoder that produces meaningful cosine geometry — including
 /// our recycled causal GPT (last-token pool + corpus-mean centring;
-/// see docs/vectors/12-RAG-NUTS-AND-BOLTS.md §12.3-12.4).
+/// see doc/vectors/12-RAG-NUTS-AND-BOLTS.md §12.3-12.4).
 ///
 /// Pipeline:
 ///   1. Load a pretrained GPT-2 family model as an encoder.

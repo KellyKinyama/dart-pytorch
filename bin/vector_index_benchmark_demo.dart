@@ -1,6 +1,6 @@
 /// Index-type benchmark: same vectors, same queries, every index type.
 ///
-/// Chapters 3-8 of docs/vectors explain **why** ANN indexes exist —
+/// Chapters 3-8 of doc/vectors explain **why** ANN indexes exist —
 /// Flat is O(N·d) per query and doesn't scale, PQ compresses the
 /// storage, IVF partitions the search, HNSW gives graph-based logarithmic
 /// probes. This demo turns that theory into one table so the tradeoff

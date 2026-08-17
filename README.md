@@ -87,7 +87,7 @@ lib/
         embedding.cuh            # embedding_fwd + scatter-add embedding_bwd
     lib/                         # populated by the nvcc build (gitignored)
 native/lib/libmat_mul.so         # actual load path used by cuda_engine.dart
-docs/device-placement.md         # per-op CPU vs GPU decisions + implementation status
+doc/device-placement.md         # per-op CPU vs GPU decisions + implementation status
 test/dart_pytorch_test.dart      # matmul + CPU-op correctness tests
 ```
 
@@ -108,13 +108,13 @@ nvcc --shared -Xcompiler -fPIC \
      lib/native/src/engine.cu
 ```
 
-**No local GPU?** See [docs/colab.md](docs/colab.md) for a copy/paste
+**No local GPU?** See [doc/colab.md](doc/colab.md) for a copy/paste
 recipe that runs on a free Google Colab, Kaggle, Paperspace, or
 Lightning AI GPU. `scripts/setup_colab.sh` handles the whole install +
 nvcc build in one command.
 
 **Have friends with GPUs, or want to pool donated compute?** See
-[docs/coop-training.md](docs/coop-training.md) for three cooperative
+[doc/coop-training.md](doc/coop-training.md) for three cooperative
 training modes (single-process replicas, HTTP coordinator + workers,
 peer-to-peer gossip). All three use DiLoCo-style periodic parameter
 averaging so one full model shipment every `K` local steps is enough
@@ -176,7 +176,7 @@ void main() {
 
 ## Currently supported
 
-See `docs/device-placement.md` for the full policy and per-op status.
+See `doc/device-placement.md` for the full policy and per-op status.
 Short version:
 
 | Area                                    | CPU  | GPU  | Notes                                              |

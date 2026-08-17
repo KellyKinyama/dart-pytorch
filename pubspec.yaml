@@ -1,16 +1,26 @@
 name: dart_pytorch
-description: A sample command-line application.
-version: 1.0.0
-# repository: https://github.com/my_org/my_repo
+description: >-
+  A minimal PyTorch-style tensor library for Dart with reverse-mode
+  autograd, hand-written CUDA kernels via dart:ffi, and an nn.Module
+  scaffolding for Transformers, GPT, MoE, ViT, and LC0 chess-network
+  inference.
+version: 0.1.0
+homepage: https://github.com/KellyKinyama/dart-pytorch
+repository: https://github.com/KellyKinyama/dart-pytorch
+issue_tracker: https://github.com/KellyKinyama/dart-pytorch/issues
+topics:
+  - machine-learning
+  - deep-learning
+  - tensor
+  - cuda
+  - autograd
 
 environment:
   sdk: ^3.9.3
 
-# Add regular dependencies here.
 dependencies:
   path: ^1.9.0
   ffi: ^2.2.0
-  # Used by ImageFolderDataset for decoding jpg/png files.
   image: ^4.8.0
 
 dev_dependencies:

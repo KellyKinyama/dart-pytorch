@@ -61,7 +61,7 @@
 ///   --device=cpu|gpu
 ///
 /// SECURITY: same as Phase 1 - no auth, no TLS, no validation.
-/// LAN/localhost only. See docs/coop-training.md.
+/// LAN/localhost only. See doc/coop-training.md.
 library;
 
 import 'dart:convert';

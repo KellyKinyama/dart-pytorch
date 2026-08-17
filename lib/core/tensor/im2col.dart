@@ -31,7 +31,7 @@ extension TensorIm2ColNHWC on Tensor {
       ], engine.im2colNhwc(_handle!, batch, cin, k, pad));
     }
 
-    final data = toList();
+    final data = toFloat32List();
     final out = Float32List(rows * colsWidth);
     var rowOff = 0;
     for (int bi = 0; bi < batch; bi++) {
@@ -55,6 +55,6 @@ extension TensorIm2ColNHWC on Tensor {
         }
       }
     }
-    return Tensor.fromList([rows, colsWidth], out.toList(), device: Device.CPU);
+    return Tensor.fromFloat32List([rows, colsWidth], out, device: Device.CPU);
   }
 }

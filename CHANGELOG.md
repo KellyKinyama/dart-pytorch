@@ -1,3 +1,25 @@
+## 0.1.0
+
+Initial pub.dev release. Highlights since the pre-release history:
+
+- LC0 (Leela Chess Zero) classical-CNN inference: `Lc0Reader`,
+  `Lc0Net`, `Lc0Input`. Loads 744706.pb.gz (128 filters, 10 residual
+  blocks, SE-aware); folds BatchNorm at load time; runs on CPU or
+  GPU with bit-identical output.
+  - `Lc0Net(w, {device: Device.GPU})` — per-instance CPU/GPU switch.
+  - `Lc0Net.callBatch(List<Tensor>) -> List<Lc0Output>` — batched
+    forward through the full tower (single `[B*64, C]` matmul per
+    layer).
+  - Native `im2col_nhwc` CUDA kernel
+    (`lib/native/src/kernels/im2col.cuh` + `Tensor.im2colNhwc`)
+    replaces the last CPU-side loop; batching now scales cleanly to
+    B=32 at ~3.5 ms/position on an RTX 3060.
+- Tensor tightening:
+  - `Tensor.fromFloat32List` factory + `Tensor.toFloat32List`
+    accessor — zero-boxing round-trip for typed hot paths.
+  - `TensorIm2ColNHWC.im2colNhwc(batch, cin, k, pad)` extension
+    (part of `tensor.dart`).
+
 ## Unreleased
 
 - MoE: sparse expert execution — each expert now runs only on the
@@ -821,7 +843,7 @@
   `ArgumentError` (call `.to(...)` explicitly).
 - Autograd scaffolding fields (`_backward`, `_children`,
   `requiresGrad`) reserved on `Tensor`; wiring is planned next.
-- Add device-placement policy doc at `docs/device-placement.md`:
+- Add device-placement policy doc at `doc/device-placement.md`:
   per-op CPU vs GPU decisions, size thresholds, implementation
   status, and autograd-on-Dart recommendation.
 - Wire up matrix multiplication end-to-end via `dart:ffi` + CUDA.

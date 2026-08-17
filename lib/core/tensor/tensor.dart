@@ -3,7 +3,7 @@
 ///
 /// Exactly one of `_cpuData` / `_handle` is populated at any time; the
 /// [device] field records which. Operations dispatch by device — see
-/// `docs/device-placement.md` for the policy and per-op decisions.
+/// `doc/device-placement.md` for the policy and per-op decisions.
 ///
 /// Autograd: tensors with [requiresGrad] = true participate in the
 /// backward graph. Every differentiable op sets `_backward` on its
@@ -80,7 +80,7 @@ class Tensor implements ffi.Finalizable {
   Tensor? get grad => _grad;
 
   /// Elementwise ops with fewer than this many elements default to CPU;
-  /// at or above, they default to GPU. See `docs/device-placement.md`.
+  /// at or above, they default to GPU. See `doc/device-placement.md`.
   static const int autoDeviceThreshold = 4096;
 
   static Device _pickDevice(int length, Device? explicit) {
@@ -152,6 +152,39 @@ class Tensor implements ffi.Finalizable {
     );
   }
 
+  /// Fast-path variant of [Tensor.fromList] that skips the
+  /// `List<double>` boxing round-trip: the input `Float32List` is
+  /// used directly for CPU tensors, and its native buffer is memcpy'd
+  /// into the FFI upload buffer for GPU tensors. Prefer this for hot
+  /// paths that already produce a `Float32List`.
+  factory Tensor.fromFloat32List(
+    List<int> shape,
+    Float32List vals, {
+    Device? device,
+    bool requiresGrad = false,
+  }) {
+    final expected = shape.reduce((a, b) => a * b);
+    if (vals.length != expected) {
+      throw ArgumentError(
+        'fromFloat32List: shape $shape expects $expected values, got '
+        '${vals.length}',
+      );
+    }
+    final dev = _pickDevice(vals.length, device);
+    if (dev == Device.CPU) {
+      return Tensor._cpu(
+        shape,
+        Float32List.fromList(vals),
+        requiresGrad: requiresGrad,
+      );
+    }
+    return Tensor._gpu(
+      shape,
+      _uploadFloat32ListToGpu(shape, vals),
+      requiresGrad: requiresGrad,
+    );
+  }
+
   /// Fill a tensor with a constant. Device defaults follow the same
   /// size-based rule as [Tensor.fromList].
   factory Tensor.fill(
@@ -185,6 +218,21 @@ class Tensor implements ffi.Finalizable {
     for (int i = 0; i < vals.length; i++) {
       ptr[i] = vals[i];
     }
+    final rows = shape[0];
+    final cols = shape.length > 1
+        ? shape.sublist(1).reduce((a, b) => a * b)
+        : 1;
+    final h = engine.createTensor(rows, cols, ptr);
+    calloc.free(ptr);
+    return h;
+  }
+
+  static ffi.Pointer<ffi.Void> _uploadFloat32ListToGpu(
+    List<int> shape,
+    Float32List vals,
+  ) {
+    final ptr = calloc<ffi.Float>(vals.length);
+    ptr.asTypedList(vals.length).setAll(0, vals);
     final rows = shape[0];
     final cols = shape.length > 1
         ? shape.sublist(1).reduce((a, b) => a * b)
@@ -296,6 +344,23 @@ class Tensor implements ffi.Finalizable {
     final ptr = calloc<ffi.Float>(length);
     engine.getTensorData(_handle!, ptr);
     final out = ptr.asTypedList(length).toList();
+    calloc.free(ptr);
+    return out;
+  }
+
+  /// Zero-boxing variant of [toList] that returns a `Float32List`. For
+  /// CPU fp32 tensors this returns a *copy* of the storage; fp16 CPU
+  /// tensors are decoded to fp32. GPU tensors incur one device→host
+  /// copy, same as [toList]. Prefer this in hot paths that immediately
+  /// re-consume the data as typed floats.
+  Float32List toFloat32List() {
+    if (device == Device.CPU) {
+      if (dtype == DType.fp16) return decodeFp16Bulk(_cpuF16Bits!);
+      return Float32List.fromList(_cpuData!);
+    }
+    final ptr = calloc<ffi.Float>(length);
+    engine.getTensorData(_handle!, ptr);
+    final out = Float32List.fromList(ptr.asTypedList(length));
     calloc.free(ptr);
     return out;
   }

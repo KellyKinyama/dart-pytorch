@@ -33,7 +33,7 @@
 ///               {q}\nAnswer:"
 ///        d. `model.generate(...)` → decode the appended tokens.
 ///
-/// Chapter 11 of [../docs/vectors/README.md](../docs/vectors/README.md)
+/// Chapter 11 of [../doc/vectors/README.md](../doc/vectors/README.md)
 /// walks through the theory; this file is the end-to-end wiring.
 ///
 /// **Quality notes.** `distilgpt2` (6 layers) is a plain LM, not

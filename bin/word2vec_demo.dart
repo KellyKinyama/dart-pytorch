@@ -39,7 +39,7 @@
 ///   --queries=w,w,w  comma-separated words to query at the end
 ///   --device=cpu|gpu run everything on CPU (default) or CUDA GPU.
 ///                    GPU requires native/lib/libmat_mul.so — see
-///                    scripts/setup_colab.sh + docs/colab.md for a
+///                    scripts/setup_colab.sh + doc/colab.md for a
 ///                    free Colab / Kaggle GPU recipe.
 ///
 /// Recipes (copy/paste ready):

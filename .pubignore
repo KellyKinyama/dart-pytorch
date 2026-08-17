@@ -1,0 +1,10 @@
+# Files excluded from the pub.dev tarball but kept in git for local dev.
+.dart_tool/
+pubspec.lock
+models/
+faces_gallery/
+data/coco_val*/
+data/coco_val_prep/
+native/lib/*.so
+native/lib/*.dll
+native/lib/*.dylib
