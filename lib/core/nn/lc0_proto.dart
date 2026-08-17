@@ -45,10 +45,24 @@ class Lc0ConvBlock {
   });
 }
 
+class Lc0SEUnit {
+  final Tensor w1;
+  final Tensor b1;
+  final Tensor w2;
+  final Tensor b2;
+  const Lc0SEUnit({
+    required this.w1,
+    required this.b1,
+    required this.w2,
+    required this.b2,
+  });
+}
+
 class Lc0Residual {
   final Lc0ConvBlock conv1;
   final Lc0ConvBlock conv2;
-  const Lc0Residual({required this.conv1, required this.conv2});
+  final Lc0SEUnit? se;
+  const Lc0Residual({required this.conv1, required this.conv2, this.se});
 }
 
 class Lc0Weights {
@@ -227,32 +241,28 @@ class Lc0Reader {
     final policyOutRaw = _rawConvWeights(d, policyF);
     final pOutParams = _paramCount(policyOutRaw);
     final policyOutPlanes = pOutParams ~/ (filters * 3 * 3);
-    final policyOut = _parseConvBlock(
-      d,
-      policyF,
-      [policyOutPlanes, filters, 3, 3],
-    );
+    final policyOut = _parseConvBlock(d, policyF, [
+      policyOutPlanes,
+      filters,
+      3,
+      3,
+    ]);
 
     // Value ConvBlock is [Vf, F, 1, 1] (1x1 conv). Recover Vf from
     // params.
     final valueConvRaw = _rawConvWeights(d, valueF);
     final vParams = _paramCount(valueConvRaw);
     final valueFilters = vParams ~/ (filters * 1 * 1);
-    final valueConv = _parseConvBlock(
-      d,
-      valueF,
-      [valueFilters, filters, 1, 1],
-    );
+    final valueConv = _parseConvBlock(d, valueF, [valueFilters, filters, 1, 1]);
 
     // ip1_val_w is [FC, Vf*64]. Recover FC.
     final ip1ValWRaw = _readInnerLayer(d, ip1ValW);
     final ip1ValWParams = _paramCount(ip1ValWRaw);
     final valueFCUnits = ip1ValWParams ~/ (valueFilters * 64);
-    final ip1ValWT = _dequantize(
-      d,
-      ip1ValWRaw,
-      [valueFCUnits, valueFilters * 64],
-    );
+    final ip1ValWT = _dequantize(d, ip1ValWRaw, [
+      valueFCUnits,
+      valueFilters * 64,
+    ]);
     final ip1ValBT = _dequantizeLayer(d, ip1ValB, [valueFCUnits]);
 
     // ip2_val_w is [WDL, FC]. WDL = 3 for WDL heads, 1 for scalar value.
@@ -275,19 +285,18 @@ class Lc0Reader {
       final mlRaw = _rawConvWeights(d, movesLeftF);
       final mlParams = _paramCount(mlRaw);
       movesLeftFilters = mlParams ~/ (filters * 1 * 1);
-      movesLeftConv = _parseConvBlock(
-        d,
-        movesLeftF,
-        [movesLeftFilters, filters, 1, 1],
-      );
+      movesLeftConv = _parseConvBlock(d, movesLeftF, [
+        movesLeftFilters,
+        filters,
+        1,
+        1,
+      ]);
       final ip1MovWRaw = _readInnerLayer(d, ip1MovW);
-      movesLeftFCUnits =
-          _paramCount(ip1MovWRaw) ~/ (movesLeftFilters * 64);
-      ip1MovWT = _dequantize(
-        d,
-        ip1MovWRaw,
-        [movesLeftFCUnits, movesLeftFilters * 64],
-      );
+      movesLeftFCUnits = _paramCount(ip1MovWRaw) ~/ (movesLeftFilters * 64);
+      ip1MovWT = _dequantize(d, ip1MovWRaw, [
+        movesLeftFCUnits,
+        movesLeftFilters * 64,
+      ]);
       ip1MovBT = _dequantizeLayer(d, ip1MovB, [movesLeftFCUnits]);
       final ip2MovWRaw = _readInnerLayer(d, ip2MovW);
       final mlOut = _paramCount(ip2MovWRaw) ~/ movesLeftFCUnits;
@@ -322,21 +331,64 @@ class Lc0Reader {
   }
 
   static Lc0Residual _parseResidual(Uint8List d, _Field rf, int filters) {
-    _Field? conv1F, conv2F;
+    _Field? conv1F, conv2F, seF;
     var i = rf.start;
     while (i < rf.end) {
       final f = _readField(d, i);
       i = f.end;
       if (f.number == 1) conv1F = f;
       if (f.number == 2) conv2F = f;
+      if (f.number == 3) seF = f;
     }
     if (conv1F == null || conv2F == null) {
       throw ArgumentError('lc0: residual missing conv1 or conv2');
     }
+    Lc0SEUnit? se;
+    if (seF != null) {
+      se = _parseSEUnit(d, seF, filters);
+    }
     return Lc0Residual(
       conv1: _parseConvBlock(d, conv1F, [filters, filters, 3, 3]),
       conv2: _parseConvBlock(d, conv2F, [filters, filters, 3, 3]),
+      se: se,
     );
+  }
+
+  // SE unit: w1 [seHidden, C], b1 [seHidden], w2 [2*C, seHidden], b2 [2*C].
+  // seHidden is inferred from w1 param count / C. LC0 stores weight
+  // matrices as [in_features * out_features] flat, with FC1 mapping
+  // C -> seHidden and FC2 mapping seHidden -> 2*C.
+  static Lc0SEUnit _parseSEUnit(Uint8List d, _Field seF, int filters) {
+    _Field? w1F, b1F, w2F, b2F;
+    var i = seF.start;
+    while (i < seF.end) {
+      final f = _readField(d, i);
+      i = f.end;
+      if (f.number == 1) w1F = f;
+      if (f.number == 2) b1F = f;
+      if (f.number == 3) w2F = f;
+      if (f.number == 4) b2F = f;
+    }
+    if (w1F == null || b1F == null || w2F == null || b2F == null) {
+      throw ArgumentError('lc0: SEunit missing w1/b1/w2/b2');
+    }
+    // Recover seHidden from w1 param count / C.
+    final w1Raw = _readInnerLayer(d, w1F);
+    final w1Params = _paramCount(w1Raw);
+    final seHidden = w1Params ~/ filters;
+    if (seHidden * filters != w1Params) {
+      throw ArgumentError(
+        'lc0: SEunit w1 params $w1Params not divisible by filters $filters',
+      );
+    }
+    // LC0 stores dense weights row-major as [in, out], so:
+    //   w1 has shape [C, seHidden]  (C inputs, seHidden outputs)
+    //   w2 has shape [seHidden, 2*C]
+    final w1 = _dequantize(d, w1Raw, [filters, seHidden]);
+    final b1 = _dequantizeLayer(d, b1F, [seHidden]);
+    final w2 = _dequantizeLayer(d, w2F, [seHidden, 2 * filters]);
+    final b2 = _dequantizeLayer(d, b2F, [2 * filters]);
+    return Lc0SEUnit(w1: w1, b1: b1, w2: w2, b2: b2);
   }
 
   static Lc0ConvBlock _parseConvBlock(

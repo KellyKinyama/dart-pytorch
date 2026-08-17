@@ -1,30 +1,19 @@
-/// LC0 classical CNN — inference-only.
+/// LC0 classical CNN (with optional SE units) — inference-only.
 ///
-/// Assembles the network described by an [Lc0Weights] value (from
-/// [Lc0Reader]) into a forward pass:
+/// Assembles the network described by an [Lc0Weights] value into a
+/// forward pass. BN is folded into the preceding conv's weights and
+/// biases at construction time, exactly matching
+/// lc0/src/neural/network_legacy.cc:
 ///
-///   input conv (3x3, 112 -> F filters) + BN + ReLU
-///   -> N residual blocks:
-///        (3x3 F -> F + BN + ReLU) + (3x3 F -> F + BN + skip + ReLU)
-///   -> policy head:  3x3 F -> F + BN + ReLU, then 3x3 F -> P (raw logits)
-///   -> value head:   1x1 F -> Vf + BN + ReLU, flatten,
-///                    FC (Vf*64 -> valueFCUnits) + ReLU,
-///                    FC (valueFCUnits -> W)
+///   new_gamma[o] = gamma[o] / sqrt(var[o] + 1e-5)
+///   new_weight[o, ...] = weight[o, ...] * new_gamma[o]
+///   new_bias[o]        = -new_gamma[o] * (mean[o] - old_bias[o]) + beta[o]
 ///
-/// The output is `(policyLogits [1, P, 8, 8], valueOrWdl [1, W])`.
-/// If `wdl == 3`, the value tensor is (win, draw, loss) softmax
-/// probabilities; if `wdl == 1`, a single scalar in [-1, 1].
-///
-/// BatchNorm at inference: `y = (x - mean) / std * gamma + beta`,
-/// where `mean`, `std`, `gamma`, `beta` are per-channel. LC0's
-/// `bn_stddivs` field stores the standard deviation as computed
-/// during training (not its inverse), so we divide.
-///
-/// Everything runs on CPU under `Tensor.noGrad`; forward on a
-/// starting position takes a few seconds on a laptop CPU because
-/// each 3x3 conv is a im2col + matmul executed in pure Dart.
+/// where the misleadingly-named `bn_stddivs` field stores per-channel
+/// VARIANCE. Residual block with SE follows se_unit.cc :: ApplySEUnit.
 library;
 
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import '../tensor/tensor.dart';
@@ -33,17 +22,11 @@ import 'lc0_proto.dart';
 import 'module.dart';
 
 class Lc0Output {
-  /// Raw policy logits, shape `[1, policyOutputPlanes, 8, 8]`.
   final Tensor policyLogits;
-
-  /// WDL probs `[1, 3]` (win, draw, loss) if `wdl == 3`, or a
-  /// scalar `[1, 1]` value in [-1, 1] if `wdl == 1`.
   final Tensor value;
 
   const Lc0Output(this.policyLogits, this.value);
 
-  /// Convenience: scalar centipawn-style estimate. For WDL heads,
-  /// `p_win - p_loss`; for scalar heads, the raw output.
   double get scalarValue {
     final v = value.toList();
     if (v.length == 3) return v[0] - v[2];
@@ -51,49 +34,68 @@ class Lc0Output {
   }
 }
 
+class _FoldedConv {
+  final Conv2d conv;
+  final Float32List bias;
+  const _FoldedConv(this.conv, this.bias);
+}
+
 class Lc0Net extends Module {
   final Lc0Weights w;
 
-  final Conv2d inputConv;
-  final List<Conv2d> resConvA;
-  final List<Conv2d> resConvB;
-  final Conv2d policy1;
-  final Conv2d policyOut;
-  final Conv2d valueConv;
+  final _FoldedConv inputConv;
+  final List<_FoldedConv> resConvA;
+  final List<_FoldedConv> resConvB;
+  final _FoldedConv policy1;
+  final _FoldedConv policyOut;
+  final _FoldedConv valueConv;
 
   Lc0Net(this.w)
-    : inputConv = _mkConv(w.input, 112, w.filters, 3, 1),
+    : inputConv = _fold(w.input, 112, w.filters, 3, 1),
       resConvA = [
-        for (final r in w.residual) _mkConv(r.conv1, w.filters, w.filters, 3, 1),
+        for (final r in w.residual) _fold(r.conv1, w.filters, w.filters, 3, 1),
       ],
       resConvB = [
-        for (final r in w.residual) _mkConv(r.conv2, w.filters, w.filters, 3, 1),
+        for (final r in w.residual) _fold(r.conv2, w.filters, w.filters, 3, 1),
       ],
-      policy1 = _mkConv(w.policy1, w.filters, w.filters, 3, 1),
-      policyOut = _mkConv(
-        w.policyOut,
-        w.filters,
-        w.policyOutputPlanes,
-        3,
-        1,
-      ),
-      valueConv = _mkConv(w.valueConv, w.filters, w.valueFilters, 1, 0);
+      policy1 = _fold(w.policy1, w.filters, w.filters, 3, 1),
+      policyOut = _fold(w.policyOut, w.filters, w.policyOutputPlanes, 3, 1),
+      valueConv = _fold(w.valueConv, w.filters, w.valueFilters, 1, 0);
 
-  static Conv2d _mkConv(
+  static _FoldedConv _fold(
     Lc0ConvBlock cb,
     int cin,
     int cout,
     int k,
     int pad,
   ) {
-    final c = Conv2d(cin, cout, kernel: k, padding: pad, bias: false);
-    c.weight.assign(cb.weights);
-    // BN below applies the per-channel scale/shift AND folds in any
-    // conv bias, so Conv2d itself carries no bias.
-    return c;
+    const eps = 1e-5;
+    final rawW = cb.weights.toList();
+    final rawB = cb.biases.toList();
+    final variance = cb.bnStddivs.toList();
+    final mean = cb.bnMeans.toList();
+    final gamma = cb.bnGammas.toList();
+    final beta = cb.bnBetas.toList();
+
+    final foldedW = Float32List(rawW.length);
+    final foldedB = Float32List(cout);
+    final inputsPerOutput = rawW.length ~/ cout;
+    for (int o = 0; o < cout; o++) {
+      final newGamma = gamma[o] / math.sqrt(variance[o] + eps);
+      final base = o * inputsPerOutput;
+      for (int i = 0; i < inputsPerOutput; i++) {
+        foldedW[base + i] = rawW[base + i] * newGamma;
+      }
+      foldedB[o] = -newGamma * (mean[o] - rawB[o]) + beta[o];
+    }
+
+    final conv = Conv2d(cin, cout, kernel: k, padding: pad, bias: false);
+    conv.weight.assign(
+      Tensor.fromList([cout, cin, k, k], foldedW.toList(), device: Device.CPU),
+    );
+    return _FoldedConv(conv, foldedB);
   }
 
-  /// Runs the whole network on a `[1, 112, 8, 8]` input tensor.
   Lc0Output call(Tensor input) {
     if (input.shape.length != 4 ||
         input.shape[0] != 1 ||
@@ -104,93 +106,145 @@ class Lc0Net extends Module {
         'Lc0Net: expected input [1, 112, 8, 8]; got ${input.shape}',
       );
     }
-
     return Tensor.noGrad(() {
-      var h = _bnRelu(inputConv(input), w.input);
+      var h = _applyBiasRelu(inputConv.conv(input), inputConv.bias);
       for (int i = 0; i < w.residual.length; i++) {
-        final skip = h;
-        h = _bnRelu(resConvA[i](h), w.residual[i].conv1);
-        h = _applyBn(resConvB[i](h), w.residual[i].conv2);
-        h = _addAndRelu(h, skip);
+        h = _residualForward(h, i);
       }
-      // Policy head.
-      final p1 = _bnRelu(policy1(h), w.policy1);
-      final policy = _applyBn(policyOut(p1), w.policyOut);
+      final p1 = _applyBiasRelu(policy1.conv(h), policy1.bias);
+      final policy = _applyBias(policyOut.conv(p1), policyOut.bias);
 
-      // Value head.
-      var v = _bnRelu(valueConv(h), w.valueConv);
-      // Flatten [1, Vf, 8, 8] -> [1, Vf*64].
+      var v = _applyBiasRelu(valueConv.conv(h), valueConv.bias);
       final vf = w.valueFilters;
       v = v.reshape([1, vf * 64]);
-      // FC1 with ReLU. LC0 stores W as [out, in], so matmul with W.T.
-      v = (v.matmul(w.ip1ValW.transpose()) + w.ip1ValB.reshape([1, w.valueFCUnits]))
-          .relu();
-      // FC2 -> WDL or scalar.
-      v = v.matmul(w.ip2ValW.transpose()) +
-          w.ip2ValB.reshape([1, w.wdl]);
+      v =
+          (v.matmul(w.ip1ValW.transpose()) +
+                  w.ip1ValB.reshape([1, w.valueFCUnits]))
+              .relu();
+      v = v.matmul(w.ip2ValW.transpose()) + w.ip2ValB.reshape([1, w.wdl]);
       if (w.wdl == 3) v = v.softmax();
-      // wdl == 1: leave as raw scalar; caller can .tanh() if it wants.
-
       return Lc0Output(policy, v);
     });
   }
 
-  Tensor _bnRelu(Tensor x, Lc0ConvBlock cb) {
-    return _applyBn(x, cb).relu();
-  }
+  Tensor _residualForward(Tensor skip, int i) {
+    var h = _applyBiasRelu(resConvA[i].conv(skip), resConvA[i].bias);
+    final h2 = resConvB[i].conv(h);
+    final conv2Bias = resConvB[i].bias;
 
-  Tensor _addAndRelu(Tensor a, Tensor b) {
-    return (a + b).relu();
-  }
-
-  Tensor _applyBn(Tensor x, Lc0ConvBlock cb) {
-    // x: [N, C, H, W]; cb.bnMeans/bnStddivs/bnGammas/bnBetas: [C].
-    //
-    // WARNING: BN interpretation for LC0's classical .pb.gz format is
-    // subtle. Different LC0 versions store `bn_stddivs` differently
-    // (sqrt(var+eps) vs 1/sqrt(var+eps) vs already-fused gamma/std),
-    // and dead channels with near-zero variance blow up (divide) or
-    // vanish (multiply) if you pick wrong. This implementation uses
-    // the "multiply by stored value" fold that matches recent
-    // lczero-training exports:
-    //   y = ((x + bias) - mean) * bn_stddivs * gamma + beta
-    // For 744706 the output magnitudes are stable and the shapes are
-    // right, but the numerical values do not match what stock LC0
-    // produces on the same position — the pipeline runs end-to-end
-    // but the BN convention almost certainly needs cross-checking
-    // against LC0's own loader C++ before this can be trusted.
-    final n = x.shape[0];
-    final c = x.shape[1];
-    final h = x.shape[2];
-    final wSp = x.shape[3];
-    if (c != cb.bnMeans.length) {
-      throw ArgumentError(
-        'BN: channel mismatch — tensor $c, BN vector ${cb.bnMeans.length}',
-      );
+    final se = w.residual[i].se;
+    if (se == null) {
+      return _addBiasAndSkipRelu(h2, conv2Bias, skip);
     }
-    final src = x.toList();
-    final mean = cb.bnMeans.toList();
-    final std = cb.bnStddivs.toList();
-    final gamma = cb.bnGammas.toList();
-    final beta = cb.bnBetas.toList();
-    final biases = cb.biases.toList();
-    final out = Float32List(src.length);
-    for (int ni = 0; ni < n; ni++) {
-      for (int ci = 0; ci < c; ci++) {
-        final m = mean[ci];
-        final s = std[ci];
-        final g = gamma[ci];
-        final bt = beta[ci];
-        final bi = biases[ci];
-        final scale = g * s;
-        final shift = bt - (m - bi) * scale;
-        final base = ((ni * c) + ci) * h * wSp;
-        for (int p = 0; p < h * wSp; p++) {
-          out[base + p] = src[base + p] * scale + shift;
-        }
+    return _seForward(h2, conv2Bias, skip, se);
+  }
+
+  // Port of lc0/src/neural/backends/blas/se_unit.cc :: ApplySEUnit,
+  // with the "activation" fixed to ReLU (classical net default).
+  Tensor _seForward(
+    Tensor h2,
+    Float32List conv2Bias,
+    Tensor skip,
+    Lc0SEUnit se,
+  ) {
+    final c = h2.shape[1];
+    const hw = 64;
+    final hData = h2.toList();
+    final sData = skip.toList();
+
+    final pool = Float32List(c);
+    for (int ch = 0; ch < c; ch++) {
+      double acc = 0;
+      final base = ch * hw;
+      for (int p = 0; p < hw; p++) {
+        acc += hData[base + p];
+      }
+      pool[ch] = acc / hw + conv2Bias[ch];
+    }
+
+    final w1 = se.w1.toList();
+    final b1 = se.b1.toList();
+    final seHidden = se.w1.shape[1];
+    final fc1 = Float32List(seHidden);
+    for (int j = 0; j < seHidden; j++) {
+      double acc = b1[j];
+      for (int ch = 0; ch < c; ch++) {
+        acc += pool[ch] * w1[ch * seHidden + j];
+      }
+      fc1[j] = acc > 0 ? acc : 0;
+    }
+
+    final w2 = se.w2.toList();
+    final b2 = se.b2.toList();
+    final twoC = 2 * c;
+    final fc2 = Float32List(twoC);
+    for (int j = 0; j < twoC; j++) {
+      double acc = b2[j];
+      for (int m = 0; m < seHidden; m++) {
+        acc += fc1[m] * w2[m * twoC + j];
+      }
+      fc2[j] = acc;
+    }
+
+    final out = Float32List(c * hw);
+    for (int ch = 0; ch < c; ch++) {
+      final gamma = 1.0 / (1.0 + math.exp(-fc2[ch]));
+      final beta = fc2[ch + c] + gamma * conv2Bias[ch];
+      final base = ch * hw;
+      for (int p = 0; p < hw; p++) {
+        final v = gamma * hData[base + p] + beta + sData[base + p];
+        out[base + p] = v > 0 ? v : 0;
       }
     }
-    return Tensor.fromList([n, c, h, wSp], out, device: Device.CPU);
+    return Tensor.fromList([1, c, 8, 8], out.toList(), device: Device.CPU);
+  }
+
+  Tensor _applyBias(Tensor x, Float32List bias) {
+    final c = x.shape[1];
+    const hw = 64;
+    final src = x.toList();
+    final out = Float32List(src.length);
+    for (int ch = 0; ch < c; ch++) {
+      final base = ch * hw;
+      final b = bias[ch];
+      for (int p = 0; p < hw; p++) {
+        out[base + p] = src[base + p] + b;
+      }
+    }
+    return Tensor.fromList(x.shape, out.toList(), device: Device.CPU);
+  }
+
+  Tensor _applyBiasRelu(Tensor x, Float32List bias) {
+    final c = x.shape[1];
+    const hw = 64;
+    final src = x.toList();
+    final out = Float32List(src.length);
+    for (int ch = 0; ch < c; ch++) {
+      final base = ch * hw;
+      final b = bias[ch];
+      for (int p = 0; p < hw; p++) {
+        final v = src[base + p] + b;
+        out[base + p] = v > 0 ? v : 0;
+      }
+    }
+    return Tensor.fromList(x.shape, out.toList(), device: Device.CPU);
+  }
+
+  Tensor _addBiasAndSkipRelu(Tensor x, Float32List bias, Tensor skip) {
+    final c = x.shape[1];
+    const hw = 64;
+    final src = x.toList();
+    final sk = skip.toList();
+    final out = Float32List(src.length);
+    for (int ch = 0; ch < c; ch++) {
+      final base = ch * hw;
+      final b = bias[ch];
+      for (int p = 0; p < hw; p++) {
+        final v = src[base + p] + b + sk[base + p];
+        out[base + p] = v > 0 ? v : 0;
+      }
+    }
+    return Tensor.fromList(x.shape, out.toList(), device: Device.CPU);
   }
 
   @override

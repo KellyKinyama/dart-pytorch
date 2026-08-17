@@ -79,7 +79,9 @@ void main() {
 
     test('rejects an 8-line FEN with a bad character', () {
       expect(
-        () => Lc0Input.fromFen('rnbqkbnZ/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w - - 0 1'),
+        () => Lc0Input.fromFen(
+          'rnbqkbnZ/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w - - 0 1',
+        ),
         throwsA(isA<ArgumentError>()),
       );
     });

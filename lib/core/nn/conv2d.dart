@@ -55,12 +55,7 @@ class Conv2d extends Module {
          seed,
        ),
        bias = bias
-           ? Tensor.fill(
-               [outChannels],
-               0.0,
-               requiresGrad: true,
-               device: device,
-             )
+           ? Tensor.fill([outChannels], 0.0, requiresGrad: true, device: device)
            : null;
 
   static Tensor _initWeight(
@@ -88,9 +83,7 @@ class Conv2d extends Module {
 
   Tensor call(Tensor x) {
     if (x.shape.length != 4) {
-      throw ArgumentError(
-        'Conv2d: expected [N, Cin, H, W]; got ${x.shape}',
-      );
+      throw ArgumentError('Conv2d: expected [N, Cin, H, W]; got ${x.shape}');
     }
     final n = x.shape[0];
     final cin = x.shape[1];
