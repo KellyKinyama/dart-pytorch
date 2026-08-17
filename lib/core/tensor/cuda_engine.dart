@@ -323,9 +323,7 @@ class CudaEngine {
   late DReluBwd absBackwardOp;
 
   CudaEngine() {
-    _lib = ffi.DynamicLibrary.open(
-      '${Directory.current.path}/native/lib/libmat_mul.so',
-    );
+    _lib = ffi.DynamicLibrary.open(_findNativeLib());
 
     createTensor = _lib.lookupFunction<CCreate, DCreate>('create_tensor');
     destroyTensor = _lib.lookupFunction<CDestroy, DDestroy>('destroy_tensor');
@@ -412,6 +410,44 @@ class CudaEngine {
     );
     absBackwardOp = _lib.lookupFunction<CReluBwd, DReluBwd>('abs_backward_op');
   }
+}
+
+/// Resolves the platform-specific native library. Search order:
+///   1. `DART_PYTORCH_NATIVE_LIB` env var (full path, wins outright).
+///   2. `<cwd>/native/lib/<name>` — the in-repo build location.
+///   3. `<executable dir>/native/lib/<name>` and `<executable dir>/<name>`
+///      — for `dart compile exe` artifacts distributed alongside the lib.
+///   4. Bare `<name>` — falls back to the OS loader search path
+///      (LD_LIBRARY_PATH / PATH / DYLD_LIBRARY_PATH).
+String _findNativeLib() {
+  final envPath = Platform.environment['DART_PYTORCH_NATIVE_LIB'];
+  if (envPath != null && envPath.isNotEmpty) return envPath;
+
+  final String name;
+  if (Platform.isWindows) {
+    name = 'mat_mul.dll';
+  } else if (Platform.isMacOS) {
+    name = 'libmat_mul.dylib';
+  } else {
+    name = 'libmat_mul.so';
+  }
+
+  final candidates = <String>[
+    '${Directory.current.path}/native/lib/$name',
+  ];
+  try {
+    final exeDir = File(Platform.resolvedExecutable).parent.path;
+    candidates
+      ..add('$exeDir/native/lib/$name')
+      ..add('$exeDir/$name');
+  } catch (_) {
+    // Platform.resolvedExecutable is unavailable in some embedders.
+  }
+
+  for (final c in candidates) {
+    if (File(c).existsSync()) return c;
+  }
+  return name;
 }
 
 final engine = CudaEngine();

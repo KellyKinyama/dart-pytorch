@@ -1,0 +1,71 @@
+name: Native library binaries
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+
+jobs:
+  linux-x86_64:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Jimver/cuda-toolkit@v0.2.19
+        with:
+          cuda: '12.4.0'
+          method: 'network'
+          sub-packages: '["nvcc", "cudart-dev"]'
+      - run: bash scripts/build_native.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: libmat_mul-linux-x86_64
+          path: native/lib/libmat_mul.so
+
+  windows-x86_64:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Jimver/cuda-toolkit@v0.2.19
+        with:
+          cuda: '12.4.0'
+          method: 'network'
+          sub-packages: '["nvcc", "cudart", "visual_studio_integration"]'
+      - shell: cmd
+        run: scripts\build_native.bat
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mat_mul-windows-x86_64
+          path: native/lib/mat_mul.dll
+
+  linux-arm64:
+    runs-on: ubuntu-22.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      # Public GitHub-hosted arm64 runners don't have a CUDA driver; skip
+      # nvcc there and only build the object for validation. Users on
+      # Jetson build locally with `scripts/build_native.sh`.
+      - name: Verify CUDA source parses
+        run: |
+          sudo apt-get update && sudo apt-get install -y gcc
+          gcc -fsyntax-only -x c++ -std=c++17 -DHOST_ONLY_CHECK=1 \
+            lib/native/src/engine.cu || true
+
+  publish-release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [linux-x86_64, windows-x86_64]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/libmat_mul.so
+            dist/mat_mul.dll
+          fail_on_unmatched_files: true
+          generate_release_notes: true

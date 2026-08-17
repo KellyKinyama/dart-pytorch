@@ -20,3 +20,4 @@ models/
 # regenerable — see `bin/_prep_coco_pairs.dart --help`).
 data/coco_val*/
 data/coco_val_prep/
+dist/
