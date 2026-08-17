@@ -91,6 +91,11 @@ class Lc0Net extends Module {
 
   final Tensor _ones64x1;
   final Tensor _avgWeights;
+  // Batched-SE broadcast matrices, lazily built per batch size.
+  //   avgB[b, b*64+s] = 1/64          — mean-pool across each batch's 64 rows
+  //   spreadB[b*64+s, b] = 1          — expand [B, C] gate to [B*64, C]
+  final Map<int, Tensor> _avgBCache = <int, Tensor>{};
+  final Map<int, Tensor> _spreadBCache = <int, Tensor>{};
 
   Lc0Net(this.w, {Device device = Device.GPU})
     : device = device,
@@ -257,35 +262,76 @@ class Lc0Net extends Module {
         'Lc0Net: expected input [1, 112, 8, 8]; got ${input.shape}',
       );
     }
+    return callBatch([input])[0];
+  }
+
+  /// Batched forward: feed `B` positions in one call, get `B` outputs.
+  ///
+  /// The conv tower runs as a single [B*64, C] matmul per layer,
+  /// which is the whole reason batching helps: matmul cost scales
+  /// close to O(B) instead of O(B) launches of a smaller kernel.
+  /// Only the SE unit's gate is serial per batch element — the
+  /// broadcast-by-matmul trick used at B=1 doesn't fold nicely
+  /// across batch rows.
+  List<Lc0Output> callBatch(List<Tensor> inputs) {
+    if (inputs.isEmpty) return const <Lc0Output>[];
+    final b = inputs.length;
+    for (final t in inputs) {
+      if (t.shape.length != 4 ||
+          t.shape[0] != 1 ||
+          t.shape[1] != 112 ||
+          t.shape[2] != 8 ||
+          t.shape[3] != 8) {
+        throw ArgumentError(
+          'Lc0Net.callBatch: each input must be [1, 112, 8, 8]; got ${t.shape}',
+        );
+      }
+    }
     return Tensor.noGrad(() {
-      final nhwc = _initialNHWC(input);
-      var h = (_convForward(nhwc, inputConv) + inputConv.bias).relu();
+      final nhwc = _initialNHWCBatch(inputs); // [B*64, 112] on device
+      var h = (_convForward(nhwc, inputConv, b) + inputConv.bias).relu();
 
       for (int i = 0; i < w.residual.length; i++) {
-        h = _residual(h, i);
+        h = _residualBatch(h, i, b);
       }
 
-      final p1 = (_convForward(h, policy1) + policy1.bias).relu();
-      final policyFlat = _convForward(p1, policyOut) + policyOut.bias;
-      // NHWC-flat [64, P] -> NCHW [1, P, 8, 8] for the caller (matches
-      // the layout LC0's policy-map table expects).
-      final policyNCHW = policyFlat.transpose().reshape([
-        1,
-        w.policyOutputPlanes,
-        8,
-        8,
-      ]);
+      final p1 = (_convForward(h, policy1, b) + policy1.bias).relu();
+      final policyFlat = _convForward(p1, policyOut, b) + policyOut.bias;
 
-      var v = (_convForward(h, valueConv) + valueConv.bias).relu();
-      // v is [64, Vf] NHWC-flat; row-major flatten to [1, 64*Vf]
-      // gives (s, c) inner ordering — matches ip1ValWT's re-ordered
-      // layout, so no transpose needed.
-      v = v.reshape([1, w.valueFilters * 64]);
+      var v = (_convForward(h, valueConv, b) + valueConv.bias).relu();
+      // v is [B*64, Vf]; row-major reshape to [B, 64*Vf] gives (s, c)
+      // inner order — matches the pre-reordered ip1ValWT layout.
+      v = v.reshape([b, w.valueFilters * 64]);
       v = (v.matmul(ip1ValWT) + ip1ValB).relu();
       v = v.matmul(ip2ValWT) + ip2ValB;
       if (w.wdl == 3) v = v.softmax();
 
-      return Lc0Output(policyNCHW, v);
+      // Split per-batch on CPU — policy is [B*64, P], value is [B, wdl].
+      final polHost = policyFlat.toList();
+      final valHost = v.toList();
+      final p = w.policyOutputPlanes;
+      final results = <Lc0Output>[];
+      for (int bi = 0; bi < b; bi++) {
+        // Extract this batch's [64, P] slice, then convert to
+        // [1, P, 8, 8] NCHW to match the caller's expectations.
+        final polNCHW = Float32List(p * 64);
+        for (int s = 0; s < 64; s++) {
+          for (int pi = 0; pi < p; pi++) {
+            polNCHW[pi * 64 + s] = polHost[(bi * 64 + s) * p + pi];
+          }
+        }
+        final valSlice = Float32List(w.wdl);
+        for (int k = 0; k < w.wdl; k++) {
+          valSlice[k] = valHost[bi * w.wdl + k];
+        }
+        results.add(
+          Lc0Output(
+            Tensor.fromList([1, p, 8, 8], polNCHW.toList(), device: Device.CPU),
+            Tensor.fromList([1, w.wdl], valSlice.toList(), device: Device.CPU),
+          ),
+        );
+      }
+      return results;
     });
   }
 
@@ -298,6 +344,18 @@ class Lc0Net extends Module {
       return ((hB + resB[i].bias) + skip).relu();
     }
     return _seForward(hB, resB[i], seU, skip);
+  }
+
+  Tensor _residualBatch(Tensor h, int i, int b) {
+    if (b == 1) return _residual(h, i);
+    final skip = h;
+    final hA = (_convForward(h, resA[i], b) + resA[i].bias).relu();
+    final hB = _convForward(hA, resB[i], b);
+    final seU = se[i];
+    if (seU == null) {
+      return ((hB + resB[i].bias) + skip).relu();
+    }
+    return _seForwardBatch(hB, resB[i], seU, skip, b);
   }
 
   Tensor _seForward(Tensor hB, _ConvGpu convB, _SEGpu seU, Tensor skip) {
@@ -319,42 +377,108 @@ class Lc0Net extends Module {
     return ((hB * gammaFull + beta) + skip).relu();
   }
 
-  Tensor _convForward(Tensor input, _ConvGpu conv) {
-    final cols = _im2colNHWC(input, conv.cin, conv.k, conv.pad);
+  // Batched SE using two sparse broadcast matrices:
+  //   avgB [B, B*64]      — per-batch mean over 64 rows
+  //   spreadB [B*64, B]   — repeat each batch's [1, C] out to [64, C]
+  // Both are cached the first time a batch size is used.
+  Tensor _seForwardBatch(
+    Tensor hB,
+    _ConvGpu convB,
+    _SEGpu seU,
+    Tensor skip,
+    int b,
+  ) {
+    final avgB = _avgBCache.putIfAbsent(b, () => _buildAvgB(b));
+    final spreadB = _spreadBCache.putIfAbsent(b, () => _buildSpreadB(b));
+
+    // pool: [B, C] = avgB [B, B*64] @ hB [B*64, C]; add per-channel bias.
+    final pool = avgB.matmul(hB) + convB.bias;
+    // FC1 + ReLU: [B, seHidden].
+    final fc1 = (pool.matmul(seU.w1) + seU.b1).relu();
+    // FC2 split: [B, C] each.
+    final gammaPre = fc1.matmul(seU.w2Gamma) + seU.b2Gamma;
+    final betaPre = fc1.matmul(seU.w2Beta) + seU.b2Beta;
+    final gamma = gammaPre.sigmoid();
+    // beta = betaPre + gamma * conv2Bias
+    //   conv2Bias is [1, C]; row-broadcast add is wired but row-broadcast
+    //   mul isn't, so broadcast conv2Bias to [B, C] via a scale matmul
+    //   (`spreadB` sums to a `[B, C]` uniform copy per batch after
+    //   we swap the participants — cleanest just to use a fresh matmul).
+    final beta = betaPre + gamma * (_batchOnes(b).matmul(convB.bias));
+    // Expand gamma and beta to [B*64, C] for the pixel-wise gate.
+    final gammaFull = spreadB.matmul(gamma);
+    final betaFull = spreadB.matmul(beta);
+    return ((hB * gammaFull + betaFull) + skip).relu();
+  }
+
+  // Cached `[B, 1]` ones for broadcasting `[1, C]` bias to `[B, C]`.
+  final Map<int, Tensor> _batchOnesCache = <int, Tensor>{};
+  Tensor _batchOnes(int b) {
+    return _batchOnesCache.putIfAbsent(
+      b,
+      () => Tensor.fill([b, 1], 1.0, device: device),
+    );
+  }
+
+  Tensor _buildAvgB(int b) {
+    final data = Float32List(b * b * 64);
+    for (int bi = 0; bi < b; bi++) {
+      final rowBase = bi * b * 64;
+      for (int s = 0; s < 64; s++) {
+        data[rowBase + bi * 64 + s] = 1.0 / 64.0;
+      }
+    }
+    return Tensor.fromList([b, b * 64], data.toList(), device: device);
+  }
+
+  Tensor _buildSpreadB(int b) {
+    final data = Float32List(b * 64 * b);
+    for (int bi = 0; bi < b; bi++) {
+      for (int s = 0; s < 64; s++) {
+        data[(bi * 64 + s) * b + bi] = 1.0;
+      }
+    }
+    return Tensor.fromList([b * 64, b], data.toList(), device: device);
+  }
+
+  Tensor _convForward(Tensor input, _ConvGpu conv, [int b = 1]) {
+    final cols = _im2colNHWC(input, conv.cin, conv.k, conv.pad, b);
     return cols.matmul(conv.wT);
   }
 
-  Tensor _im2colNHWC(Tensor input, int cin, int k, int pad) {
+  Tensor _im2colNHWC(Tensor input, int cin, int k, int pad, int b) {
     final data = input.toList();
     const w = 8;
     const h = 8;
-    final rows = h * w;
+    final rowsPerBatch = h * w;
+    final rows = b * rowsPerBatch;
     final colsWidth = cin * k * k;
     final out = Float32List(rows * colsWidth);
     var rowOff = 0;
-    for (int y = 0; y < h; y++) {
-      for (int x = 0; x < w; x++) {
-        var colOff = rowOff;
-        for (int c = 0; c < cin; c++) {
-          for (int ky = 0; ky < k; ky++) {
-            final yin = y + ky - pad;
-            for (int kx = 0; kx < k; kx++) {
-              final xin = x + kx - pad;
-              if (yin >= 0 && yin < h && xin >= 0 && xin < w) {
-                out[colOff] = data[(yin * w + xin) * cin + c];
+    for (int bi = 0; bi < b; bi++) {
+      final batchBase = bi * rowsPerBatch * cin;
+      for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+          var colOff = rowOff;
+          for (int c = 0; c < cin; c++) {
+            for (int ky = 0; ky < k; ky++) {
+              final yin = y + ky - pad;
+              for (int kx = 0; kx < k; kx++) {
+                final xin = x + kx - pad;
+                if (yin >= 0 && yin < h && xin >= 0 && xin < w) {
+                  out[colOff] = data[batchBase + (yin * w + xin) * cin + c];
+                }
+                colOff++;
               }
-              colOff++;
             }
           }
+          rowOff += colsWidth;
         }
-        rowOff += colsWidth;
       }
     }
     return Tensor.fromList([rows, colsWidth], out.toList(), device: device);
   }
 
-  // Take [1, 112, 8, 8] NCHW input and emit [64, 112] NHWC-flat on
-  // GPU (one host-side permute, then a single upload).
   Tensor _initialNHWC(Tensor input) {
     final data = input.toList();
     const c = 112, hw = 64;
@@ -365,6 +489,23 @@ class Lc0Net extends Module {
       }
     }
     return Tensor.fromList([hw, c], out.toList(), device: device);
+  }
+
+  Tensor _initialNHWCBatch(List<Tensor> inputs) {
+    if (inputs.length == 1) return _initialNHWC(inputs[0]);
+    const c = 112, hw = 64;
+    final b = inputs.length;
+    final out = Float32List(b * hw * c);
+    for (int bi = 0; bi < b; bi++) {
+      final data = inputs[bi].toList();
+      final batchOff = bi * hw * c;
+      for (int ci = 0; ci < c; ci++) {
+        for (int p = 0; p < hw; p++) {
+          out[batchOff + p * c + ci] = data[ci * hw + p];
+        }
+      }
+    }
+    return Tensor.fromList([b * hw, c], out.toList(), device: device);
   }
 
   @override
