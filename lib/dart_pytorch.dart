@@ -13,6 +13,7 @@ export 'core/nn/rms_norm.dart';
 export 'core/nn/ffn/swiglu.dart';
 export 'core/nn/embedding.dart';
 export 'core/nn/linear.dart';
+export 'core/nn/conv2d.dart';
 export 'core/nn/dropout.dart';
 export 'core/nn/attention/multi_head_attention.dart';
 export 'core/nn/attention/multi_head_cross_attention.dart';
