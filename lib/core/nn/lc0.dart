@@ -126,7 +126,11 @@ class Lc0Net extends Module {
       ),
       ip1ValWT = Tensor.fromList(
         [w.valueFilters * 64, w.valueFCUnits],
-        _transpose2d(w.ip1ValW.toList(), w.valueFCUnits, w.valueFilters * 64),
+        _ip1ValWNhwc(
+          w.ip1ValW.toList(),
+          w.valueFCUnits,
+          w.valueFilters,
+        ),
         device: device,
       ),
       ip1ValB = Tensor.fromList(
@@ -222,6 +226,27 @@ class Lc0Net extends Module {
     return out;
   }
 
+  // Re-order ip1_val_w so a natural row-major flatten of `[64, Vf]`
+  // NHWC-flat activations lines up with the weight without an
+  // extra transpose in the forward. LC0 stores the weight as
+  //   `[FCUnits, Vf*64]` in `(c, s)` inner order.
+  // After reordering to `(s, c)` and transposing we get
+  //   `[64*Vf, FCUnits]` — directly matmul-friendly for both
+  // single- and multi-batch input.
+  static Float32List _ip1ValWNhwc(List<double> src, int fcUnits, int vf) {
+    final out = Float32List(fcUnits * 64 * vf);
+    for (int o = 0; o < fcUnits; o++) {
+      for (int c = 0; c < vf; c++) {
+        for (int s = 0; s < 64; s++) {
+          // src is [fcUnits, vf * 64] with inner (c, s).
+          // wT wants (s, c) transposed to [64*Vf, fcUnits].
+          out[(s * vf + c) * fcUnits + o] = src[o * vf * 64 + c * 64 + s];
+        }
+      }
+    }
+    return out;
+  }
+
   Lc0Output call(Tensor input) {
     if (input.shape.length != 4 ||
         input.shape[0] != 1 ||
@@ -252,8 +277,10 @@ class Lc0Net extends Module {
       ]);
 
       var v = (_convForward(h, valueConv) + valueConv.bias).relu();
-      // Channel-major flatten so the FC weight layout lines up.
-      v = v.transpose().reshape([1, w.valueFilters * 64]);
+      // v is [64, Vf] NHWC-flat; row-major flatten to [1, 64*Vf]
+      // gives (s, c) inner ordering — matches ip1ValWT's re-ordered
+      // layout, so no transpose needed.
+      v = v.reshape([1, w.valueFilters * 64]);
       v = (v.matmul(ip1ValWT) + ip1ValB).relu();
       v = v.matmul(ip2ValWT) + ip2ValB;
       if (w.wdl == 3) v = v.softmax();
