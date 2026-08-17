@@ -62,13 +62,7 @@ class Lc0Net extends Module {
       policyOut = _fold(w.policyOut, w.filters, w.policyOutputPlanes, 3, 1),
       valueConv = _fold(w.valueConv, w.filters, w.valueFilters, 1, 0);
 
-  static _FoldedConv _fold(
-    Lc0ConvBlock cb,
-    int cin,
-    int cout,
-    int k,
-    int pad,
-  ) {
+  static _FoldedConv _fold(Lc0ConvBlock cb, int cin, int cout, int k, int pad) {
     const eps = 1e-5;
     final rawW = cb.weights.toList();
     final rawB = cb.biases.toList();
@@ -89,9 +83,16 @@ class Lc0Net extends Module {
       foldedB[o] = -newGamma * (mean[o] - rawB[o]) + beta[o];
     }
 
-    final conv = Conv2d(cin, cout, kernel: k, padding: pad, bias: false);
+    final conv = Conv2d(
+      cin,
+      cout,
+      kernel: k,
+      padding: pad,
+      bias: false,
+      device: Device.GPU,
+    );
     conv.weight.assign(
-      Tensor.fromList([cout, cin, k, k], foldedW.toList(), device: Device.CPU),
+      Tensor.fromList([cout, cin, k, k], foldedW.toList(), device: Device.GPU),
     );
     return _FoldedConv(conv, foldedB);
   }

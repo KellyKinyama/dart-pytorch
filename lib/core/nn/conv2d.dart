@@ -104,13 +104,11 @@ class Conv2d extends Module {
       );
     }
     if (x.device != weight.device) {
-      throw ArgumentError(
-        'Conv2d: input on ${x.device}, weight on ${weight.device}',
-      );
+      // Input can straddle devices: im2col will re-emit `cols` on
+      // `weight.device` so the matmul runs there.
     }
 
-    // im2col: expand [N, Cin, H, W] -> [N*Hout*Wout, Cin*Kh*Kw].
-    final cols = _im2colCpu(x, n, cin, h, w, hOut, wOut);
+    final cols = _im2col(x, n, cin, h, w, hOut, wOut, weight.device);
 
     // Weight [Cout, Cin, Kh, Kw] -> [Cout, Cin*Kh*Kw] -> transpose to
     // [Cin*Kh*Kw, Cout] for matmul.
@@ -131,7 +129,7 @@ class Conv2d extends Module {
     return _permuteNHWCtoNCHW(nhwc);
   }
 
-  Tensor _im2colCpu(
+  Tensor _im2col(
     Tensor x,
     int n,
     int cin,
@@ -139,11 +137,10 @@ class Conv2d extends Module {
     int w,
     int hOut,
     int wOut,
+    Device targetDevice,
   ) {
-    // Only CPU inference supported for now.
-    if (x.device != Device.CPU) {
-      throw UnsupportedError('Conv2d.im2col: GPU input not supported yet');
-    }
+    // im2col runs on the host; the result is placed on `targetDevice`
+    // so the matmul can execute on GPU when weights live there.
     final data = Tensor.noGrad(() => x.toList());
     final kh = kernelH;
     final kw = kernelW;
@@ -180,11 +177,13 @@ class Conv2d extends Module {
         }
       }
     }
-    return Tensor.fromList([rows, cols], out, device: Device.CPU);
+    return Tensor.fromList([rows, cols], out, device: targetDevice);
   }
 
   Tensor _permuteNHWCtoNCHW(Tensor t) {
-    // t: [N, H, W, C] -> [N, C, H, W] via a host-side gather.
+    // Host-side NHWC -> NCHW gather. Downstream LC0 helpers immediately
+    // download activations anyway, so we pin the output to CPU to save a
+    // round-trip.
     final n = t.shape[0];
     final h = t.shape[1];
     final w = t.shape[2];
@@ -201,7 +200,7 @@ class Conv2d extends Module {
         }
       }
     }
-    return Tensor.fromList([n, c, h, w], out, device: t.device);
+    return Tensor.fromList([n, c, h, w], out, device: Device.CPU);
   }
 
   @override
