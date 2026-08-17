@@ -74,6 +74,7 @@ class _SEGpu {
 
 class Lc0Net extends Module {
   final Lc0Weights w;
+  final Device device;
 
   final _ConvGpu inputConv;
   final List<_ConvGpu> resA;
@@ -83,61 +84,64 @@ class Lc0Net extends Module {
   final _ConvGpu policyOut;
   final _ConvGpu valueConv;
 
-  final Tensor ip1ValWT; // [Vf*64, FCUnits] on GPU
-  final Tensor ip1ValB; // [1, FCUnits] on GPU
-  final Tensor ip2ValWT; // [FCUnits, wdl] on GPU
-  final Tensor ip2ValB; // [1, wdl] on GPU
+  final Tensor ip1ValWT;
+  final Tensor ip1ValB;
+  final Tensor ip2ValWT;
+  final Tensor ip2ValB;
 
-  // Cached `[64, 1]` ones for broadcasting the SE gate to [64, C].
   final Tensor _ones64x1;
-  // Cached `[1, 64]` uniform vector for global-average pool via matmul.
   final Tensor _avgWeights;
 
-  Lc0Net(this.w)
-    : inputConv = _makeConv(w.input, 112, w.filters, 3, 1),
+  Lc0Net(this.w, {Device device = Device.GPU})
+    : device = device,
+      inputConv = _makeConv(w.input, 112, w.filters, 3, 1, device),
       resA = [
         for (final r in w.residual)
-          _makeConv(r.conv1, w.filters, w.filters, 3, 1),
+          _makeConv(r.conv1, w.filters, w.filters, 3, 1, device),
       ],
       resB = [
         for (final r in w.residual)
-          _makeConv(r.conv2, w.filters, w.filters, 3, 1),
+          _makeConv(r.conv2, w.filters, w.filters, 3, 1, device),
       ],
       se = [
         for (final r in w.residual)
-          r.se == null ? null : _makeSE(r.se!, w.filters),
+          r.se == null ? null : _makeSE(r.se!, w.filters, device),
       ],
-      policy1 = _makeConv(w.policy1, w.filters, w.filters, 3, 1),
+      policy1 = _makeConv(w.policy1, w.filters, w.filters, 3, 1, device),
       policyOut = _makeConv(
         w.policyOut,
         w.filters,
         w.policyOutputPlanes,
         3,
         1,
+        device,
       ),
-      valueConv = _makeConv(w.valueConv, w.filters, w.valueFilters, 1, 0),
+      valueConv = _makeConv(
+        w.valueConv,
+        w.filters,
+        w.valueFilters,
+        1,
+        0,
+        device,
+      ),
       ip1ValWT = Tensor.fromList(
         [w.valueFilters * 64, w.valueFCUnits],
         _transpose2d(w.ip1ValW.toList(), w.valueFCUnits, w.valueFilters * 64),
-        device: Device.GPU,
+        device: device,
       ),
       ip1ValB = Tensor.fromList(
         [1, w.valueFCUnits],
         w.ip1ValB.toList(),
-        device: Device.GPU,
+        device: device,
       ),
       ip2ValWT = Tensor.fromList(
         [w.valueFCUnits, w.wdl],
         _transpose2d(w.ip2ValW.toList(), w.wdl, w.valueFCUnits),
-        device: Device.GPU,
+        device: device,
       ),
-      ip2ValB = Tensor.fromList(
-        [1, w.wdl],
-        w.ip2ValB.toList(),
-        device: Device.GPU,
-      ),
-      _ones64x1 = Tensor.fill([64, 1], 1.0, device: Device.GPU),
-      _avgWeights = Tensor.fill([1, 64], 1.0 / 64.0, device: Device.GPU);
+      ip2ValB = Tensor.fromList([1, w.wdl], w.ip2ValB.toList(), device: device),
+      _ones64x1 = Tensor.fill([64, 1], 1.0, device: device),
+      _avgWeights = Tensor.fill([1, 64], 1.0 / 64.0, device: device);
 
   static _ConvGpu _makeConv(
     Lc0ConvBlock cb,
@@ -145,6 +149,7 @@ class Lc0Net extends Module {
     int cout,
     int k,
     int pad,
+    Device device,
   ) {
     const eps = 1e-5;
     final rawW = cb.weights.toList();
@@ -173,20 +178,12 @@ class Lc0Net extends Module {
       cout: cout,
       k: k,
       pad: pad,
-      wT: Tensor.fromList(
-        [inputsPerOutput, cout],
-        wT.toList(),
-        device: Device.GPU,
-      ),
-      bias: Tensor.fromList(
-        [1, cout],
-        foldedB.toList(),
-        device: Device.GPU,
-      ),
+      wT: Tensor.fromList([inputsPerOutput, cout], wT.toList(), device: device),
+      bias: Tensor.fromList([1, cout], foldedB.toList(), device: device),
     );
   }
 
-  static _SEGpu _makeSE(Lc0SEUnit u, int cout) {
+  static _SEGpu _makeSE(Lc0SEUnit u, int cout, Device device) {
     final w2Host = u.w2.toList();
     final seHidden = u.w2.shape[0];
     final twoC = 2 * cout;
@@ -206,28 +203,12 @@ class Lc0Net extends Module {
       bB[c] = b2Host[cout + c];
     }
     return _SEGpu(
-      w1: Tensor.fromList(u.w1.shape, u.w1.toList(), device: Device.GPU),
-      b1: Tensor.fromList([1, seHidden], u.b1.toList(), device: Device.GPU),
-      w2Gamma: Tensor.fromList(
-        [seHidden, cout],
-        wG.toList(),
-        device: Device.GPU,
-      ),
-      w2Beta: Tensor.fromList(
-        [seHidden, cout],
-        wB.toList(),
-        device: Device.GPU,
-      ),
-      b2Gamma: Tensor.fromList(
-        [1, cout],
-        bG.toList(),
-        device: Device.GPU,
-      ),
-      b2Beta: Tensor.fromList(
-        [1, cout],
-        bB.toList(),
-        device: Device.GPU,
-      ),
+      w1: Tensor.fromList(u.w1.shape, u.w1.toList(), device: device),
+      b1: Tensor.fromList([1, seHidden], u.b1.toList(), device: device),
+      w2Gamma: Tensor.fromList([seHidden, cout], wG.toList(), device: device),
+      w2Beta: Tensor.fromList([seHidden, cout], wB.toList(), device: device),
+      b2Gamma: Tensor.fromList([1, cout], bG.toList(), device: device),
+      b2Beta: Tensor.fromList([1, cout], bB.toList(), device: device),
     );
   }
 
@@ -342,7 +323,7 @@ class Lc0Net extends Module {
         rowOff += colsWidth;
       }
     }
-    return Tensor.fromList([rows, colsWidth], out.toList(), device: Device.GPU);
+    return Tensor.fromList([rows, colsWidth], out.toList(), device: device);
   }
 
   // Take [1, 112, 8, 8] NCHW input and emit [64, 112] NHWC-flat on
@@ -356,7 +337,7 @@ class Lc0Net extends Module {
         out[p * c + ci] = data[ci * hw + p];
       }
     }
-    return Tensor.fromList([hw, c], out.toList(), device: Device.GPU);
+    return Tensor.fromList([hw, c], out.toList(), device: device);
   }
 
   @override

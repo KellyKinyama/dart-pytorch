@@ -43,12 +43,17 @@ void main(List<String> args) {
     exit(64);
   }
 
-  final fen = args.isNotEmpty ? args.join(' ') : startFen;
+  // Parse --cpu / --gpu flag and remove it from the FEN args.
+  final device = args.contains('--cpu') ? Device.CPU : Device.GPU;
+  final fenArgs = args.where((a) => a != '--cpu' && a != '--gpu').toList();
+  final fen = fenArgs.isNotEmpty ? fenArgs.join(' ') : startFen;
 
-  stdout.writeln('Loading LC0 network from $_weightsPath ...');
+  stdout.writeln(
+    'Loading LC0 network from $_weightsPath on ${device.name.toUpperCase()} ...',
+  );
   final sw = Stopwatch()..start();
   final w = Lc0Reader.readFile(_weightsPath);
-  final net = Lc0Net(w);
+  final net = Lc0Net(w, device: device);
   stdout.writeln(
     '  filters=${w.filters}, blocks=${w.numBlocks}, '
     'policy planes=${w.policyOutputPlanes}, '
