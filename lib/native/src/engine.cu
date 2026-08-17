@@ -17,6 +17,7 @@
 #include "kernels/softmax.cuh"
 #include "kernels/embedding.cuh"
 #include "kernels/attention.cuh"
+#include "kernels/im2col.cuh"
 
 extern "C"
 {
@@ -127,6 +128,23 @@ extern "C"
         dim3 bl((N + 31) / 32, (M + 31) / 32);
         matmul_fwd<<<bl, th>>>(a->data_gpu, b->data_gpu, out->data_gpu,
                                M, K, N);
+        return (void *)out;
+    }
+
+    // ---------------------------------------------------------------------
+    // im2col NHWC-flat for the LC0 8x8 conv tower.
+    // ---------------------------------------------------------------------
+
+    DLLEXPORT void *im2col_nhwc_op(void *inputH, int batch, int cin,
+                                   int k, int pad)
+    {
+        Tensor *input = (Tensor *)inputH;
+        Tensor *out = new Tensor(batch * 64, cin * k * k);
+        const int total = out->size;
+        int th = 256;
+        int bl = (total + th - 1) / th;
+        im2col_nhwc_fwd<<<bl, th>>>(input->data_gpu, out->data_gpu,
+                                    batch, cin, k, pad);
         return (void *)out;
     }
 

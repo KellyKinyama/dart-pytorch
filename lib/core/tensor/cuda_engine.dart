@@ -211,6 +211,18 @@ typedef DSliceFwd =
 typedef CSliceBwd = CSliceFwd;
 typedef DSliceBwd = DSliceFwd;
 
+// im2col_nhwc_op: (input, batch, cin, k, pad) -> out
+typedef CIm2colNhwc =
+    ffi.Pointer<ffi.Void> Function(
+      ffi.Pointer<ffi.Void>,
+      ffi.Int32,
+      ffi.Int32,
+      ffi.Int32,
+      ffi.Int32,
+    );
+typedef DIm2colNhwc =
+    ffi.Pointer<ffi.Void> Function(ffi.Pointer<ffi.Void>, int, int, int, int);
+
 // relu_backward_op: (a, gO, gA) -> void.
 // gA is caller-allocated zero-init; kernel atomicAdds into it.
 typedef CReluBwd =
@@ -301,6 +313,9 @@ class CudaEngine {
   late DSliceFwd sliceTopLeftForward;
   late DSliceBwd sliceTopLeftBackward;
 
+  // im2col NHWC-flat for the LC0 conv tower.
+  late DIm2colNhwc im2colNhwc;
+
   // ReLU backward (fwd is a plain `reluTensor` above).
   late DReluBwd reluBackwardOp;
 
@@ -386,6 +401,10 @@ class CudaEngine {
     );
     sliceTopLeftBackward = _lib.lookupFunction<CSliceBwd, DSliceBwd>(
       'slice_top_left_backward',
+    );
+
+    im2colNhwc = _lib.lookupFunction<CIm2colNhwc, DIm2colNhwc>(
+      'im2col_nhwc_op',
     );
 
     reluBackwardOp = _lib.lookupFunction<CReluBwd, DReluBwd>(

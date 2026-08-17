@@ -131,11 +131,7 @@ class Lc0Net extends Module {
       ),
       ip1ValWT = Tensor.fromList(
         [w.valueFilters * 64, w.valueFCUnits],
-        _ip1ValWNhwc(
-          w.ip1ValW.toList(),
-          w.valueFCUnits,
-          w.valueFilters,
-        ),
+        _ip1ValWNhwc(w.ip1ValW.toList(), w.valueFCUnits, w.valueFilters),
         device: device,
       ),
       ip1ValB = Tensor.fromList(
@@ -447,36 +443,7 @@ class Lc0Net extends Module {
   }
 
   Tensor _im2colNHWC(Tensor input, int cin, int k, int pad, int b) {
-    final data = input.toList();
-    const w = 8;
-    const h = 8;
-    final rowsPerBatch = h * w;
-    final rows = b * rowsPerBatch;
-    final colsWidth = cin * k * k;
-    final out = Float32List(rows * colsWidth);
-    var rowOff = 0;
-    for (int bi = 0; bi < b; bi++) {
-      final batchBase = bi * rowsPerBatch * cin;
-      for (int y = 0; y < h; y++) {
-        for (int x = 0; x < w; x++) {
-          var colOff = rowOff;
-          for (int c = 0; c < cin; c++) {
-            for (int ky = 0; ky < k; ky++) {
-              final yin = y + ky - pad;
-              for (int kx = 0; kx < k; kx++) {
-                final xin = x + kx - pad;
-                if (yin >= 0 && yin < h && xin >= 0 && xin < w) {
-                  out[colOff] = data[batchBase + (yin * w + xin) * cin + c];
-                }
-                colOff++;
-              }
-            }
-          }
-          rowOff += colsWidth;
-        }
-      }
-    }
-    return Tensor.fromList([rows, colsWidth], out.toList(), device: device);
+    return input.im2colNhwc(batch: b, cin: cin, k: k, pad: pad);
   }
 
   Tensor _initialNHWC(Tensor input) {
