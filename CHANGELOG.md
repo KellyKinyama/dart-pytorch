@@ -1,3 +1,9 @@
+## 0.1.2
+
+- Formatter reflow of `native_lib_download.dart` — no API change.
+- Version constant bumped so `ensureNativeLib()` fetches
+  `v0.1.2/libmat_mul-linux-x86_64.so` from GitHub Releases.
+
 ## 0.1.1
 
 - `ensureNativeLib({version, urlBase, prompt})` auto-downloads the

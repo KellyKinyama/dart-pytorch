@@ -14,7 +14,7 @@ import 'dart:io' as io;
 /// the GitHub Releases URL. **Bump this together with `pubspec.yaml`
 /// on every release** so users pull binaries built from the same
 /// source.
-const kDartPytorchVersion = '0.1.1';
+const kDartPytorchVersion = '0.1.2';
 
 /// Prefix of the GitHub Releases URL the auto-download uses. Set
 /// `DART_PYTORCH_NATIVE_URL` at runtime to point elsewhere (mirror,

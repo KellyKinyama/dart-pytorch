@@ -4,7 +4,7 @@ description: >-
   autograd, hand-written CUDA kernels via dart:ffi, and an nn.Module
   scaffolding for Transformers, GPT, MoE, ViT, and LC0 chess-network
   inference.
-version: 0.1.1
+version: 0.1.2
 homepage: https://github.com/KellyKinyama/dart-pytorch
 repository: https://github.com/KellyKinyama/dart-pytorch
 issue_tracker: https://github.com/KellyKinyama/dart-pytorch/issues
