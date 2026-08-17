@@ -42,17 +42,14 @@ Future<String> ensureNativeLib({
   final envOverride = io.Platform.environment['DART_PYTORCH_NATIVE_LIB'];
   if (envOverride != null && envOverride.isNotEmpty) {
     if (!io.File(envOverride).existsSync()) {
-      throw StateError(
-        'DART_PYTORCH_NATIVE_LIB=$envOverride does not exist',
-      );
+      throw StateError('DART_PYTORCH_NATIVE_LIB=$envOverride does not exist');
     }
     return envOverride;
   }
 
   final assetName = _releaseAssetName();
   final localName = _localLibName();
-  final localPath =
-      '${io.Directory.current.path}/native/lib/$localName';
+  final localPath = '${io.Directory.current.path}/native/lib/$localName';
   if (io.File(localPath).existsSync()) return localPath;
 
   // Also honor an existing lib in the executable directory (i.e.
@@ -76,7 +73,8 @@ Future<String> ensureNativeLib({
   }
 
   final v = version ?? kDartPytorchVersion;
-  final base = urlBase ??
+  final base =
+      urlBase ??
       io.Platform.environment['DART_PYTORCH_NATIVE_URL'] ??
       kDefaultReleaseUrlBase;
   final url = '$base/v$v/$assetName';
@@ -91,8 +89,9 @@ Future<String> ensureNativeLib({
     }
   }
 
-  await io.Directory('${io.Directory.current.path}/native/lib')
-      .create(recursive: true);
+  await io.Directory(
+    '${io.Directory.current.path}/native/lib',
+  ).create(recursive: true);
   final client = io.HttpClient()..userAgent = 'dart_pytorch/$v';
   try {
     var current = Uri.parse(url);
@@ -144,8 +143,11 @@ Future<String> ensureNativeLib({
     // Sanity-check ELF (0x7f 45 4c 46), PE ('MZ'), or Mach-O magic
     // so we don't rename an HTML "404" page into the native slot.
     final head = await tmp.openRead(0, 4).expand((b) => b).toList();
-    final ok = head.length >= 2 &&
-        ((head[0] == 0x7f && head[1] == 0x45 && head[2] == 0x4c &&
+    final ok =
+        head.length >= 2 &&
+        ((head[0] == 0x7f &&
+                head[1] == 0x45 &&
+                head[2] == 0x4c &&
                 head[3] == 0x46) ||
             (head[0] == 0x4d && head[1] == 0x5a) ||
             (head[0] == 0xcf && head[1] == 0xfa) ||
