@@ -25,7 +25,8 @@ class Conv2d extends Module {
   final int kernelH;
   final int kernelW;
   final int stride;
-  final int padding;
+  final int paddingH;
+  final int paddingW;
 
   /// Weight shape: `[Cout, Cin, Kh, Kw]` — same as PyTorch nn.Conv2d.
   final Tensor weight;
@@ -40,12 +41,16 @@ class Conv2d extends Module {
     int? kernelH,
     int? kernelW,
     this.stride = 1,
-    this.padding = 0,
+    int padding = 0,
+    int? paddingH,
+    int? paddingW,
     bool bias = true,
     Device device = Device.CPU,
     int seed = 0,
   }) : kernelH = kernelH ?? kernel,
        kernelW = kernelW ?? kernel,
+       paddingH = paddingH ?? padding,
+       paddingW = paddingW ?? padding,
        weight = _initWeight(
          outChannels,
          inChannels,
@@ -94,13 +99,13 @@ class Conv2d extends Module {
         'Conv2d: input channels $cin != declared inChannels $inChannels',
       );
     }
-    final hOut = (h + 2 * padding - kernelH) ~/ stride + 1;
-    final wOut = (w + 2 * padding - kernelW) ~/ stride + 1;
+    final hOut = (h + 2 * paddingH - kernelH) ~/ stride + 1;
+    final wOut = (w + 2 * paddingW - kernelW) ~/ stride + 1;
     if (hOut <= 0 || wOut <= 0) {
       throw ArgumentError(
         'Conv2d: non-positive output size ${[n, outChannels, hOut, wOut]} '
         'for input ${x.shape}, kernel ${[kernelH, kernelW]}, '
-        'stride $stride, padding $padding',
+        'stride $stride, padding ${[paddingH, paddingW]}',
       );
     }
     if (x.device != weight.device) {
@@ -151,9 +156,9 @@ class Conv2d extends Module {
     for (int ni = 0; ni < n; ni++) {
       final nBase = ni * cin * h * w;
       for (int y = 0; y < hOut; y++) {
-        final yIn0 = y * stride - padding;
+        final yIn0 = y * stride - paddingH;
         for (int xo = 0; xo < wOut; xo++) {
-          final xIn0 = xo * stride - padding;
+          final xIn0 = xo * stride - paddingW;
           var colOff = rowOff;
           for (int c = 0; c < cin; c++) {
             final cBase = nBase + c * h * w;
@@ -181,9 +186,9 @@ class Conv2d extends Module {
   }
 
   Tensor _permuteNHWCtoNCHW(Tensor t) {
-    // Host-side NHWC -> NCHW gather. Downstream LC0 helpers immediately
-    // download activations anyway, so we pin the output to CPU to save a
-    // round-trip.
+    // Host-side NHWC -> NCHW gather. Output device follows the input
+    // (which is `weight.device` since the preceding matmul was there),
+    // so downstream module calls stay on-device.
     final n = t.shape[0];
     final h = t.shape[1];
     final w = t.shape[2];
@@ -200,7 +205,7 @@ class Conv2d extends Module {
         }
       }
     }
-    return Tensor.fromList([n, c, h, w], out, device: Device.CPU);
+    return Tensor.fromList([n, c, h, w], out, device: t.device);
   }
 
   @override
