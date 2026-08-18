@@ -107,11 +107,7 @@ class Lc0Input {
     _fillPlane(data, 110, 0.0);
     _fillPlane(data, 111, 1.0);
 
-    return Tensor.fromFloat32List(
-      [1, 112, 8, 8],
-      data,
-      device: Device.CPU,
-    );
+    return Tensor.fromFloat32List([1, 112, 8, 8], data, device: Device.CPU);
   }
 
   /// Parses a FEN's fields we care about and computes a lightweight

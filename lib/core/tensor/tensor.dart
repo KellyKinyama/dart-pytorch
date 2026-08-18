@@ -185,6 +185,33 @@ class Tensor implements ffi.Finalizable {
     );
   }
 
+  /// Build a GPU tensor from a raw `Pointer<Float>` of length
+  /// `shape.reduce(*)`. Zero-copy from the caller's buffer — the
+  /// bytes are handed straight to `createTensor` which does the
+  /// host→device memcpy. Useful when the input floats already live
+  /// in a shared native buffer (e.g. one shared across isolates via
+  /// its integer address).
+  ///
+  /// The caller retains ownership of [ptr] and is responsible for
+  /// freeing it after this call returns.
+  factory Tensor.fromPointer(
+    List<int> shape,
+    ffi.Pointer<ffi.Float> ptr, {
+    bool requiresGrad = false,
+  }) {
+    final n = shape.reduce((a, b) => a * b);
+    final rows = shape[0];
+    final cols = shape.length > 1
+        ? shape.sublist(1).reduce((a, b) => a * b)
+        : 1;
+    final h = engine.createTensor(rows, cols, ptr);
+    // Anchor `n` to the type inference so a caller can pass a
+    // negative/zero-length shape without hitting the createTensor
+    // memcpy with random data.
+    assert(n == rows * cols);
+    return Tensor._gpu(shape, h, requiresGrad: requiresGrad);
+  }
+
   /// Fill a tensor with a constant. Device defaults follow the same
   /// size-based rule as [Tensor.fromList].
   factory Tensor.fill(
