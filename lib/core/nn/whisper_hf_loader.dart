@@ -1,25 +1,27 @@
 /// Loader for HuggingFace `openai/whisper-*` safetensors weights.
 ///
-/// Maps HuggingFace's `model.encoder.*` naming onto the openai-whisper
-/// layout expected by [WhisperEncoder]:
+/// Maps HuggingFace's fused `q_proj`, `k_proj`, `v_proj` `[C, C]`
+/// weights onto our per-head `qHeads`, `kHeads`, `vHeads` lists
+/// (each head: `[headDim, C]`). Row split: rows `[h*headDim,
+/// (h+1)*headDim)` of the fused weight go to head `h`.
 ///
-///   HF                                                   openai
-///   -----------------------------------------------------------------
-///   model.encoder.conv1.{weight,bias}                    conv1
-///   model.encoder.conv2.{weight,bias}                    conv2
-///   model.encoder.embed_positions.weight                 positional_embedding
-///   model.encoder.layer_norm.{weight,bias}               ln_post
-///   model.encoder.layers.{i}.self_attn.q_proj.*          blocks.{i}.attn.query
-///   model.encoder.layers.{i}.self_attn.k_proj.weight     blocks.{i}.attn.key   (no bias)
-///   model.encoder.layers.{i}.self_attn.v_proj.*          blocks.{i}.attn.value
-///   model.encoder.layers.{i}.self_attn.out_proj.*        blocks.{i}.attn.out
-///   model.encoder.layers.{i}.self_attn_layer_norm.*      blocks.{i}.attn_ln
-///   model.encoder.layers.{i}.fc1.*                       blocks.{i}.mlp.0
-///   model.encoder.layers.{i}.fc2.*                       blocks.{i}.mlp.2
-///   model.encoder.layers.{i}.final_layer_norm.*          blocks.{i}.mlp_ln
+/// HF key -> our field:
 ///
-/// Decoder loading is handled by [WhisperHFLoader.loadDecoderFile] /
-/// [loadDecoderMap], with an analogous key map for `model.decoder.*`.
+///   model.encoder.conv1.{weight,bias}                 -> encoder.conv1
+///   model.encoder.conv2.{weight,bias}                 -> encoder.conv2
+///   model.encoder.embed_positions.weight              -> encoder.positionalEmbedding
+///   model.encoder.layer_norm.{weight,bias}            -> encoder.lnPost
+///   model.encoder.layers.{i}.self_attn.q_proj.*       -> block.qHeads
+///   model.encoder.layers.{i}.self_attn.k_proj.weight  -> block.kHeads
+///   model.encoder.layers.{i}.self_attn.v_proj.*       -> block.vHeads
+///   model.encoder.layers.{i}.self_attn.out_proj.*     -> block.outProj
+///   model.encoder.layers.{i}.self_attn_layer_norm.*   -> block.attnLn
+///   model.encoder.layers.{i}.fc1.*                    -> block.mlp0
+///   model.encoder.layers.{i}.fc2.*                    -> block.mlp2
+///   model.encoder.layers.{i}.final_layer_norm.*       -> block.mlpLn
+///
+/// Decoder shares the same layout with `model.decoder.*`, plus
+/// `encoder_attn.*` and `embed_tokens` / `embed_positions`.
 library;
 
 import 'dart:typed_data';
@@ -43,10 +45,6 @@ class WhisperLoadReport {
 }
 
 class WhisperHFLoader {
-  /// Load `openai/whisper-tiny.en` weights into [encoder].
-  ///
-  /// Decoder weights present in the file are recorded as "ignored"
-  /// (not "unused") so the report stays clean.
   static WhisperLoadReport loadFile(
     WhisperEncoder encoder,
     String path, {
@@ -56,9 +54,6 @@ class WhisperHFLoader {
     return loadMap(encoder, state);
   }
 
-  /// Load `openai/whisper-tiny.en` decoder weights from the same
-  /// safetensors file. Encoder tensors present in the file are
-  /// ignored.
   static WhisperLoadReport loadDecoderFile(
     WhisperDecoder decoder,
     String path, {
@@ -68,12 +63,133 @@ class WhisperHFLoader {
     return loadDecoderMap(decoder, state);
   }
 
+  static WhisperLoadReport loadMap(
+    WhisperEncoder encoder,
+    Map<String, Tensor> state,
+  ) {
+    final consumed = <String>{};
+    Tensor take(String name) {
+      final t = state[name];
+      if (t == null) {
+        throw ArgumentError('whisper loader: missing tensor "$name"');
+      }
+      consumed.add(name);
+      return t;
+    }
+
+    _loadConv(
+      encoder.conv1,
+      take('model.encoder.conv1.weight'),
+      take('model.encoder.conv1.bias'),
+      inC: encoder.nMels,
+      outC: encoder.embedDim,
+      k: 3,
+    );
+    _loadConv(
+      encoder.conv2,
+      take('model.encoder.conv2.weight'),
+      take('model.encoder.conv2.bias'),
+      inC: encoder.embedDim,
+      outC: encoder.embedDim,
+      k: 3,
+    );
+
+    final pe = take('model.encoder.embed_positions.weight');
+    _expectShape(pe, [
+      encoder.nCtx,
+      encoder.embedDim,
+    ], 'model.encoder.embed_positions.weight');
+    _assign(encoder.positionalEmbedding, pe);
+
+    for (int i = 0; i < encoder.numLayers; i++) {
+      final blk = encoder.blocks[i];
+      final p = 'model.encoder.layers.$i';
+
+      _loadFusedHeads(
+        blk.qHeads,
+        weight: take('$p.self_attn.q_proj.weight'),
+        bias: take('$p.self_attn.q_proj.bias'),
+        embedDim: encoder.embedDim,
+        numHeads: encoder.numHeads,
+      );
+      _loadFusedHeads(
+        blk.kHeads,
+        weight: take('$p.self_attn.k_proj.weight'),
+        bias: null,
+        embedDim: encoder.embedDim,
+        numHeads: encoder.numHeads,
+      );
+      _loadFusedHeads(
+        blk.vHeads,
+        weight: take('$p.self_attn.v_proj.weight'),
+        bias: take('$p.self_attn.v_proj.bias'),
+        embedDim: encoder.embedDim,
+        numHeads: encoder.numHeads,
+      );
+      _loadLinear(
+        blk.outProj,
+        weight: take('$p.self_attn.out_proj.weight'),
+        bias: take('$p.self_attn.out_proj.bias'),
+        outF: encoder.embedDim,
+        inF: encoder.embedDim,
+      );
+      _loadLayerNorm(
+        blk.attnLn,
+        weight: take('$p.self_attn_layer_norm.weight'),
+        bias: take('$p.self_attn_layer_norm.bias'),
+        dim: encoder.embedDim,
+      );
+
+      _loadLinear(
+        blk.mlp0,
+        weight: take('$p.fc1.weight'),
+        bias: take('$p.fc1.bias'),
+        outF: encoder.embedDim * 4,
+        inF: encoder.embedDim,
+      );
+      _loadLinear(
+        blk.mlp2,
+        weight: take('$p.fc2.weight'),
+        bias: take('$p.fc2.bias'),
+        outF: encoder.embedDim,
+        inF: encoder.embedDim * 4,
+      );
+      _loadLayerNorm(
+        blk.mlpLn,
+        weight: take('$p.final_layer_norm.weight'),
+        bias: take('$p.final_layer_norm.bias'),
+        dim: encoder.embedDim,
+      );
+    }
+
+    _loadLayerNorm(
+      encoder.lnPost,
+      weight: take('model.encoder.layer_norm.weight'),
+      bias: take('model.encoder.layer_norm.bias'),
+      dim: encoder.embedDim,
+    );
+
+    final unused =
+        state.keys
+            .where(
+              (k) =>
+                  !consumed.contains(k) &&
+                  !k.startsWith('model.decoder.') &&
+                  k != 'proj_out.weight',
+            )
+            .toList()
+          ..sort();
+    return WhisperLoadReport(
+      consumedCount: consumed.length,
+      unusedKeys: unused,
+    );
+  }
+
   static WhisperLoadReport loadDecoderMap(
     WhisperDecoder decoder,
     Map<String, Tensor> state,
   ) {
     final consumed = <String>{};
-
     Tensor take(String name) {
       final t = state[name];
       if (t == null) {
@@ -83,47 +199,45 @@ class WhisperHFLoader {
       return t;
     }
 
-    // ---- token + positional embedding ----
     final tokE = take('model.decoder.embed_tokens.weight');
     _expectShape(tokE, [
       decoder.vocabSize,
       decoder.embedDim,
     ], 'model.decoder.embed_tokens.weight');
-    _assign1d(decoder.tokenEmbedding.weight, tokE);
+    _assign(decoder.tokenEmbedding.weight, tokE);
 
     final posE = take('model.decoder.embed_positions.weight');
     _expectShape(posE, [
       decoder.nCtx,
       decoder.embedDim,
     ], 'model.decoder.embed_positions.weight');
-    _assign1d(decoder.positionalEmbedding, posE);
+    _assign(decoder.positionalEmbedding, posE);
 
-    // ---- per block ----
     for (int i = 0; i < decoder.numLayers; i++) {
       final blk = decoder.blocks[i];
       final p = 'model.decoder.layers.$i';
 
       // Self-attention.
-      _loadLinear(
-        blk.qProj,
+      _loadFusedHeads(
+        blk.qHeads,
         weight: take('$p.self_attn.q_proj.weight'),
         bias: take('$p.self_attn.q_proj.bias'),
-        outF: decoder.embedDim,
-        inF: decoder.embedDim,
+        embedDim: decoder.embedDim,
+        numHeads: decoder.numHeads,
       );
-      _loadLinear(
-        blk.kProj,
+      _loadFusedHeads(
+        blk.kHeads,
         weight: take('$p.self_attn.k_proj.weight'),
         bias: null,
-        outF: decoder.embedDim,
-        inF: decoder.embedDim,
+        embedDim: decoder.embedDim,
+        numHeads: decoder.numHeads,
       );
-      _loadLinear(
-        blk.vProj,
+      _loadFusedHeads(
+        blk.vHeads,
         weight: take('$p.self_attn.v_proj.weight'),
         bias: take('$p.self_attn.v_proj.bias'),
-        outF: decoder.embedDim,
-        inF: decoder.embedDim,
+        embedDim: decoder.embedDim,
+        numHeads: decoder.numHeads,
       );
       _loadLinear(
         blk.outProj,
@@ -140,26 +254,26 @@ class WhisperHFLoader {
       );
 
       // Cross-attention.
-      _loadLinear(
-        blk.crossQProj,
+      _loadFusedHeads(
+        blk.crossQHeads,
         weight: take('$p.encoder_attn.q_proj.weight'),
         bias: take('$p.encoder_attn.q_proj.bias'),
-        outF: decoder.embedDim,
-        inF: decoder.embedDim,
+        embedDim: decoder.embedDim,
+        numHeads: decoder.numHeads,
       );
-      _loadLinear(
-        blk.crossKProj,
+      _loadFusedHeads(
+        blk.crossKHeads,
         weight: take('$p.encoder_attn.k_proj.weight'),
         bias: null,
-        outF: decoder.embedDim,
-        inF: decoder.embedDim,
+        embedDim: decoder.embedDim,
+        numHeads: decoder.numHeads,
       );
-      _loadLinear(
-        blk.crossVProj,
+      _loadFusedHeads(
+        blk.crossVHeads,
         weight: take('$p.encoder_attn.v_proj.weight'),
         bias: take('$p.encoder_attn.v_proj.bias'),
-        outF: decoder.embedDim,
-        inF: decoder.embedDim,
+        embedDim: decoder.embedDim,
+        numHeads: decoder.numHeads,
       );
       _loadLinear(
         blk.crossOutProj,
@@ -198,7 +312,6 @@ class WhisperHFLoader {
       );
     }
 
-    // ---- final LayerNorm ----
     _loadLayerNorm(
       decoder.ln,
       weight: take('model.decoder.layer_norm.weight'),
@@ -222,141 +335,10 @@ class WhisperHFLoader {
     );
   }
 
-  static WhisperLoadReport loadMap(
-    WhisperEncoder encoder,
-    Map<String, Tensor> state,
-  ) {
-    final consumed = <String>{};
-
-    Tensor take(String name) {
-      final t = state[name];
-      if (t == null) {
-        throw ArgumentError('whisper loader: missing tensor "$name"');
-      }
-      consumed.add(name);
-      return t;
-    }
-
-    // ---------- conv1 / conv2 ----------
-    _loadConv(
-      encoder.conv1,
-      take('model.encoder.conv1.weight'),
-      take('model.encoder.conv1.bias'),
-      inC: encoder.nMels,
-      outC: encoder.embedDim,
-      k: 3,
-    );
-    _loadConv(
-      encoder.conv2,
-      take('model.encoder.conv2.weight'),
-      take('model.encoder.conv2.bias'),
-      inC: encoder.embedDim,
-      outC: encoder.embedDim,
-      k: 3,
-    );
-
-    // ---------- positional embedding (HF stores the sinusoids as a
-    // learned matrix). Overwriting our computed sinusoids guarantees
-    // bit-close agreement with the reference implementation.
-    final pe = take('model.encoder.embed_positions.weight');
-    _expectShape(pe, [
-      encoder.nCtx,
-      encoder.embedDim,
-    ], 'model.encoder.embed_positions.weight');
-    _assign1d(encoder.positionalEmbedding, pe);
-
-    // ---------- per-block ----------
-    for (int i = 0; i < encoder.numLayers; i++) {
-      final blk = encoder.blocks[i];
-      final p = 'model.encoder.layers.$i';
-
-      _loadLinear(
-        blk.qProj,
-        weight: take('$p.self_attn.q_proj.weight'),
-        bias: take('$p.self_attn.q_proj.bias'),
-        outF: encoder.embedDim,
-        inF: encoder.embedDim,
-      );
-      _loadLinear(
-        blk.kProj,
-        weight: take('$p.self_attn.k_proj.weight'),
-        bias: null, // Whisper's k_proj has no bias.
-        outF: encoder.embedDim,
-        inF: encoder.embedDim,
-      );
-      _loadLinear(
-        blk.vProj,
-        weight: take('$p.self_attn.v_proj.weight'),
-        bias: take('$p.self_attn.v_proj.bias'),
-        outF: encoder.embedDim,
-        inF: encoder.embedDim,
-      );
-      _loadLinear(
-        blk.outProj,
-        weight: take('$p.self_attn.out_proj.weight'),
-        bias: take('$p.self_attn.out_proj.bias'),
-        outF: encoder.embedDim,
-        inF: encoder.embedDim,
-      );
-
-      _loadLayerNorm(
-        blk.attnLn,
-        weight: take('$p.self_attn_layer_norm.weight'),
-        bias: take('$p.self_attn_layer_norm.bias'),
-        dim: encoder.embedDim,
-      );
-
-      _loadLinear(
-        blk.mlp0,
-        weight: take('$p.fc1.weight'),
-        bias: take('$p.fc1.bias'),
-        outF: encoder.embedDim * 4,
-        inF: encoder.embedDim,
-      );
-      _loadLinear(
-        blk.mlp2,
-        weight: take('$p.fc2.weight'),
-        bias: take('$p.fc2.bias'),
-        outF: encoder.embedDim,
-        inF: encoder.embedDim * 4,
-      );
-
-      _loadLayerNorm(
-        blk.mlpLn,
-        weight: take('$p.final_layer_norm.weight'),
-        bias: take('$p.final_layer_norm.bias'),
-        dim: encoder.embedDim,
-      );
-    }
-
-    _loadLayerNorm(
-      encoder.lnPost,
-      weight: take('model.encoder.layer_norm.weight'),
-      bias: take('model.encoder.layer_norm.bias'),
-      dim: encoder.embedDim,
-    );
-
-    final unused =
-        state.keys
-            .where(
-              (k) =>
-                  !consumed.contains(k) &&
-                  !k.startsWith('model.decoder.') &&
-                  k != 'proj_out.weight',
-            )
-            .toList()
-          ..sort();
-
-    return WhisperLoadReport(
-      consumedCount: consumed.length,
-      unusedKeys: unused,
-    );
-  }
-
   // ------------ per-module helpers ------------
 
   static void _loadConv(
-    dynamic conv, // Conv1d — dyn typed to avoid re-import
+    dynamic conv,
     Tensor weight,
     Tensor bias, {
     required int inC,
@@ -365,9 +347,7 @@ class WhisperHFLoader {
   }) {
     _expectShape(weight, [outC, inC, k], 'conv.weight');
     _expectShape(bias, [outC], 'conv.bias');
-    final w = _toF32(weight);
-    final b = _toF32(bias);
-    conv.loadFromPytorch(w, b);
+    conv.loadFromPytorch(_toF32(weight), _toF32(bias));
   }
 
   static void _loadLinear(
@@ -378,10 +358,9 @@ class WhisperHFLoader {
     required int inF,
   }) {
     _expectShape(weight, [outF, inF], 'linear.weight');
-    _assign2d(linear.weight, weight);
+    _assign(linear.weight, weight);
     if (bias != null) {
       _expectShape(bias, [outF], 'linear.bias');
-      // Our Linear stores bias as [1, outF]; source is [outF].
       _assignBias1xN(linear.bias, bias);
     }
   }
@@ -394,14 +373,61 @@ class WhisperHFLoader {
   }) {
     _expectShape(weight, [dim], 'ln.weight');
     _expectShape(bias, [dim], 'ln.bias');
-    _assign1d(ln.gamma, weight);
-    _assign1d(ln.beta, bias);
+    _assign(ln.gamma, weight);
+    _assign(ln.beta, bias);
+  }
+
+  /// Split HF fused `weight [C, C]` (and optional `bias [C]`) row-wise
+  /// into `numHeads` per-head Linear projections of shape
+  /// `[headDim, C]` (weight) and `[1, headDim]` (bias).
+  static void _loadFusedHeads(
+    List<dynamic> heads, {
+    required Tensor weight,
+    required Tensor? bias,
+    required int embedDim,
+    required int numHeads,
+  }) {
+    final headDim = embedDim ~/ numHeads;
+    _expectShape(weight, [embedDim, embedDim], 'fused.weight');
+    final wSrc = _toF32(weight);
+    if (bias != null) {
+      _expectShape(bias, [embedDim], 'fused.bias');
+    }
+    final bSrc = bias == null ? null : _toF32(bias);
+    for (int h = 0; h < numHeads; h++) {
+      final headLinear = heads[h];
+      // Slice rows [h*headDim, (h+1)*headDim) into a [headDim, C] chunk.
+      final wChunk = Float32List(headDim * embedDim);
+      wChunk.setRange(
+        0,
+        headDim * embedDim,
+        wSrc,
+        h * headDim * embedDim,
+      );
+      final wT = Tensor.fromFloat32List(
+        [headDim, embedDim],
+        wChunk,
+        device: Device.CPU,
+      );
+      _assign(headLinear.weight, wT);
+      if (bSrc != null) {
+        final bChunk = Float32List(headDim);
+        bChunk.setRange(0, headDim, bSrc, h * headDim);
+        final bT = Tensor.fromFloat32List(
+          [headDim],
+          bChunk,
+          device: Device.CPU,
+        );
+        _assignBias1xN(headLinear.bias, bT);
+      }
+    }
   }
 
   // ------------ tensor helpers ------------
 
   static Tensor _expectShape(Tensor t, List<int> expected, String name) {
-    if (t.shape.length != expected.length || !_shapesEqual(t.shape, expected)) {
+    if (t.shape.length != expected.length ||
+        !_shapesEqual(t.shape, expected)) {
       throw ArgumentError(
         'whisper loader: "$name" expected shape $expected, got ${t.shape}',
       );
@@ -425,12 +451,12 @@ class WhisperHFLoader {
     return out;
   }
 
-  /// Assign a rank-1 tensor `src` into a rank-1 destination `dst`
-  /// (LayerNorm gamma/beta, positional embedding rank-2 too).
-  static void _assign1d(Tensor dst, Tensor src) {
+  /// Element-count-preserving copy of `src` into `dst`, honouring
+  /// `dst`'s device (uploads to GPU as needed).
+  static void _assign(Tensor dst, Tensor src) {
     if (dst.length != src.length) {
       throw ArgumentError(
-        'whisper loader: _assign1d length mismatch — dst=${dst.shape}, '
+        'whisper loader: _assign length mismatch — dst=${dst.shape}, '
         'src=${src.shape}',
       );
     }
@@ -439,21 +465,7 @@ class WhisperHFLoader {
     dst.assign(matched);
   }
 
-  /// Assign a rank-2 weight [outF, inF] into a Linear weight of the
-  /// same shape (device-adapted).
-  static void _assign2d(Tensor dst, Tensor src) {
-    if (dst.length != src.length) {
-      throw ArgumentError(
-        'whisper loader: _assign2d length mismatch — dst=${dst.shape}, '
-        'src=${src.shape}',
-      );
-    }
-    final vals = src.toList();
-    final matched = Tensor.fromList(dst.shape, vals, device: dst.device);
-    dst.assign(matched);
-  }
-
-  /// Assign a rank-1 bias [outF] into a Linear bias stored as [1, outF].
+  /// Bias variant: source is [outF]; destination is [1, outF].
   static void _assignBias1xN(Tensor dst, Tensor src) {
     if (dst.shape.length != 2 ||
         dst.shape[0] != 1 ||

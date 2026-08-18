@@ -48,11 +48,10 @@ void main() {
         numLayers: 4,
         nCtx: 1500,
       );
-      // Per block: attn_ln(2) + mlp_ln(2) + q(2) + k(1, no bias) + v(2)
-      // + out(2) + mlp0(2) + mlp2(2) = 15.
+      // Per block: attn_ln(2) + mlp_ln(2) + q/k/v heads (2+1+2=5 per head)
+      // * 6 heads = 30 + outProj(2) + mlp0(2) + mlp2(2) = 40.
       // Plus conv1(2) + conv2(2) + ln_post(2) = 6.
-      // sinusoidal PE is a fixed buffer (not in parameters()).
-      expect(enc.parameters().length, equals(4 * 15 + 6));
+      expect(enc.parameters().length, equals(4 * 40 + 6));
     });
 
     test('sinusoidal PE has canonical Whisper values (t=0)', () {
