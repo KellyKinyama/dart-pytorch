@@ -124,8 +124,10 @@ Future<void> main(List<String> args) async {
     initialSuppress: [_spaceTok, _eot],
   );
   swGen.stop();
-  print('  ${swGen.elapsedMilliseconds} ms  → ${tokens.length} tokens '
-      '(${tokens.length - 2} sampled)');
+  print(
+    '  ${swGen.elapsedMilliseconds} ms  → ${tokens.length} tokens '
+    '(${tokens.length - 2} sampled)',
+  );
   print('  raw ids: $tokens');
 
   // Strip prefix (SOT, NOTIMESTAMPS); tokenizer decodes byte-BPE cleanly.

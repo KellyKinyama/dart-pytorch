@@ -62,19 +62,19 @@ class WhisperDecoderBlock extends Module {
     this.embedDim,
     this.numHeads, {
     Device device = Device.CPU,
-  })  : attnLn = LayerNorm(embedDim, device: device),
-        qProj = Linear(embedDim, embedDim, bias: true, device: device),
-        kProj = Linear(embedDim, embedDim, bias: false, device: device),
-        vProj = Linear(embedDim, embedDim, bias: true, device: device),
-        outProj = Linear(embedDim, embedDim, bias: true, device: device),
-        crossAttnLn = LayerNorm(embedDim, device: device),
-        crossQProj = Linear(embedDim, embedDim, bias: true, device: device),
-        crossKProj = Linear(embedDim, embedDim, bias: false, device: device),
-        crossVProj = Linear(embedDim, embedDim, bias: true, device: device),
-        crossOutProj = Linear(embedDim, embedDim, bias: true, device: device),
-        mlpLn = LayerNorm(embedDim, device: device),
-        mlp0 = Linear(embedDim, embedDim * 4, bias: true, device: device),
-        mlp2 = Linear(embedDim * 4, embedDim, bias: true, device: device);
+  }) : attnLn = LayerNorm(embedDim, device: device),
+       qProj = Linear(embedDim, embedDim, bias: true, device: device),
+       kProj = Linear(embedDim, embedDim, bias: false, device: device),
+       vProj = Linear(embedDim, embedDim, bias: true, device: device),
+       outProj = Linear(embedDim, embedDim, bias: true, device: device),
+       crossAttnLn = LayerNorm(embedDim, device: device),
+       crossQProj = Linear(embedDim, embedDim, bias: true, device: device),
+       crossKProj = Linear(embedDim, embedDim, bias: false, device: device),
+       crossVProj = Linear(embedDim, embedDim, bias: true, device: device),
+       crossOutProj = Linear(embedDim, embedDim, bias: true, device: device),
+       mlpLn = LayerNorm(embedDim, device: device),
+       mlp0 = Linear(embedDim, embedDim * 4, bias: true, device: device),
+       mlp2 = Linear(embedDim * 4, embedDim, bias: true, device: device);
 
   /// Pre-project encoder memory `xa: [B, T_audio, C]` into this
   /// block's cross-attention K and V. Must be called once per audio
@@ -168,8 +168,11 @@ class WhisperDecoderBlock extends Module {
       }
     }
 
-    final concat =
-        Tensor.fromFloat32List([b * t, c], outHost, device: x.device);
+    final concat = Tensor.fromFloat32List(
+      [b * t, c],
+      outHost,
+      device: x.device,
+    );
     final projected = outProj(concat);
     return projected.reshape([b, t, c]);
   }
@@ -182,9 +185,7 @@ class WhisperDecoderBlock extends Module {
     final scale = 1.0 / math.sqrt(headDim);
 
     if (b != _crossB) {
-      throw StateError(
-        'cross-attn batch mismatch: dec B=$b vs enc B=$_crossB',
-      );
+      throw StateError('cross-attn batch mismatch: dec B=$b vs enc B=$_crossB');
     }
     final ta = _crossT;
 
@@ -230,8 +231,11 @@ class WhisperDecoderBlock extends Module {
       }
     }
 
-    final concat =
-        Tensor.fromFloat32List([b * t, c], outHost, device: x.device);
+    final concat = Tensor.fromFloat32List(
+      [b * t, c],
+      outHost,
+      device: x.device,
+    );
     final projected = crossOutProj(concat);
     return projected.reshape([b, t, c]);
   }
@@ -257,29 +261,28 @@ class WhisperDecoderBlock extends Module {
     const a5 = 1.061405429;
     const p = 0.3275911;
     final t = 1.0 / (1.0 + p * x);
-    final y = 1.0 -
-        (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) *
-            t *
-            math.exp(-x * x);
+    final y =
+        1.0 -
+        (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * math.exp(-x * x);
     return sign * y;
   }
 
   @override
   List<Tensor> parameters() => [
-        ...attnLn.parameters(),
-        ...qProj.parameters(),
-        ...kProj.parameters(),
-        ...vProj.parameters(),
-        ...outProj.parameters(),
-        ...crossAttnLn.parameters(),
-        ...crossQProj.parameters(),
-        ...crossKProj.parameters(),
-        ...crossVProj.parameters(),
-        ...crossOutProj.parameters(),
-        ...mlpLn.parameters(),
-        ...mlp0.parameters(),
-        ...mlp2.parameters(),
-      ];
+    ...attnLn.parameters(),
+    ...qProj.parameters(),
+    ...kProj.parameters(),
+    ...vProj.parameters(),
+    ...outProj.parameters(),
+    ...crossAttnLn.parameters(),
+    ...crossQProj.parameters(),
+    ...crossKProj.parameters(),
+    ...crossVProj.parameters(),
+    ...crossOutProj.parameters(),
+    ...mlpLn.parameters(),
+    ...mlp0.parameters(),
+    ...mlp2.parameters(),
+  ];
 }
 
 class WhisperDecoder extends Module {
@@ -301,18 +304,18 @@ class WhisperDecoder extends Module {
     required this.numLayers,
     this.nCtx = 448,
     Device device = Device.CPU,
-  })  : tokenEmbedding = Embedding(vocabSize, embedDim, device: device),
-        positionalEmbedding = Tensor.fill(
-          [nCtx, embedDim],
-          0.0,
-          device: device,
-          requiresGrad: true,
-        ),
-        blocks = List.generate(
-          numLayers,
-          (_) => WhisperDecoderBlock(embedDim, numHeads, device: device),
-        ),
-        ln = LayerNorm(embedDim, device: device);
+  }) : tokenEmbedding = Embedding(vocabSize, embedDim, device: device),
+       positionalEmbedding = Tensor.fill(
+         [nCtx, embedDim],
+         0.0,
+         device: device,
+         requiresGrad: true,
+       ),
+       blocks = List.generate(
+         numLayers,
+         (_) => WhisperDecoderBlock(embedDim, numHeads, device: device),
+       ),
+       ln = LayerNorm(embedDim, device: device);
 
   /// Prime all cross-attention blocks with the encoder memory. Must
   /// be called once per audio clip before [call].
@@ -441,9 +444,9 @@ class WhisperDecoder extends Module {
 
   @override
   List<Tensor> parameters() => [
-        ...tokenEmbedding.parameters(),
-        positionalEmbedding,
-        for (final b in blocks) ...b.parameters(),
-        ...ln.parameters(),
-      ];
+    ...tokenEmbedding.parameters(),
+    positionalEmbedding,
+    for (final b in blocks) ...b.parameters(),
+    ...ln.parameters(),
+  ];
 }

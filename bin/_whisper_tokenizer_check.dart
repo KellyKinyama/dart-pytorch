@@ -5,9 +5,7 @@ library;
 import 'package:dart_pytorch/core/data/hf_bpe_tokenizer.dart';
 
 void main() {
-  final tk = HFBpeTokenizer.loadFile(
-    'models/whisper-tiny.en/tokenizer.json',
-  );
+  final tk = HFBpeTokenizer.loadFile('models/whisper-tiny.en/tokenizer.json');
   print('vocab size (base):  ${tk.vocab.length}');
 
   // Expected special IDs.
@@ -18,7 +16,9 @@ void main() {
   // Round-trip a few IDs.
   for (final id in [sot, eot, notimestamps]) {
     final s = tk.decode([id]);
-    print('  $id -> ${s.runes.map((r) => 'U+${r.toRadixString(16)}').join(",")}  as string: $s');
+    print(
+      '  $id -> ${s.runes.map((r) => 'U+${r.toRadixString(16)}').join(",")}  as string: $s',
+    );
   }
 
   // Decode a plausible sequence: "SOT NOTIMESTAMPS  hello world EOT"

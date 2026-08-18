@@ -85,19 +85,17 @@ class WhisperHFLoader {
 
     // ---- token + positional embedding ----
     final tokE = take('model.decoder.embed_tokens.weight');
-    _expectShape(
-      tokE,
-      [decoder.vocabSize, decoder.embedDim],
-      'model.decoder.embed_tokens.weight',
-    );
+    _expectShape(tokE, [
+      decoder.vocabSize,
+      decoder.embedDim,
+    ], 'model.decoder.embed_tokens.weight');
     _assign1d(decoder.tokenEmbedding.weight, tokE);
 
     final posE = take('model.decoder.embed_positions.weight');
-    _expectShape(
-      posE,
-      [decoder.nCtx, decoder.embedDim],
-      'model.decoder.embed_positions.weight',
-    );
+    _expectShape(posE, [
+      decoder.nCtx,
+      decoder.embedDim,
+    ], 'model.decoder.embed_positions.weight');
     _assign1d(decoder.positionalEmbedding, posE);
 
     // ---- per block ----
@@ -208,15 +206,16 @@ class WhisperHFLoader {
       dim: decoder.embedDim,
     );
 
-    final unused = state.keys
-        .where(
-          (k) =>
-              !consumed.contains(k) &&
-              !k.startsWith('model.encoder.') &&
-              k != 'proj_out.weight',
-        )
-        .toList()
-      ..sort();
+    final unused =
+        state.keys
+            .where(
+              (k) =>
+                  !consumed.contains(k) &&
+                  !k.startsWith('model.encoder.') &&
+                  k != 'proj_out.weight',
+            )
+            .toList()
+          ..sort();
     return WhisperLoadReport(
       consumedCount: consumed.length,
       unusedKeys: unused,
@@ -260,11 +259,10 @@ class WhisperHFLoader {
     // learned matrix). Overwriting our computed sinusoids guarantees
     // bit-close agreement with the reference implementation.
     final pe = take('model.encoder.embed_positions.weight');
-    _expectShape(
-      pe,
-      [encoder.nCtx, encoder.embedDim],
-      'model.encoder.embed_positions.weight',
-    );
+    _expectShape(pe, [
+      encoder.nCtx,
+      encoder.embedDim,
+    ], 'model.encoder.embed_positions.weight');
     _assign1d(encoder.positionalEmbedding, pe);
 
     // ---------- per-block ----------
@@ -338,15 +336,16 @@ class WhisperHFLoader {
       dim: encoder.embedDim,
     );
 
-    final unused = state.keys
-        .where(
-          (k) =>
-              !consumed.contains(k) &&
-              !k.startsWith('model.decoder.') &&
-              k != 'proj_out.weight',
-        )
-        .toList()
-      ..sort();
+    final unused =
+        state.keys
+            .where(
+              (k) =>
+                  !consumed.contains(k) &&
+                  !k.startsWith('model.decoder.') &&
+                  k != 'proj_out.weight',
+            )
+            .toList()
+          ..sort();
 
     return WhisperLoadReport(
       consumedCount: consumed.length,
@@ -402,8 +401,7 @@ class WhisperHFLoader {
   // ------------ tensor helpers ------------
 
   static Tensor _expectShape(Tensor t, List<int> expected, String name) {
-    if (t.shape.length != expected.length ||
-        !_shapesEqual(t.shape, expected)) {
+    if (t.shape.length != expected.length || !_shapesEqual(t.shape, expected)) {
       throw ArgumentError(
         'whisper loader: "$name" expected shape $expected, got ${t.shape}',
       );
