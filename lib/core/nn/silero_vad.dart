@@ -56,32 +56,64 @@ class SileroVad extends Module {
   late LSTMCell lstm;
   late Conv1d head;
 
-  SileroVad() {
+  /// Device holding all module weights and running matmuls / adds.
+  /// Element-wise CPU-only steps (magnitude, sigmoid, tanh, etc.) run
+  /// in Dart regardless — they're not on the hot path for VAD.
+  final Device device;
+
+  SileroVad({this.device = Device.CPU}) {
     stftConv = Conv1d(
       inChannels: 1,
-      outChannels: 2 * stftBins, // 258 = real ‖ imag
+      outChannels: 2 * stftBins,
       kernelSize: stftKernel,
       stride: stftStride,
       bias: false,
+      device: device,
     );
     enc0 = Conv1d(
       inChannels: stftBins,
       outChannels: 128,
       kernelSize: 3,
       padding: 1,
+      device: device,
     );
-    enc1 = Conv1d(inChannels: 128, outChannels: 64, kernelSize: 3, stride: 2, padding: 1);
-    enc2 = Conv1d(inChannels: 64, outChannels: 64, kernelSize: 3, stride: 2, padding: 1);
-    enc3 = Conv1d(inChannels: 64, outChannels: 128, kernelSize: 3, padding: 1);
-    lstm = LSTMCell(128, hiddenSize);
-    head = Conv1d(inChannels: 128, outChannels: 1, kernelSize: 1);
+    enc1 = Conv1d(
+      inChannels: 128,
+      outChannels: 64,
+      kernelSize: 3,
+      stride: 2,
+      padding: 1,
+      device: device,
+    );
+    enc2 = Conv1d(
+      inChannels: 64,
+      outChannels: 64,
+      kernelSize: 3,
+      stride: 2,
+      padding: 1,
+      device: device,
+    );
+    enc3 = Conv1d(
+      inChannels: 64,
+      outChannels: 128,
+      kernelSize: 3,
+      padding: 1,
+      device: device,
+    );
+    lstm = LSTMCell(128, hiddenSize, device: device);
+    head = Conv1d(
+      inChannels: 128,
+      outChannels: 1,
+      kernelSize: 1,
+      device: device,
+    );
   }
 
   /// Fresh zero state.
   SileroState zeroState({int batch = 1}) {
     return SileroState(
-      Tensor.fill([batch, hiddenSize], 0.0),
-      Tensor.fill([batch, hiddenSize], 0.0),
+      Tensor.fill([batch, hiddenSize], 0.0, device: device),
+      Tensor.fill([batch, hiddenSize], 0.0, device: device),
     );
   }
 
@@ -140,7 +172,7 @@ class SileroVad extends Module {
     final padded = Tensor.fromFloat32List(
       [b, 1, paddedLen],
       full,
-      device: Device.CPU,
+      device: device,
     );
 
     // STFT: [B, 258, Lstft] where Lstft = (576 - 256) / 128 + 1 = 3.
@@ -186,7 +218,7 @@ class SileroVad extends Module {
       }
       out[bi] = s / lstmSteps;
     }
-    final probOut = Tensor.fromFloat32List([b, 1], out, device: Device.CPU);
+    final probOut = Tensor.fromFloat32List([b, 1], out, device: device);
 
     // New context: last 64 samples of input.
     final newCtx = Float32List(b * contextSize);
@@ -216,7 +248,7 @@ class SileroVad extends Module {
         }
       }
     }
-    return Tensor.fromFloat32List([b, stftBins, l], mag, device: Device.CPU);
+    return Tensor.fromFloat32List([b, stftBins, l], mag, device: device);
   }
 
   Tensor _sliceTime(Tensor bcl, int t) {
@@ -231,7 +263,7 @@ class SileroVad extends Module {
         out[bi * c + ci] = src[bi * c * l + ci * l + t];
       }
     }
-    return Tensor.fromFloat32List([b, c], out, device: Device.CPU);
+    return Tensor.fromFloat32List([b, c], out, device: device);
   }
 
   Tensor _stackTime(List<Tensor> steps, int b, int c, int l) {
@@ -244,7 +276,7 @@ class SileroVad extends Module {
         }
       }
     }
-    return Tensor.fromFloat32List([b, c, l], out, device: Device.CPU);
+    return Tensor.fromFloat32List([b, c, l], out, device: device);
   }
 
   Tensor _sigmoidTensor(Tensor t) {
@@ -256,7 +288,7 @@ class SileroVad extends Module {
           ? 1.0 / (1.0 + math.exp(-x))
           : (math.exp(x) / (1.0 + math.exp(x)));
     }
-    return Tensor.fromFloat32List(t.shape, out, device: Device.CPU);
+    return Tensor.fromFloat32List(t.shape, out, device: device);
   }
 
   @override

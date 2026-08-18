@@ -24,6 +24,7 @@ import 'module.dart';
 class LSTMCell extends Module {
   final int inputSize;
   final int hiddenSize;
+  final Device device;
 
   /// `[inputSize, 4*hiddenSize]` — already transposed from PyTorch's
   /// `weight_ih` shape `[4*hidden, input]`.
@@ -36,11 +37,13 @@ class LSTMCell extends Module {
   /// small speed win (they're always added together in the gate sum).
   late Tensor biasSum;
 
-  LSTMCell(this.inputSize, this.hiddenSize) {
+  LSTMCell(this.inputSize, this.hiddenSize, {this.device = Device.CPU}) {
     final g = 4 * hiddenSize;
-    weightIhT = Tensor.fill([inputSize, g], 0.0, requiresGrad: true);
-    weightHhT = Tensor.fill([hiddenSize, g], 0.0, requiresGrad: true);
-    biasSum = Tensor.fill([1, g], 0.0, requiresGrad: true);
+    weightIhT = Tensor.fill([inputSize, g], 0.0,
+        device: device, requiresGrad: true);
+    weightHhT = Tensor.fill([hiddenSize, g], 0.0,
+        device: device, requiresGrad: true);
+    biasSum = Tensor.fill([1, g], 0.0, device: device, requiresGrad: true);
   }
 
   /// Load PyTorch-style weights: `weight_ih` `[4H, I]`, `weight_hh`
@@ -86,19 +89,19 @@ class LSTMCell extends Module {
     weightIhT = Tensor.fromFloat32List(
       [inputSize, g],
       wIhT,
-      device: Device.CPU,
+      device: device,
       requiresGrad: weightIhT.requiresGrad,
     );
     weightHhT = Tensor.fromFloat32List(
       [hiddenSize, g],
       wHhT,
-      device: Device.CPU,
+      device: device,
       requiresGrad: weightHhT.requiresGrad,
     );
     biasSum = Tensor.fromFloat32List(
       [1, g],
       bSum,
-      device: Device.CPU,
+      device: device,
       requiresGrad: biasSum.requiresGrad,
     );
   }
@@ -157,12 +160,12 @@ class LSTMCell extends Module {
     final cNext = Tensor.fromFloat32List(
       [b, hiddenSize],
       cNextData,
-      device: Device.CPU,
+      device: device,
     );
     final hNext = Tensor.fromFloat32List(
       [b, hiddenSize],
       hNextData,
-      device: Device.CPU,
+      device: device,
     );
     return (h: hNext, c: cNext);
   }

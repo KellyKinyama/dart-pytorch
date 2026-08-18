@@ -29,6 +29,7 @@ class Conv1d extends Module {
   final int kernelSize;
   final int stride;
   final int padding;
+  final Device device;
 
   /// Kernel weights, stored as `[Cin*K, Cout]` (already transposed
   /// for the matmul fast path). External loaders that receive the
@@ -46,20 +47,23 @@ class Conv1d extends Module {
     this.stride = 1,
     this.padding = 0,
     bool bias = true,
+    this.device = Device.CPU,
   }) {
     weightMat = Tensor.fill(
       [inChannels * kernelSize, outChannels],
       0.0,
+      device: device,
       requiresGrad: true,
     );
     biasVec = bias
-        ? Tensor.fill([1, outChannels], 0.0, requiresGrad: true)
+        ? Tensor.fill([1, outChannels], 0.0, device: device, requiresGrad: true)
         : null;
   }
 
   /// Load a PyTorch-layout kernel `[Cout, Cin, K]` and (optional) bias
   /// `[Cout]` into this module. Transposes the kernel into the
-  /// `[Cin*K, Cout]` matmul layout on the fly.
+  /// `[Cin*K, Cout]` matmul layout on the fly, keeping storage on
+  /// this module's [device].
   void loadFromPytorch(Float32List kernel, Float32List? bias) {
     final expected = outChannels * inChannels * kernelSize;
     if (kernel.length != expected) {
@@ -80,7 +84,7 @@ class Conv1d extends Module {
     weightMat = Tensor.fromFloat32List(
       [inChannels * kernelSize, outChannels],
       out,
-      device: Device.CPU,
+      device: device,
       requiresGrad: weightMat.requiresGrad,
     );
     if (bias != null) {
@@ -96,15 +100,16 @@ class Conv1d extends Module {
       biasVec = Tensor.fromFloat32List(
         [1, outChannels],
         Float32List.fromList(bias),
-        device: Device.CPU,
+        device: device,
         requiresGrad: biasVec!.requiresGrad,
       );
     }
   }
 
-  /// Forward pass. Accepts a 3-D tensor `[batch, Cin, L]` on CPU and
-  /// returns `[batch, Cout, Lout]` where
-  ///   Lout = (L + 2*padding - kernelSize) / stride + 1.
+  /// Forward pass. Accepts a 3-D tensor `[batch, Cin, L]` (any
+  /// device — im2col always runs on CPU, then the packed columns
+  /// are uploaded to the weight's device for the matmul). Returns
+  /// `[batch, Cout, Lout]` on the same device as the weights.
   Tensor call(Tensor input) {
     if (input.shape.length != 3) {
       throw ArgumentError('Conv1d expects [B, Cin, L]; got ${input.shape}');
@@ -125,7 +130,7 @@ class Conv1d extends Module {
     }
 
     final cols = _im2col1d(input, b, l, lOut);
-    var out = cols.matmul(weightMat); // [B*Lout, Cout]
+    var out = cols.matmul(weightMat); // [B*Lout, Cout] on `device`
     if (biasVec != null) out = out + biasVec!;
 
     // Reshape [B*Lout, Cout] -> [B, Cout, Lout] via [B, Lout, Cout] transpose.
@@ -155,7 +160,7 @@ class Conv1d extends Module {
     return Tensor.fromFloat32List(
       [b * lOut, inChannels * kernelSize],
       cols,
-      device: Device.CPU,
+      device: device,
     );
   }
 
@@ -169,7 +174,7 @@ class Conv1d extends Module {
         }
       }
     }
-    return Tensor.fromFloat32List([b, c, l], out, device: Device.CPU);
+    return Tensor.fromFloat32List([b, c, l], out, device: device);
   }
 
   @override

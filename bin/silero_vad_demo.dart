@@ -90,7 +90,8 @@ Future<void> main(List<String> args) async {
       speechStart = -1;
     }
   }
-  if (speechStart >= 0) speechSpans.add([speechStart, chunks * SileroVad.chunkSize / 16000.0]);
+  if (speechStart >= 0)
+    speechSpans.add([speechStart, chunks * SileroVad.chunkSize / 16000.0]);
 
   stdout.writeln('\nDetected speech spans (threshold p ≥ $threshold):');
   if (speechSpans.isEmpty) {
