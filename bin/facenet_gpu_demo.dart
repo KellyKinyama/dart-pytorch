@@ -49,16 +49,8 @@ Future<void> main(List<String> args) async {
   print('== read input ==');
   final bytes = File(inputPath).readAsBytesSync();
   const expectN = 3 * 160 * 160;
-  final input = Float32List.view(
-    bytes.buffer,
-    bytes.offsetInBytes,
-    expectN,
-  );
-  final xT = Tensor.fromFloat32List(
-    [1, 3, 160, 160],
-    input,
-    device: device,
-  );
+  final input = Float32List.view(bytes.buffer, bytes.offsetInBytes, expectN);
+  final xT = Tensor.fromFloat32List([1, 3, 160, 160], input, device: device);
 
   print('');
   print('== forward (GPU) ==');
@@ -75,8 +67,10 @@ Future<void> main(List<String> args) async {
     if (v > mx) mx = v;
   }
   final norm = _sqrt(sq);
-  print('  norm=${norm.toStringAsFixed(6)}  '
-      'min=${mn.toStringAsFixed(4)}  max=${mx.toStringAsFixed(4)}');
+  print(
+    '  norm=${norm.toStringAsFixed(6)}  '
+    'min=${mn.toStringAsFixed(4)}  max=${mx.toStringAsFixed(4)}',
+  );
   print('  first 5: ${e.take(5).map((v) => v.toStringAsFixed(6)).toList()}');
 
   if (File(refPath).existsSync()) {

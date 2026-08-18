@@ -21,6 +21,7 @@ fix so the CUDA driver stub is found. Drop it on native Linux.
 | F1 | facenet-vggface2 | 39M   | CPU    | n/a     | [bin/facenet_demo.dart](bin/facenet_demo.dart) |
 | F2 | facenet-vggface2 | 39M   | GPU    | n/a     | [bin/facenet_gpu_demo.dart](bin/facenet_gpu_demo.dart) |
 | F3 | facenet-vggface2 | 39M   | CPU/GPU | n/a    | [bin/facenet_verify_demo.dart](bin/facenet_verify_demo.dart) — face pair verification |
+| F4 | facenet-vggface2 | 39M   | CPU/GPU | n/a    | [bin/facenet_finetune_demo.dart](bin/facenet_finetune_demo.dart) — head-only triplet fine-tune |
 
 All `tokenizer.json` files are already downloaded under
 `models/<name>/`, so every command below runs fully offline — no
@@ -1164,17 +1165,6 @@ dart run bin/facenet_verify_demo.dart --gpu \
     path/to/anchor.jpg path/to/candidate1.jpg path/to/candidate2.jpg
 ```
 
-### Tests
-
-```sh
-# Fast structural + bit-exact CPU forward (~6 s):
-dart test test/facenet_test.dart
-
-# GPU cosine > 0.999 vs oracle (~4 s):
-LD_LIBRARY_PATH=/usr/lib/wsl/lib \
-  dart test test/facenet_gpu_test.dart
-```
-
 ### Fine-tuning
 
 BN is folded at load time, so the whole conv backbone is a fixed
@@ -1203,9 +1193,70 @@ Full-backbone fine-tuning (backpropagating *through* Conv2d layers)
 needs a native `conv2d_backward` — separate follow-up. See the
 "Fine-tuning" section of [doc/facenet.md](doc/facenet.md).
 
+### F4. facenet_finetune_demo.dart — head-only triplet fine-tune
+
+Runs the recipe above end-to-end on real gallery images. Freezes
+everything except `lastLinear.weight`, precomputes the frozen 1792-d
+`pooled` features for every image once, then loops triplet loss +
+Adam over sampled anchor/positive/negative triplets. Prints
+same-person and cross-person mean cosine before and after training.
+
+```sh
+LD_LIBRARY_PATH=/usr/lib/wsl/lib \
+  dart run bin/facenet_finetune_demo.dart --gpu \
+    --identities 4 --per-id 4 --steps 60 \
+    --margin 2.0 --lr 5e-3
+```
+
+Measured on `faces_gallery/` (4 identities × 4 images, RTX 3060):
+
+```
+froze 265 params, training 1: lastLinear.weight [512, 1792]
+...
+== metrics BEFORE ==
+  same-person   pairs=24   mean cosine=0.6922
+  cross-person  pairs=96   mean cosine=0.0624
+== fine-tune lastLinear.weight (60 steps, lr=0.005, margin=2.0) ==
+  step   6  loss(avg last 6)=0.5985
+  step  12  loss(avg last 6)=0.0387
+  ...
+  step  60  loss(avg last 6)=0.0000
+== metrics AFTER ==
+  same-person   pairs=24   mean cosine=0.9524
+  cross-person  pairs=96   mean cosine=-0.3091
+== summary ==
+  same-person mean cosine    0.6922 → 0.9524  (Δ +0.26)
+  cross-person mean cosine   0.0624 → -0.3091 (Δ -0.37)
+  gap (higher = better)      0.6298 → 1.2615  (Δ +0.63)
+```
+
+Same-person embeddings tighten, different-person embeddings push
+apart, the decision gap doubles — proof the head-only autograd path
+is working. Bit-identical loss trajectory on CPU and GPU
+(training-loop wall: 9.6 s CPU / 7.5 s GPU on this dataset; the
+precompute step dominates total wall).
+
+`test/facenet_test.dart` also carries two independent regression
+tests: one asserts that `lastLinear.weight.grad` is non-null with
+non-zero magnitude after a single `.backward()`, and another that
+Adam actually reduces a fabricated loss. Both pass in ~10 s.
+
+### Tests
+
+```sh
+# Structural + bit-exact CPU forward + fine-tune autograd checks
+# (~15 s):
+dart test test/facenet_test.dart
+
+# GPU cosine > 0.999 vs oracle (~4 s):
+LD_LIBRARY_PATH=/usr/lib/wsl/lib \
+  dart test test/facenet_gpu_test.dart
+```
+
 Sources: [bin/facenet_demo.dart](bin/facenet_demo.dart),
 [bin/facenet_gpu_demo.dart](bin/facenet_gpu_demo.dart),
 [bin/facenet_verify_demo.dart](bin/facenet_verify_demo.dart),
+[bin/facenet_finetune_demo.dart](bin/facenet_finetune_demo.dart),
 [lib/core/nn/vision/facenet.dart](lib/core/nn/vision/facenet.dart),
 [lib/core/nn/vision/facenet_loader.dart](lib/core/nn/vision/facenet_loader.dart),
 [lib/core/nn/vision/conv_bn_fold.dart](lib/core/nn/vision/conv_bn_fold.dart),

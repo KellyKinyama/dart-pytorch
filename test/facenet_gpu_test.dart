@@ -15,11 +15,16 @@ const _refRawPath = '/tmp/facenet_ref.raw';
 
 void main() {
   group('FaceNet end-to-end (GPU)', () {
-    final hasAll = File(_weightsPath).existsSync() &&
+    final hasAll =
+        File(_weightsPath).existsSync() &&
         File(_inputRawPath).existsSync() &&
         File(_refRawPath).existsSync();
     if (!hasAll) {
-      test('assets missing → skipped', () {}, skip: 'run facenet CPU test first');
+      test(
+        'assets missing → skipped',
+        () {},
+        skip: 'run facenet CPU test first',
+      );
       return;
     }
 

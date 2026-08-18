@@ -89,10 +89,12 @@ Future<void> main(List<String> args) async {
       final tag = c >= 0.4
           ? 'SAME     '
           : c >= 0.25
-              ? 'unclear  '
-              : 'DIFFERENT';
-      print('  $tag  ${c.toStringAsFixed(4)}   '
-          '${_lbl(paths[i])}  ↔  ${_lbl(paths[j])}');
+          ? 'unclear  '
+          : 'DIFFERENT';
+      print(
+        '  $tag  ${c.toStringAsFixed(4)}   '
+        '${_lbl(paths[i])}  ↔  ${_lbl(paths[j])}',
+      );
     }
   }
 

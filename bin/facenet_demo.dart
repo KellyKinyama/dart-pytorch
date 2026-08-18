@@ -65,15 +65,13 @@ Future<void> main(List<String> args) async {
   final bytes = File(inputPath).readAsBytesSync();
   const expectN = 3 * 160 * 160;
   if (bytes.lengthInBytes != expectN * 4) {
-    stderr.writeln('input must be $expectN fp32 (${expectN * 4} bytes); '
-        'got ${bytes.lengthInBytes}');
+    stderr.writeln(
+      'input must be $expectN fp32 (${expectN * 4} bytes); '
+      'got ${bytes.lengthInBytes}',
+    );
     exit(2);
   }
-  final input = Float32List.view(
-    bytes.buffer,
-    bytes.offsetInBytes,
-    expectN,
-  );
+  final input = Float32List.view(bytes.buffer, bytes.offsetInBytes, expectN);
   final xT = Tensor.fromFloat32List([1, 3, 160, 160], input);
   print('  loaded  [1, 3, 160, 160]  $inputPath');
 
@@ -92,8 +90,10 @@ Future<void> main(List<String> args) async {
     if (v > mx) mx = v;
   }
   final norm = _sqrt(sq);
-  print('  norm=${norm.toStringAsFixed(6)}  '
-      'min=${mn.toStringAsFixed(4)}  max=${mx.toStringAsFixed(4)}');
+  print(
+    '  norm=${norm.toStringAsFixed(6)}  '
+    'min=${mn.toStringAsFixed(4)}  max=${mx.toStringAsFixed(4)}',
+  );
   print('  first 5: ${e.take(5).map((v) => v.toStringAsFixed(6)).toList()}');
 
   if (File(refPath).existsSync()) {
@@ -119,7 +119,9 @@ Future<void> main(List<String> args) async {
       print('  cosine     = ${dot.toStringAsFixed(6)}');
       print('  mean |Δ|   = ${(absSum / ref.length).toStringAsFixed(6)}');
       print('  max  |Δ|   = ${absMax.toStringAsFixed(6)}');
-      print('  first 5 ref: ${ref.take(5).map((v) => v.toStringAsFixed(6)).toList()}');
+      print(
+        '  first 5 ref: ${ref.take(5).map((v) => v.toStringAsFixed(6)).toList()}',
+      );
     }
   }
 

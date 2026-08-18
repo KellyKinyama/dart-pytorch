@@ -176,8 +176,8 @@ class FaceNetLoader {
       offsetDst: model.lastBnOffset,
     );
 
-    final unused =
-        state.keys.where((k) => !consumed.contains(k)).toList()..sort();
+    final unused = state.keys.where((k) => !consumed.contains(k)).toList()
+      ..sort();
     return FaceNetLoadReport(
       consumedCount: consumed.length,
       unusedKeys: unused,
