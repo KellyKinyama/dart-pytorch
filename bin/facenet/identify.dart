@@ -103,7 +103,9 @@ Future<void> main(List<String> args) async {
   print('');
   print('== embed gallery ==');
   final gallery = scanGallery(galleryPath, perId: perId);
-  final total = gallery.values.map((v) => v.length).fold<int>(0, (a, b) => a + b);
+  final total = gallery.values
+      .map((v) => v.length)
+      .fold<int>(0, (a, b) => a + b);
   final swG = Stopwatch()..start();
   final entries = <_ScoredEntry>[];
   for (final entry in gallery.entries) {
@@ -114,8 +116,10 @@ Future<void> main(List<String> args) async {
     }
   }
   swG.stop();
-  print('  ${swG.elapsedMilliseconds} ms  ($total images, '
-      '${gallery.length} identities)');
+  print(
+    '  ${swG.elapsedMilliseconds} ms  ($total images, '
+    '${gallery.length} identities)',
+  );
 
   entries.sort((a, b) => b.score.compareTo(a.score));
 
@@ -124,8 +128,10 @@ Future<void> main(List<String> args) async {
   for (int i = 0; i < top && i < entries.length; i++) {
     final e = entries[i];
     final tag = e.score >= threshold ? 'SAME     ' : 'DIFFERENT';
-    print('  $tag  cos=${e.score.toStringAsFixed(4)}   '
-        '${prettyLabel(e.path)}');
+    print(
+      '  $tag  cos=${e.score.toStringAsFixed(4)}   '
+      '${prettyLabel(e.path)}',
+    );
   }
 
   // Per-identity mean cosine.
@@ -135,10 +141,11 @@ Future<void> main(List<String> args) async {
     perIdScore[e.id] = (perIdScore[e.id] ?? 0.0) + e.score;
     perIdCount[e.id] = (perIdCount[e.id] ?? 0) + 1;
   }
-  final idScores = perIdScore.entries
-      .map((e) => MapEntry(e.key, e.value / perIdCount[e.key]!))
-      .toList()
-    ..sort((a, b) => b.value.compareTo(a.value));
+  final idScores =
+      perIdScore.entries
+          .map((e) => MapEntry(e.key, e.value / perIdCount[e.key]!))
+          .toList()
+        ..sort((a, b) => b.value.compareTo(a.value));
 
   print('');
   print('== identity ranking (mean cosine across all samples) ==');
@@ -152,11 +159,15 @@ Future<void> main(List<String> args) async {
   final winner = idScores.first;
   print('');
   if (winner.value >= threshold) {
-    print('== match: ${winner.key} '
-        '(cos=${winner.value.toStringAsFixed(4)}) ==');
+    print(
+      '== match: ${winner.key} '
+      '(cos=${winner.value.toStringAsFixed(4)}) ==',
+    );
   } else {
-    print('== no match  (best: ${winner.key} '
-        'cos=${winner.value.toStringAsFixed(4)}, threshold=$threshold) ==');
+    print(
+      '== no match  (best: ${winner.key} '
+      'cos=${winner.value.toStringAsFixed(4)}, threshold=$threshold) ==',
+    );
   }
 
   swTotal.stop();

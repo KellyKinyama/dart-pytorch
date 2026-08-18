@@ -134,11 +134,7 @@ Future<void> _enroll(List<String> args) async {
         sum[k] /= norm;
       }
     }
-    (db['entries'] as List).add({
-      'id': id,
-      'samples': used,
-      'embedding': sum,
-    });
+    (db['entries'] as List).add({'id': id, 'samples': used, 'embedding': sum});
     print('  enrolled  $id  ($used samples)');
   }
   sw.stop();
@@ -199,16 +195,20 @@ Future<void> _query(List<String> args) async {
   final device = useGpu ? Device.GPU : Device.CPU;
 
   print('== load DB ==');
-  final db = jsonDecode(File(dbPath).readAsStringSync()) as Map<String, dynamic>;
+  final db =
+      jsonDecode(File(dbPath).readAsStringSync()) as Map<String, dynamic>;
   final entries = (db['entries'] as List)
       .cast<Map<String, dynamic>>()
-      .map((e) => _DbEntry(
-            id: e['id'] as String,
-            samples: e['samples'] as int,
-            embedding: (e['embedding'] as List).cast<num>()
-                .map((v) => v.toDouble())
-                .toList(),
-          ))
+      .map(
+        (e) => _DbEntry(
+          id: e['id'] as String,
+          samples: e['samples'] as int,
+          embedding: (e['embedding'] as List)
+              .cast<num>()
+              .map((v) => v.toDouble())
+              .toList(),
+        ),
+      )
       .toList();
   print('  $dbPath  (${entries.length} identities, dim=${db['dim']})');
 
@@ -222,10 +222,9 @@ Future<void> _query(List<String> args) async {
   sw.stop();
   print('  ${sw.elapsedMilliseconds} ms  $imagePath');
 
-  final scored = entries
-      .map((e) => MapEntry(e, cosine(qEmb, e.embedding)))
-      .toList()
-    ..sort((a, b) => b.value.compareTo(a.value));
+  final scored =
+      entries.map((e) => MapEntry(e, cosine(qEmb, e.embedding))).toList()
+        ..sort((a, b) => b.value.compareTo(a.value));
 
   print('');
   print('== top-$top matches ==');
@@ -242,11 +241,15 @@ Future<void> _query(List<String> args) async {
   final winner = scored.first;
   print('');
   if (winner.value >= threshold) {
-    print('== match: ${winner.key.id} '
-        '(cos=${winner.value.toStringAsFixed(4)}) ==');
+    print(
+      '== match: ${winner.key.id} '
+      '(cos=${winner.value.toStringAsFixed(4)}) ==',
+    );
   } else {
-    print('== no match (best: ${winner.key.id} '
-        'cos=${winner.value.toStringAsFixed(4)}, threshold=$threshold) ==');
+    print(
+      '== no match (best: ${winner.key.id} '
+      'cos=${winner.value.toStringAsFixed(4)}, threshold=$threshold) ==',
+    );
   }
 }
 

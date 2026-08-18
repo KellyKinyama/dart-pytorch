@@ -63,18 +63,14 @@ Map<String, List<String>> scanGallery(String path, {int? perId}) {
   final out = <String, List<String>>{};
   for (final e in Directory(path).listSync()) {
     if (e is Directory) {
-      final files = e
-          .listSync()
-          .whereType<File>()
-          .map((f) => f.path)
-          .where((p) {
-            final low = p.toLowerCase();
-            return low.endsWith('.jpg') ||
-                low.endsWith('.jpeg') ||
-                low.endsWith('.png');
-          })
-          .toList()
-        ..sort();
+      final files = e.listSync().whereType<File>().map((f) => f.path).where((
+        p,
+      ) {
+        final low = p.toLowerCase();
+        return low.endsWith('.jpg') ||
+            low.endsWith('.jpeg') ||
+            low.endsWith('.png');
+      }).toList()..sort();
       if (files.isNotEmpty) {
         final name = e.path.split(RegExp(r'[/\\]')).last;
         out[name] = perId == null ? files : files.take(perId).toList();

@@ -22,12 +22,13 @@ import '../../tensor/tensor.dart';
 
 /// Max-pool `[N, C, H, W]` with kernel `k`, `stride`, `padding` (all
 /// spatially symmetric). Output shape `[N, C, Hout, Wout]` where
-/// `Hout = (H + 2*p - k) / s + 1`.
+/// `Hout = (H + 2*p - k) / s + 1` (or ceil-divided if `ceilMode`).
 Tensor maxPool2d(
   Tensor x, {
   required int kernel,
   required int stride,
   int padding = 0,
+  bool ceilMode = false,
 }) {
   if (x.shape.length != 4) {
     throw ArgumentError('maxPool2d: expected [N, C, H, W]; got ${x.shape}');
@@ -36,8 +37,17 @@ Tensor maxPool2d(
   final c = x.shape[1];
   final h = x.shape[2];
   final w = x.shape[3];
-  final hOut = (h + 2 * padding - kernel) ~/ stride + 1;
-  final wOut = (w + 2 * padding - kernel) ~/ stride + 1;
+  int outDim(int inSize) {
+    final num = inSize + 2 * padding - kernel;
+    if (num < 0) return 0;
+    if (ceilMode) {
+      return (num + stride - 1) ~/ stride + 1;
+    }
+    return num ~/ stride + 1;
+  }
+
+  final hOut = outDim(h);
+  final wOut = outDim(w);
   if (hOut <= 0 || wOut <= 0) {
     throw ArgumentError('maxPool2d: non-positive output ${[n, c, hOut, wOut]}');
   }

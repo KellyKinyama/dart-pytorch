@@ -360,4 +360,3 @@ Tensor _sqDist(Tensor a, Tensor b) {
   );
   return (sameMean, crossMean, sameMean - crossMean);
 }
-

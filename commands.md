@@ -25,6 +25,8 @@ fix so the CUDA driver stub is found. Drop it on native Linux.
 | F5 | facenet-vggface2 | 39M   | CPU/GPU | n/a    | [bin/facenet/identify.dart](bin/facenet/identify.dart) — 1-vs-N gallery identification |
 | F6 | facenet-vggface2 | 39M   | CPU/GPU | n/a    | [bin/facenet/cluster.dart](bin/facenet/cluster.dart) — unsupervised face clustering |
 | F7 | facenet-vggface2 | 39M   | CPU/GPU | n/a    | [bin/facenet/enroll.dart](bin/facenet/enroll.dart) — persistent DB + query |
+| F8 | mtcnn            | 0.5M  | CPU    | n/a     | [bin/facenet/detect.dart](bin/facenet/detect.dart) — face detection + 5 landmarks |
+| F9 | mtcnn + facenet  | ~40M  | CPU/GPU | n/a    | [bin/facenet/photo_identify.dart](bin/facenet/photo_identify.dart) — raw photo → identity |
 
 All `tokenizer.json` files are already downloaded under
 `models/<name>/`, so every command below runs fully offline — no
@@ -1358,6 +1360,97 @@ LD_LIBRARY_PATH=/usr/lib/wsl/lib \
   dart test test/facenet_gpu_test.dart
 ```
 
+### F8. facenet/detect.dart — MTCNN face detection
+
+Detects faces in any RGB image via the classic three-stage MTCNN
+cascade (P-Net → R-Net → O-Net), outputs bounding box + 5 landmarks
+(eyes, nose, mouth corners) + face probability. ~0.5M params total,
+weights ~2 MB.
+
+One-time weight conversion:
+
+```sh
+mkdir -p models/mtcnn
+python3 scripts/convert_mtcnn_pt_to_safetensors.py \
+    models/mtcnn/pnet.safetensors \
+    models/mtcnn/rnet.safetensors \
+    models/mtcnn/onet.safetensors
+```
+
+Run:
+
+```sh
+dart run bin/facenet/detect.dart \
+    --image "faces_gallery/Brad Pitt/sample_0.jpg" \
+    --out /tmp/brad_annotated.jpg --min-face 40
+```
+
+Prints:
+
+```
+== detect ==
+  497 ms  → 1 face(s)
+  #0  prob=1.000   box=[4.5, -0.2, 148.7, 160.7]
+        leftEye   (44.5, 54.8)
+        rightEye  (110.9, 50.3)
+        nose      (80.2, 100.6)
+        mLeft     (50.5, 121.0)
+        mRight    (117.1, 114.1)
+```
+
+Landmark positions match the facenet-pytorch reference to within
+5–15 px; the reference's box regression has a well-known axis-swap
+quirk we don't replicate, so the raw boxes differ by ~10–20 px.
+Downstream identification against FaceNet is unaffected (see F9).
+
+### F9. facenet/photo_identify.dart — raw photo → identity (full pipeline)
+
+Chains **MTCNN → 160×160 crop → FaceNet → cosine lookup** against
+either the enrolled JSON DB (from F7) or a live gallery folder.
+This is the demo that closes the story from F1–F7: everything above
+assumed pre-cropped 160×160 face jpegs; this one accepts any RGB
+image.
+
+```sh
+LD_LIBRARY_PATH=/usr/lib/wsl/lib \
+  dart run bin/facenet/photo_identify.dart --gpu \
+    --image path/to/your.jpg \
+    --db models/facenet_db.json \
+    --out /tmp/annotated.jpg
+```
+
+On `faces_gallery/Brad Pitt/sample_12.jpg` (already close to a face
+crop, but exercises the full pipeline):
+
+```
+== detect faces ==
+  267 ms  → 1 face(s)
+== identify each face ==
+  face #0  det=1.000  top=Brad Pitt cos=0.872  → MATCH
+           runner-up=Alexandra Daddario cos=0.180
+```
+
+Writes an annotated JPEG with a green (matched) or orange (below
+threshold) box + name label per face.
+
+`--gallery PATH` builds an on-the-fly identity source without
+requiring an F7 enrollment step; slower per query (embeds every
+gallery image every time) but zero setup.
+
+### Tests
+
+```sh
+# FaceNet: structural + bit-exact CPU forward + fine-tune autograd (~15 s):
+dart test test/facenet_test.dart
+
+# FaceNet GPU: cosine > 0.999 vs oracle (~4 s):
+LD_LIBRARY_PATH=/usr/lib/wsl/lib \
+  dart test test/facenet_gpu_test.dart
+
+# MTCNN: PReLU, ceilMode pool, NMS, end-to-end detect (~1 s):
+dart test test/mtcnn_test.dart
+```
+
 Sources: [bin/facenet/demo.dart](bin/facenet/demo.dart),
 [bin/facenet/gpu_demo.dart](bin/facenet/gpu_demo.dart),
 [bin/facenet/verify.dart](bin/facenet/verify.dart),
@@ -1365,9 +1458,16 @@ Sources: [bin/facenet/demo.dart](bin/facenet/demo.dart),
 [bin/facenet/identify.dart](bin/facenet/identify.dart),
 [bin/facenet/cluster.dart](bin/facenet/cluster.dart),
 [bin/facenet/enroll.dart](bin/facenet/enroll.dart),
+[bin/facenet/detect.dart](bin/facenet/detect.dart),
+[bin/facenet/photo_identify.dart](bin/facenet/photo_identify.dart),
 [bin/facenet/_common.dart](bin/facenet/_common.dart),
 [lib/core/nn/vision/facenet.dart](lib/core/nn/vision/facenet.dart),
 [lib/core/nn/vision/facenet_loader.dart](lib/core/nn/vision/facenet_loader.dart),
+[lib/core/nn/vision/mtcnn.dart](lib/core/nn/vision/mtcnn.dart),
+[lib/core/nn/vision/mtcnn_loader.dart](lib/core/nn/vision/mtcnn_loader.dart),
+[lib/core/nn/vision/mtcnn_detector.dart](lib/core/nn/vision/mtcnn_detector.dart),
+[lib/core/nn/vision/nms.dart](lib/core/nn/vision/nms.dart),
+[lib/core/nn/prelu.dart](lib/core/nn/prelu.dart),
 [lib/core/nn/vision/conv_bn_fold.dart](lib/core/nn/vision/conv_bn_fold.dart),
 [lib/core/nn/vision/pool2d.dart](lib/core/nn/vision/pool2d.dart),
 [doc/facenet.md](doc/facenet.md).

@@ -111,8 +111,10 @@ Future<void> main(List<String> args) async {
   FaceNetLoader.loadFile(model, weightsPath);
   model.eval();
   swLoad.stop();
-  print('  ${swLoad.elapsedMilliseconds} ms  (${items.length} items, '
-      '${splitLayout ? gallery.length : '?'} gold identities)');
+  print(
+    '  ${swLoad.elapsedMilliseconds} ms  (${items.length} items, '
+    '${splitLayout ? gallery.length : '?'} gold identities)',
+  );
 
   // ---- embed all ----
   print('');
@@ -139,7 +141,9 @@ Future<void> main(List<String> args) async {
 
   // ---- single-linkage agglomerative ----
   print('');
-  print('== cluster (single-linkage, threshold ${threshold.toStringAsFixed(2)}) ==');
+  print(
+    '== cluster (single-linkage, threshold ${threshold.toStringAsFixed(2)}) ==',
+  );
   final clusters = List<Set<int>>.generate(n, (i) => {i});
   bool merged = true;
   while (merged) {
@@ -189,9 +193,11 @@ Future<void> main(List<String> args) async {
     if (splitLayout) {
       purityCorrect += dominant.value;
     }
-    print('  #$c  size=${ids.length}  '
-        'dominant=${dominant.key} (${dominant.value}/${ids.length}, '
-        'purity ${purity.toStringAsFixed(2)})');
+    print(
+      '  #$c  size=${ids.length}  '
+      'dominant=${dominant.key} (${dominant.value}/${ids.length}, '
+      'purity ${purity.toStringAsFixed(2)})',
+    );
     for (final i in ids.take(3)) {
       print('        ${prettyLabel(items[i].path)}');
     }
@@ -204,11 +210,15 @@ Future<void> main(List<String> args) async {
     final overallPurity = purityCorrect / items.length;
     print('');
     print('== quality (labels available) ==');
-    print('  overall purity          '
-        '${overallPurity.toStringAsFixed(4)}   '
-        '($purityCorrect / ${items.length})');
-    print('  clusters vs identities  '
-        '${clusters.length} / ${gallery.length}');
+    print(
+      '  overall purity          '
+      '${overallPurity.toStringAsFixed(4)}   '
+      '($purityCorrect / ${items.length})',
+    );
+    print(
+      '  clusters vs identities  '
+      '${clusters.length} / ${gallery.length}',
+    );
   }
 
   swTotal.stop();

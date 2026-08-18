@@ -102,4 +102,3 @@ Future<void> main(List<String> args) async {
   print('');
   print('total wall = ${swTotal.elapsedMilliseconds} ms');
 }
-
