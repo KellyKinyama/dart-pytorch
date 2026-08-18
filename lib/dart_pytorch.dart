@@ -25,6 +25,7 @@ export 'core/nn/silero_vad.dart';
 export 'core/nn/silero_vad_loader.dart';
 
 export 'core/audio/audio_spectrogram.dart';
+export 'core/audio/whisper_mel.dart';
 export 'core/nn/dropout.dart';
 export 'core/nn/attention/multi_head_attention.dart';
 export 'core/nn/attention/multi_head_cross_attention.dart';
