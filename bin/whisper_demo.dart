@@ -5,10 +5,10 @@
 ///       [--max-len N]
 ///
 /// Defaults:
-///   --wav        models/silero_vad/warmup_audio.wav
+///   --wav        data/jfk.wav  (≈ 11 s excerpt of JFK's inaugural)
 ///   --weights    models/whisper-tiny.en/model.safetensors
 ///   --tokenizer  models/whisper-tiny.en/tokenizer.json
-///   --max-len    50
+///   --max-len    100
 library;
 
 import 'dart:io';
@@ -27,10 +27,10 @@ const int _noTimestamps = 50362; // <|notimestamps|>
 const int _spaceTok = 220; // " " — Whisper suppresses this as first sample.
 
 Future<void> main(List<String> args) async {
-  var wavPath = 'models/silero_vad/warmup_audio.wav';
+  var wavPath = 'data/jfk.wav';
   var weightsPath = 'models/whisper-tiny.en/model.safetensors';
   var tokenizerPath = 'models/whisper-tiny.en/tokenizer.json';
-  var maxLen = 50;
+  var maxLen = 100;
 
   for (int i = 0; i < args.length; i++) {
     final a = args[i];

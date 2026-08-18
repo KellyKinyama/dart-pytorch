@@ -15,7 +15,7 @@ import 'package:test/test.dart';
 
 const _weightsPath = 'models/whisper-tiny.en/model.safetensors';
 const _tokenizerPath = 'models/whisper-tiny.en/tokenizer.json';
-const _wavPath = 'models/silero_vad/warmup_audio.wav';
+const _wavPath = 'data/jfk.wav';
 
 void main() {
   group('WhisperMel', () {
@@ -83,15 +83,8 @@ void main() {
         numLayers: 1,
         nCtx: 8,
       );
-      final tokens = Tensor.fromList(
-        [1, 2],
-        [0.0, 1.0],
-        device: Device.CPU,
-      );
-      expect(
-        () => dec.forward(tokens),
-        throwsA(isA<StateError>()),
-      );
+      final tokens = Tensor.fromList([1, 2], [0.0, 1.0], device: Device.CPU);
+      expect(() => dec.forward(tokens), throwsA(isA<StateError>()));
     });
 
     test('forward + logitsLastToken produce expected shapes', () {
@@ -174,8 +167,7 @@ void main() {
         numLayers: 4,
         nCtx: 448,
       );
-      final decReport =
-          WhisperHFLoader.loadDecoderFile(decoder, _weightsPath);
+      final decReport = WhisperHFLoader.loadDecoderFile(decoder, _weightsPath);
       expect(decReport.unusedKeys, isEmpty);
       expect(decReport.consumedCount, equals(100));
 
@@ -202,20 +194,31 @@ void main() {
       const spaceTok = 220;
 
       // Reference obtained from HuggingFace WhisperForConditionalGeneration
-      // with num_beams=1, do_sample=False on the same wav.
-      const refIds = <int>[13491, 329, 2746, 5814, 929, 30];
+      // with num_beams=1, do_sample=False on data/jfk.wav (11 s JFK
+      // inaugural excerpt from openai/whisper's test assets).
+      const refIds = <int>[
+        843, 523, 616, 5891, 3399, 1265, 407, 644, 534, 1499, //
+        460, 466, 329, 345, 11, 1265, 644, 345, 460, 466, //
+        329, 534, 1499, 13,
+      ];
 
       final tokens = decoder.greedyDecode(
         startTokens: [sot, noTs],
         eot: eot,
-        maxLen: 40,
+        maxLen: 100,
         initialSuppress: [spaceTok, eot],
       );
       final sampled = tokens.sublist(2);
       expect(sampled, equals(refIds));
 
       final text = tokenizer.decode(sampled);
-      expect(text, equals(' Audio for model warmup?'));
+      expect(
+        text,
+        equals(
+          ' And so my fellow Americans ask not what your country can do '
+          'for you, ask what you can do for your country.',
+        ),
+      );
     });
   });
 }
