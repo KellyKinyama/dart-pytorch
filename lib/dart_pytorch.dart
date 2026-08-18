@@ -23,6 +23,8 @@ export 'core/nn/conv1d.dart';
 export 'core/nn/lstm_cell.dart';
 export 'core/nn/silero_vad.dart';
 export 'core/nn/silero_vad_loader.dart';
+export 'core/nn/whisper.dart';
+export 'core/nn/whisper_hf_loader.dart';
 
 export 'core/audio/audio_spectrogram.dart';
 export 'core/audio/whisper_mel.dart';

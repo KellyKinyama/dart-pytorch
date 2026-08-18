@@ -51,14 +51,14 @@ class WhisperMel {
   final List<Float64List> _melFilters; // [nMels][nFft/2 + 1]
 
   WhisperMel([this.cfg = const WhisperMelConfig()])
-      : _window = _hannWindow(cfg.nFft),
-        _melFilters = dsp.createMelFilterbank(
-          sampleRate: cfg.sampleRate,
-          nFft: cfg.nFft,
-          nMels: cfg.nMels,
-          fMin: 0.0,
-          fMax: cfg.sampleRate / 2.0,
-        );
+    : _window = _hannWindow(cfg.nFft),
+      _melFilters = dsp.createMelFilterbank(
+        sampleRate: cfg.sampleRate,
+        nFft: cfg.nFft,
+        nMels: cfg.nMels,
+        fMin: 0.0,
+        fMax: cfg.sampleRate / 2.0,
+      );
 
   /// End-to-end from a raw waveform. Returns a `[nMels × nFrames]`
   /// Float32List in row-major order.
@@ -71,14 +71,13 @@ class WhisperMel {
     final nBins = power[0].length;
     if (nFrames != cfg.nFrames) {
       // 30-s trim guarantees this; sanity-check.
-      throw StateError('unexpected frame count: got $nFrames, want ${cfg.nFrames}');
+      throw StateError(
+        'unexpected frame count: got $nFrames, want ${cfg.nFrames}',
+      );
     }
 
     // Mel: for each mel row, sum over bins of (filter × power).
-    final mel = List.generate(
-      cfg.nMels,
-      (_) => Float64List(nFrames),
-    );
+    final mel = List.generate(cfg.nMels, (_) => Float64List(nFrames));
     for (int m = 0; m < cfg.nMels; m++) {
       final row = _melFilters[m];
       for (int t = 0; t < nFrames; t++) {
