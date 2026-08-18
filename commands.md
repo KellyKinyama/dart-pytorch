@@ -18,6 +18,9 @@ fix so the CUDA driver stub is found. Drop it on native Linux.
 | 9 | gpt-j-6b (CPU)   | 6.05B | CPU    | ✅ local | [bin/gptj/run_6b_cpu_api.dart](bin/gptj/run_6b_cpu_api.dart) |
 | S1 | whisper tiny.en  | 39M   | CPU    | ✅ local | [bin/whisper_demo.dart](bin/whisper_demo.dart) |
 | S2 | whisper tiny.en  | 39M   | GPU    | ✅ local | [bin/whisper_gpu_demo.dart](bin/whisper_gpu_demo.dart) |
+| F1 | facenet-vggface2 | 39M   | CPU    | n/a     | [bin/facenet_demo.dart](bin/facenet_demo.dart) |
+| F2 | facenet-vggface2 | 39M   | GPU    | n/a     | [bin/facenet_gpu_demo.dart](bin/facenet_gpu_demo.dart) |
+| F3 | facenet-vggface2 | 39M   | CPU/GPU | n/a    | [bin/facenet_verify_demo.dart](bin/facenet_verify_demo.dart) — face pair verification |
 
 All `tokenizer.json` files are already downloaded under
 `models/<name>/`, so every command below runs fully offline — no
@@ -1079,3 +1082,132 @@ Sources: [bin/whisper_demo.dart](bin/whisper_demo.dart),
 [lib/core/nn/whisper_hf_loader.dart](lib/core/nn/whisper_hf_loader.dart),
 [lib/core/audio/whisper_mel.dart](lib/core/audio/whisper_mel.dart),
 [doc/whisper.md](doc/whisper.md).
+
+## F1 / F2 / F3. FaceNet InceptionResnetV1 — face embeddings (39M, CPU or GPU)
+
+Port of [`timesler/facenet-pytorch::InceptionResnetV1(pretrained='vggface2')`](https://github.com/timesler/facenet-pytorch).
+Face image (`[N, 3, 160, 160]`, `(x−127.5)/128` normalized) → 512-d
+L2-normalized embedding. Cosine similarity ≥ 0.4 typically means
+"same person"; ≤ 0.25 means "different". **Bit-exact** vs. the Python
+reference (cosine 1.000000). Full architecture / fold algebra / HF
+key layout / fine-tuning notes in [doc/facenet.md](doc/facenet.md).
+
+### One-time weight conversion (~107 MB → 145 MB safetensors)
+
+```sh
+python3 -m pip install --break-system-packages --user facenet-pytorch safetensors
+
+mkdir -p models/facenet-vggface2
+python3 scripts/convert_facenet_pt_to_safetensors.py \
+    models/facenet-vggface2/model.safetensors
+```
+
+Optional (for the reference diff on the demos):
+
+```sh
+python3 scripts/facenet_reference.py "faces_gallery/Brad Pitt/sample_0.jpg"
+# writes /tmp/facenet_input.raw, /tmp/facenet_ref.raw
+```
+
+### F1. facenet_demo.dart (CPU, bit-exact vs oracle)
+
+```sh
+dart run bin/facenet_demo.dart
+```
+
+Prints:
+
+```
+== forward ==
+  2346 ms  → [1, 512]
+  norm=1.000000  min=-0.1080  max=0.1239
+  first 5: [0.002180, 0.004803, -0.049649, 0.005733, 0.006290]
+== diff vs reference ==
+  cosine     = 1.000000
+  mean |Δ|   = 0.000000
+  max  |Δ|   = 0.000000
+```
+
+### F2. facenet_gpu_demo.dart (GPU)
+
+```sh
+LD_LIBRARY_PATH=/usr/lib/wsl/lib \
+  dart run bin/facenet_gpu_demo.dart
+```
+
+Same output — bit-exact — in ~1.3 s (1.8× CPU).
+
+### F3. facenet_verify_demo.dart — pairwise face verification
+
+Loads JPEGs from `faces_gallery/`, resizes to 160×160 (bilinear),
+normalizes, and prints pairwise cosine + a SAME / unclear / DIFFERENT
+label:
+
+```sh
+LD_LIBRARY_PATH=/usr/lib/wsl/lib \
+  dart run bin/facenet_verify_demo.dart --gpu
+```
+
+Default (Brad Pitt × 2 + Alia Bhatt × 1):
+
+```
+== pairwise cosine similarity ==
+  SAME       0.6342   Brad Pitt/sample_0.jpg  ↔  Brad Pitt/sample_1.jpg
+  DIFFERENT  -0.0148  Brad Pitt/sample_0.jpg  ↔  Alia Bhatt/sample_0.jpg
+  DIFFERENT   0.1679  Brad Pitt/sample_1.jpg  ↔  Alia Bhatt/sample_0.jpg
+```
+
+Pass explicit paths to compare arbitrary faces:
+
+```sh
+dart run bin/facenet_verify_demo.dart --gpu \
+    path/to/anchor.jpg path/to/candidate1.jpg path/to/candidate2.jpg
+```
+
+### Tests
+
+```sh
+# Fast structural + bit-exact CPU forward (~6 s):
+dart test test/facenet_test.dart
+
+# GPU cosine > 0.999 vs oracle (~4 s):
+LD_LIBRARY_PATH=/usr/lib/wsl/lib \
+  dart test test/facenet_gpu_test.dart
+```
+
+### Fine-tuning
+
+BN is folded at load time, so the whole conv backbone is a fixed
+feature extractor. **`last_linear` (and any custom head you attach
+on top of the 512-d embedding — triplet, ArcFace, contrastive)
+fine-tunes with autograd today.** Standard recipe:
+
+```dart
+final model = InceptionResnetV1(device: Device.GPU);
+FaceNetLoader.loadFile(model, 'models/facenet-vggface2/model.safetensors');
+model.eval();       // freeze folded BN, disable Dropout
+
+for (final p in model.parameters()) {
+  p.requiresGrad = false;                // freeze backbone
+}
+model.lastLinear.weight.requiresGrad = true;
+
+final head = Linear(512, numClasses, device: Device.GPU);
+final optim = Adam([
+  model.lastLinear.weight,
+  ...head.parameters(),
+], lr: 1e-3);
+```
+
+Full-backbone fine-tuning (backpropagating *through* Conv2d layers)
+needs a native `conv2d_backward` — separate follow-up. See the
+"Fine-tuning" section of [doc/facenet.md](doc/facenet.md).
+
+Sources: [bin/facenet_demo.dart](bin/facenet_demo.dart),
+[bin/facenet_gpu_demo.dart](bin/facenet_gpu_demo.dart),
+[bin/facenet_verify_demo.dart](bin/facenet_verify_demo.dart),
+[lib/core/nn/vision/facenet.dart](lib/core/nn/vision/facenet.dart),
+[lib/core/nn/vision/facenet_loader.dart](lib/core/nn/vision/facenet_loader.dart),
+[lib/core/nn/vision/conv_bn_fold.dart](lib/core/nn/vision/conv_bn_fold.dart),
+[lib/core/nn/vision/pool2d.dart](lib/core/nn/vision/pool2d.dart),
+[doc/facenet.md](doc/facenet.md).
