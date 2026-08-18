@@ -16,6 +16,8 @@ fix so the CUDA driver stub is found. Drop it on native Linux.
 | 7 | pythia-1b        | 1.0B  | GPU    | ✅ local | [bin/pythia/run_1b_gpu_api.dart](bin/pythia/run_1b_gpu_api.dart) |
 | 8 | gpt-j-6b (hybrid)| 6.05B | CPU + GPU | ✅ local | [bin/gptj/run_6b_hybrid_api.dart](bin/gptj/run_6b_hybrid_api.dart) |
 | 9 | gpt-j-6b (CPU)   | 6.05B | CPU    | ✅ local | [bin/gptj/run_6b_cpu_api.dart](bin/gptj/run_6b_cpu_api.dart) |
+| S1 | whisper tiny.en  | 39M   | CPU    | ✅ local | [bin/whisper_demo.dart](bin/whisper_demo.dart) |
+| S2 | whisper tiny.en  | 39M   | GPU    | ✅ local | [bin/whisper_gpu_demo.dart](bin/whisper_gpu_demo.dart) |
 
 All `tokenizer.json` files are already downloaded under
 `models/<name>/`, so every command below runs fully offline — no
@@ -966,3 +968,114 @@ arbitrary poison-pill embeddings — instructive to run once,
 useless as a chat.
 Source: [bin/llama_llava_demo.dart](bin/llama_llava_demo.dart),
 [bin/train_llava_projector.dart](bin/train_llava_projector.dart).
+
+## S1 / S2. Whisper tiny.en — speech-to-text (39M, CPU or GPU)
+
+End-to-end port of [openai/whisper](https://github.com/openai/whisper)
+`tiny.en`: WAV → 80-bin log-mel → 4-layer transformer encoder → 4-layer
+cross-attention decoder → BPE token stream → text. Bit-exact vs. HF
+`WhisperForConditionalGeneration.generate(num_beams=1, do_sample=False)`
+on our test clips. Full architecture / HF key mapping / limitations
+live in [doc/whisper.md](doc/whisper.md).
+
+### One-time downloads (~150 MB)
+
+```sh
+mkdir -p models/whisper-tiny.en
+curl -L -o models/whisper-tiny.en/model.safetensors \
+  https://huggingface.co/openai/whisper-tiny.en/resolve/main/model.safetensors
+curl -L -o models/whisper-tiny.en/tokenizer.json \
+  https://huggingface.co/openai/whisper-tiny.en/resolve/main/tokenizer.json
+```
+
+A ~11 s speech clip ships at [`data/jfk.wav`](data/jfk.wav) (16 kHz
+mono PCM16, JFK inaugural excerpt from OpenAI Whisper's test assets),
+so no audio download is required.
+
+### S1. whisper_demo.dart (CPU)
+
+```sh
+dart run bin/whisper_demo.dart
+```
+
+Or pick a different clip / cap the sample count:
+
+```sh
+dart run bin/whisper_demo.dart \
+    --wav path/to/your.wav \
+    --max-len 200
+```
+
+Expected on `data/jfk.wav`:
+
+```
+== transcript ==
+  " And so my fellow Americans ask not what your country can do for you, ask what you can do for your country."
+```
+
+### S2. whisper_gpu_demo.dart (GPU)
+
+Same CLI, everything on device — matmul / softmax / layernorm / add /
+embedding stay in CUDA:
+
+```sh
+LD_LIBRARY_PATH=/usr/lib/wsl/lib \
+  dart run bin/whisper_gpu_demo.dart
+```
+
+### Wall-clock — CPU vs. GPU (WSL2, RTX 3060, `data/jfk.wav`)
+
+| Phase                       | CPU     | GPU      | Speedup |
+|---|---|---|---|
+| Log-mel front-end           | 115 ms  | 115 ms   | 1×      |
+| Load encoder weights        | 2.0 s   | 2.3 s    | ~1×     |
+| Load decoder weights        | 5.5 s   | 5.9 s    | ~1×     |
+| **Encoder forward (T=1500)** | **43 s** | **2.5 s** | **17×** |
+| Prime cross-attn (4 blocks) | 2.3 s   | 0.12 s   | 19×     |
+| Greedy decode (24 tokens)   | 8.7 s   | 2.0 s    | 4×      |
+| **Total**                   | **64 s** | **13.5 s** | **4.7×** |
+
+Encoder self-attention dominates the CPU cost (T² · d_head, 4 blocks,
+6 heads). On GPU it becomes a handful of ms of matmul + softmax +
+matmul per head. Weight loading is device-agnostic host-side work.
+
+### Tiny.en special tokens (from `generation_config.json`)
+
+| Token id | Symbol                    | Role                                       |
+|---:|---|---|
+| 50256 | `<|endoftext|>`              | EOT — stops greedy decode                  |
+| 50257 | `<|startoftranscript|>`      | SOT — first token in the decoder prefix    |
+| 50362 | `<|notimestamps|>`           | position 1 (tiny.en is english-only, no `<|en|>` / `<|transcribe|>`) |
+| 220   | ` ` (byte-BPE space)         | suppressed at the first sampled token      |
+
+Prefix used by the greedy loop:
+
+```dart
+decoder.greedyDecode(
+  startTokens: [50257, 50362],      // SOT, NOTIMESTAMPS
+  eot: 50256,
+  initialSuppress: [220, 50256],    // don't start with " " or EOT
+)
+```
+
+### Tests
+
+```sh
+# Fast structural + CPU end-to-end (~55 s, needs weights + wav + tokenizer):
+dart test test/whisper_test.dart
+
+# GPU end-to-end (~15 s, same asset requirements):
+LD_LIBRARY_PATH=/usr/lib/wsl/lib \
+  dart test test/whisper_gpu_test.dart
+```
+
+All 9 tests pass; token stream is bit-exact vs.
+`transformers.WhisperForConditionalGeneration` (greedy, `num_beams=1`).
+
+Sources: [bin/whisper_demo.dart](bin/whisper_demo.dart),
+[bin/whisper_gpu_demo.dart](bin/whisper_gpu_demo.dart),
+[lib/core/nn/whisper.dart](lib/core/nn/whisper.dart),
+[lib/core/nn/whisper_decoder.dart](lib/core/nn/whisper_decoder.dart),
+[lib/core/nn/whisper_hf_loader.dart](lib/core/nn/whisper_hf_loader.dart),
+[lib/core/audio/whisper_mel.dart](lib/core/audio/whisper_mel.dart),
+[doc/whisper.md](doc/whisper.md).

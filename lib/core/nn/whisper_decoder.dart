@@ -61,14 +61,50 @@ class WhisperDecoderBlock extends Module {
     Device device = Device.CPU,
   }) : headDim = embedDim ~/ numHeads,
        attnLn = LayerNorm(embedDim, device: device),
-       qHeads = _mkHeads(embedDim, numHeads, bias: true, seed: 100, device: device),
-       kHeads = _mkHeads(embedDim, numHeads, bias: false, seed: 200, device: device),
-       vHeads = _mkHeads(embedDim, numHeads, bias: true, seed: 300, device: device),
+       qHeads = _mkHeads(
+         embedDim,
+         numHeads,
+         bias: true,
+         seed: 100,
+         device: device,
+       ),
+       kHeads = _mkHeads(
+         embedDim,
+         numHeads,
+         bias: false,
+         seed: 200,
+         device: device,
+       ),
+       vHeads = _mkHeads(
+         embedDim,
+         numHeads,
+         bias: true,
+         seed: 300,
+         device: device,
+       ),
        outProj = Linear(embedDim, embedDim, bias: true, device: device),
        crossAttnLn = LayerNorm(embedDim, device: device),
-       crossQHeads = _mkHeads(embedDim, numHeads, bias: true, seed: 400, device: device),
-       crossKHeads = _mkHeads(embedDim, numHeads, bias: false, seed: 500, device: device),
-       crossVHeads = _mkHeads(embedDim, numHeads, bias: true, seed: 600, device: device),
+       crossQHeads = _mkHeads(
+         embedDim,
+         numHeads,
+         bias: true,
+         seed: 400,
+         device: device,
+       ),
+       crossKHeads = _mkHeads(
+         embedDim,
+         numHeads,
+         bias: false,
+         seed: 500,
+         device: device,
+       ),
+       crossVHeads = _mkHeads(
+         embedDim,
+         numHeads,
+         bias: true,
+         seed: 600,
+         device: device,
+       ),
        crossOutProj = Linear(embedDim, embedDim, bias: true, device: device),
        mlpLn = LayerNorm(embedDim, device: device),
        mlp0 = Linear(embedDim, embedDim * 4, bias: true, device: device),
@@ -291,11 +327,7 @@ class WhisperDecoder extends Module {
         last[bi * c + ci] = all[bi * t * c + (t - 1) * c + ci];
       }
     }
-    final lastT = Tensor.fromFloat32List(
-      [b, c],
-      last,
-      device: hidden.device,
-    );
+    final lastT = Tensor.fromFloat32List([b, c], last, device: hidden.device);
     // [B, C] @ [C, V] = [B, V] on-device.
     return lastT.matmul(tokenEmbedding.weight.transpose());
   }

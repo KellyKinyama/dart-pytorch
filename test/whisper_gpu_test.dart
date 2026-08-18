@@ -60,17 +60,12 @@ void main() {
         nCtx: 448,
         device: device,
       );
-      final decReport =
-          WhisperHFLoader.loadDecoderFile(decoder, _weightsPath);
+      final decReport = WhisperHFLoader.loadDecoderFile(decoder, _weightsPath);
       expect(decReport.unusedKeys, isEmpty);
 
       final tokenizer = HFBpeTokenizer.loadFile(_tokenizerPath);
       final mel = await WhisperMel().logMelFromFile(_wavPath);
-      final melT = Tensor.fromFloat32List(
-        [1, 80, 3000],
-        mel,
-        device: device,
-      );
+      final melT = Tensor.fromFloat32List([1, 80, 3000], mel, device: device);
       final memory = encoder(melT);
       expect(memory.shape, equals([1, 1500, 384]));
       decoder.primeCrossAttn(memory);

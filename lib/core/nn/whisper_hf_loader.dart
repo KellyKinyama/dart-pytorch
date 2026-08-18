@@ -398,12 +398,7 @@ class WhisperHFLoader {
       final headLinear = heads[h];
       // Slice rows [h*headDim, (h+1)*headDim) into a [headDim, C] chunk.
       final wChunk = Float32List(headDim * embedDim);
-      wChunk.setRange(
-        0,
-        headDim * embedDim,
-        wSrc,
-        h * headDim * embedDim,
-      );
+      wChunk.setRange(0, headDim * embedDim, wSrc, h * headDim * embedDim);
       final wT = Tensor.fromFloat32List(
         [headDim, embedDim],
         wChunk,
@@ -426,8 +421,7 @@ class WhisperHFLoader {
   // ------------ tensor helpers ------------
 
   static Tensor _expectShape(Tensor t, List<int> expected, String name) {
-    if (t.shape.length != expected.length ||
-        !_shapesEqual(t.shape, expected)) {
+    if (t.shape.length != expected.length || !_shapesEqual(t.shape, expected)) {
       throw ArgumentError(
         'whisper loader: "$name" expected shape $expected, got ${t.shape}',
       );
