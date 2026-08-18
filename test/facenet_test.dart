@@ -171,13 +171,17 @@ Generate them with:
         if (a > gAbsMax) gAbsMax = a;
         gAbsSum += a;
       }
-      expect(gAbsMax, greaterThan(0.0),
-          reason: 'lastLinear.weight.grad should be non-zero');
+      expect(
+        gAbsMax,
+        greaterThan(0.0),
+        reason: 'lastLinear.weight.grad should be non-zero',
+      );
       // Some sanity floor — grads should be O(1e-6) or larger.
       expect(
         gAbsSum,
         greaterThan(1e-4),
-        reason: 'aggregate |grad| too small ($gAbsSum); autograd chain '
+        reason:
+            'aggregate |grad| too small ($gAbsSum); autograd chain '
             'may be broken between loss and lastLinear.weight',
       );
     });
@@ -234,7 +238,8 @@ Generate them with:
       expect(
         lossAfter,
         lessThan(lossBefore),
-        reason: 'Adam should decrease -emb[0]² (got before=$lossBefore, '
+        reason:
+            'Adam should decrease -emb[0]² (got before=$lossBefore, '
             'after=$lossAfter)',
       );
     });

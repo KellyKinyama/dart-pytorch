@@ -1,17 +1,7 @@
-/// FaceNet InceptionResnetV1 (VGGFace2) smoke test.
+/// FaceNet demo, GPU variant. Same CLI as `bin/facenet/demo.dart`.
 ///
-///   dart run bin/facenet_demo.dart \
-///       [--weights PATH] [--input PATH] [--ref PATH]
-///
-/// Defaults:
-///   --weights models/facenet-vggface2/model.safetensors
-///   --input   /tmp/facenet_input.raw   (write with scripts/facenet_reference.py)
-///   --ref     /tmp/facenet_ref.raw     (optional; compares if present)
-///
-/// The Python reference lives in [scripts/facenet_reference.py] —
-/// it turns a face jpeg into the exact `(x − 127.5)/128` fp32 tensor
-/// (`[3, 160, 160]`) that facenet-pytorch expects and writes it to
-/// `/tmp/facenet_input.raw`.
+///   LD_LIBRARY_PATH=/usr/lib/wsl/lib \
+///     dart run bin/facenet/gpu_demo.dart [--weights P] [--input P] [--ref P]
 library;
 
 import 'dart:io';
@@ -45,38 +35,25 @@ Future<void> main(List<String> args) async {
   }
 
   final swTotal = Stopwatch()..start();
+  const device = Device.GPU;
 
-  print('== build + load ==');
+  print('== build + load (GPU) ==');
   final swLoad = Stopwatch()..start();
-  final model = InceptionResnetV1();
+  final model = InceptionResnetV1(device: device);
   final report = FaceNetLoader.loadFile(model, weightsPath);
   model.eval();
   swLoad.stop();
   print('  ${swLoad.elapsedMilliseconds} ms  $report');
-  if (report.unusedKeys.isNotEmpty) {
-    print('  unused (up to 5):');
-    for (final k in report.unusedKeys.take(5)) {
-      print('    - $k');
-    }
-  }
 
   print('');
   print('== read input ==');
   final bytes = File(inputPath).readAsBytesSync();
   const expectN = 3 * 160 * 160;
-  if (bytes.lengthInBytes != expectN * 4) {
-    stderr.writeln(
-      'input must be $expectN fp32 (${expectN * 4} bytes); '
-      'got ${bytes.lengthInBytes}',
-    );
-    exit(2);
-  }
   final input = Float32List.view(bytes.buffer, bytes.offsetInBytes, expectN);
-  final xT = Tensor.fromFloat32List([1, 3, 160, 160], input);
-  print('  loaded  [1, 3, 160, 160]  $inputPath');
+  final xT = Tensor.fromFloat32List([1, 3, 160, 160], input, device: device);
 
   print('');
-  print('== forward ==');
+  print('== forward (GPU) ==');
   final swFwd = Stopwatch()..start();
   final emb = model(xT);
   swFwd.stop();
@@ -105,24 +82,16 @@ Future<void> main(List<String> args) async {
       refBytes.offsetInBytes,
       refBytes.lengthInBytes ~/ 4,
     );
-    if (ref.length != e.length) {
-      print('  length mismatch: ref=${ref.length} ours=${e.length}');
-    } else {
-      // Cosine similarity = dot product (both L2-normalized).
-      double dot = 0.0, absSum = 0.0, absMax = 0.0;
-      for (int i = 0; i < ref.length; i++) {
-        dot += e[i] * ref[i];
-        final d = (e[i] - ref[i]).abs();
-        absSum += d;
-        if (d > absMax) absMax = d;
-      }
-      print('  cosine     = ${dot.toStringAsFixed(6)}');
-      print('  mean |Δ|   = ${(absSum / ref.length).toStringAsFixed(6)}');
-      print('  max  |Δ|   = ${absMax.toStringAsFixed(6)}');
-      print(
-        '  first 5 ref: ${ref.take(5).map((v) => v.toStringAsFixed(6)).toList()}',
-      );
+    double dot = 0.0, absSum = 0.0, absMax = 0.0;
+    for (int i = 0; i < ref.length; i++) {
+      dot += e[i] * ref[i];
+      final d = (e[i] - ref[i]).abs();
+      absSum += d;
+      if (d > absMax) absMax = d;
     }
+    print('  cosine   = ${dot.toStringAsFixed(6)}');
+    print('  mean |Δ| = ${(absSum / ref.length).toStringAsFixed(6)}');
+    print('  max  |Δ| = ${absMax.toStringAsFixed(6)}');
   }
 
   swTotal.stop();

@@ -18,10 +18,13 @@ fix so the CUDA driver stub is found. Drop it on native Linux.
 | 9 | gpt-j-6b (CPU)   | 6.05B | CPU    | ✅ local | [bin/gptj/run_6b_cpu_api.dart](bin/gptj/run_6b_cpu_api.dart) |
 | S1 | whisper tiny.en  | 39M   | CPU    | ✅ local | [bin/whisper_demo.dart](bin/whisper_demo.dart) |
 | S2 | whisper tiny.en  | 39M   | GPU    | ✅ local | [bin/whisper_gpu_demo.dart](bin/whisper_gpu_demo.dart) |
-| F1 | facenet-vggface2 | 39M   | CPU    | n/a     | [bin/facenet_demo.dart](bin/facenet_demo.dart) |
-| F2 | facenet-vggface2 | 39M   | GPU    | n/a     | [bin/facenet_gpu_demo.dart](bin/facenet_gpu_demo.dart) |
-| F3 | facenet-vggface2 | 39M   | CPU/GPU | n/a    | [bin/facenet_verify_demo.dart](bin/facenet_verify_demo.dart) — face pair verification |
-| F4 | facenet-vggface2 | 39M   | CPU/GPU | n/a    | [bin/facenet_finetune_demo.dart](bin/facenet_finetune_demo.dart) — head-only triplet fine-tune |
+| F1 | facenet-vggface2 | 39M   | CPU    | n/a     | [bin/facenet/demo.dart](bin/facenet/demo.dart) — bit-exact vs. reference |
+| F2 | facenet-vggface2 | 39M   | GPU    | n/a     | [bin/facenet/gpu_demo.dart](bin/facenet/gpu_demo.dart) — same, on device |
+| F3 | facenet-vggface2 | 39M   | CPU/GPU | n/a    | [bin/facenet/verify.dart](bin/facenet/verify.dart) — pair verification |
+| F4 | facenet-vggface2 | 39M   | CPU/GPU | n/a    | [bin/facenet/finetune.dart](bin/facenet/finetune.dart) — head-only triplet fine-tune |
+| F5 | facenet-vggface2 | 39M   | CPU/GPU | n/a    | [bin/facenet/identify.dart](bin/facenet/identify.dart) — 1-vs-N gallery identification |
+| F6 | facenet-vggface2 | 39M   | CPU/GPU | n/a    | [bin/facenet/cluster.dart](bin/facenet/cluster.dart) — unsupervised face clustering |
+| F7 | facenet-vggface2 | 39M   | CPU/GPU | n/a    | [bin/facenet/enroll.dart](bin/facenet/enroll.dart) — persistent DB + query |
 
 All `tokenizer.json` files are already downloaded under
 `models/<name>/`, so every command below runs fully offline — no
@@ -1113,7 +1116,7 @@ python3 scripts/facenet_reference.py "faces_gallery/Brad Pitt/sample_0.jpg"
 ### F1. facenet_demo.dart (CPU, bit-exact vs oracle)
 
 ```sh
-dart run bin/facenet_demo.dart
+dart run bin/facenet/demo.dart
 ```
 
 Prints:
@@ -1133,7 +1136,7 @@ Prints:
 
 ```sh
 LD_LIBRARY_PATH=/usr/lib/wsl/lib \
-  dart run bin/facenet_gpu_demo.dart
+  dart run bin/facenet/gpu_demo.dart
 ```
 
 Same output — bit-exact — in ~1.3 s (1.8× CPU).
@@ -1146,7 +1149,7 @@ label:
 
 ```sh
 LD_LIBRARY_PATH=/usr/lib/wsl/lib \
-  dart run bin/facenet_verify_demo.dart --gpu
+  dart run bin/facenet/verify.dart --gpu
 ```
 
 Default (Brad Pitt × 2 + Alia Bhatt × 1):
@@ -1161,7 +1164,7 @@ Default (Brad Pitt × 2 + Alia Bhatt × 1):
 Pass explicit paths to compare arbitrary faces:
 
 ```sh
-dart run bin/facenet_verify_demo.dart --gpu \
+dart run bin/facenet/verify.dart --gpu \
     path/to/anchor.jpg path/to/candidate1.jpg path/to/candidate2.jpg
 ```
 
@@ -1203,7 +1206,7 @@ same-person and cross-person mean cosine before and after training.
 
 ```sh
 LD_LIBRARY_PATH=/usr/lib/wsl/lib \
-  dart run bin/facenet_finetune_demo.dart --gpu \
+  dart run bin/facenet/finetune.dart --gpu \
     --identities 4 --per-id 4 --steps 60 \
     --margin 2.0 --lr 5e-3
 ```
@@ -1241,6 +1244,108 @@ tests: one asserts that `lastLinear.weight.grad` is non-null with
 non-zero magnitude after a single `.backward()`, and another that
 Adam actually reduces a fabricated loss. Both pass in ~10 s.
 
+### F5. facenet/identify.dart — 1-vs-N gallery identification
+
+Given a query face and a labeled `faces_gallery/`, embed everything
+and pick the identity with the highest **mean** cosine over its
+samples. Prints the top-N nearest images (per file) and a full
+identity ranking, then a match / no-match verdict.
+
+```sh
+LD_LIBRARY_PATH=/usr/lib/wsl/lib \
+  dart run bin/facenet/identify.dart --gpu \
+    --query "faces_gallery/Brad Pitt/sample_2.jpg" \
+    --per-id 4 --top 5
+```
+
+Measured on `faces_gallery/` (8 identities × 4 images):
+
+```
+== top-5 nearest images ==
+  SAME       cos=0.7683   Brad Pitt/sample_11.jpg
+  SAME       cos=0.6779   Brad Pitt/sample_1.jpg
+  SAME       cos=0.6261   Brad Pitt/sample_0.jpg
+  SAME       cos=0.5170   Brad Pitt/sample_10.jpg
+  DIFFERENT  cos=0.3122   Amitabh Bachchan/sample_1.jpg
+== identity ranking (mean cosine across all samples) ==
+  ★ SAME       0.6473  Brad Pitt
+    DIFFERENT  0.1923  Amitabh Bachchan
+    DIFFERENT  0.1211  Akshay Kumar
+    …
+== match: Brad Pitt (cos=0.6473) ==
+```
+
+### F6. facenet/cluster.dart — unsupervised face clustering
+
+Given a directory (either flat `dir/*.jpg` or split
+`dir/{IdentityName}/*.jpg`), embed everything and run
+**single-linkage agglomerative clustering** with a cosine-similarity
+merge threshold. In split layout the gold identity labels are used
+only to score purity — the clustering itself is unsupervised.
+
+```sh
+LD_LIBRARY_PATH=/usr/lib/wsl/lib \
+  dart run bin/facenet/cluster.dart --gpu \
+    --dir faces_gallery --per-id 4 --threshold 0.35
+```
+
+Measured on `faces_gallery/` (8 identities × 4 images = 32 faces,
+threshold 0.35):
+
+```
+== clusters ==
+  #0  size=8  dominant=Akshay Kumar (4/8, purity 0.50)     ← merged with Amitabh Bachchan
+  #1  size=8  dominant=Alia Bhatt (4/8, purity 0.50)       ← merged with Anushka Sharma
+  #2  size=4  dominant=Alexandra Daddario (4/4, purity 1.00)
+  #3  size=4  dominant=Andy Samberg (4/4, purity 1.00)
+  #4  size=4  dominant=Billie Eilish (4/4, purity 1.00)
+  #5  size=4  dominant=Brad Pitt (4/4, purity 1.00)
+== quality ==
+  overall purity          0.7500   (24 / 32)
+  clusters vs identities  6 / 8
+```
+
+At threshold 0.35 single-linkage over-merges close-together Bollywood
+identities. Nudge `--threshold 0.4` or `0.45` to split them at the
+cost of over-splitting harder cases.
+
+### F7. facenet/enroll.dart — persistent embedding DB + query
+
+Turns the gallery into a tiny JSON file (~40 KB per 8 identities)
+storing one **mean** 512-d embedding per identity. Queries then load
+just the JSON and hit it in O(N × 512) — no re-scan of the gallery,
+no re-forward of the backbone on enrolled images.
+
+Enroll once:
+
+```sh
+LD_LIBRARY_PATH=/usr/lib/wsl/lib \
+  dart run bin/facenet/enroll.dart enroll --gpu --per-id 4
+# writes models/facenet_db.json
+```
+
+Then query:
+
+```sh
+LD_LIBRARY_PATH=/usr/lib/wsl/lib \
+  dart run bin/facenet/enroll.dart query --gpu \
+    --image "faces_gallery/Brad Pitt/sample_12.jpg" --top 3
+```
+
+Output:
+
+```
+== top-3 matches ==
+  ★ SAME       cos=0.8766  Brad Pitt          (n=4)
+    DIFFERENT  cos=0.1841  Alexandra Daddario (n=4)
+    DIFFERENT  cos=0.1249  Billie Eilish      (n=4)
+== match: Brad Pitt (cos=0.8766) ==
+```
+
+Cosine ≈ 0.88 vs. the enrolled mean is well above the pair-wise
+cosine (~0.64) because the mean absorbs per-photo noise — a useful
+robustness win for real deployments over F5's per-file scan.
+
 ### Tests
 
 ```sh
@@ -1253,10 +1358,14 @@ LD_LIBRARY_PATH=/usr/lib/wsl/lib \
   dart test test/facenet_gpu_test.dart
 ```
 
-Sources: [bin/facenet_demo.dart](bin/facenet_demo.dart),
-[bin/facenet_gpu_demo.dart](bin/facenet_gpu_demo.dart),
-[bin/facenet_verify_demo.dart](bin/facenet_verify_demo.dart),
-[bin/facenet_finetune_demo.dart](bin/facenet_finetune_demo.dart),
+Sources: [bin/facenet/demo.dart](bin/facenet/demo.dart),
+[bin/facenet/gpu_demo.dart](bin/facenet/gpu_demo.dart),
+[bin/facenet/verify.dart](bin/facenet/verify.dart),
+[bin/facenet/finetune.dart](bin/facenet/finetune.dart),
+[bin/facenet/identify.dart](bin/facenet/identify.dart),
+[bin/facenet/cluster.dart](bin/facenet/cluster.dart),
+[bin/facenet/enroll.dart](bin/facenet/enroll.dart),
+[bin/facenet/_common.dart](bin/facenet/_common.dart),
 [lib/core/nn/vision/facenet.dart](lib/core/nn/vision/facenet.dart),
 [lib/core/nn/vision/facenet_loader.dart](lib/core/nn/vision/facenet_loader.dart),
 [lib/core/nn/vision/conv_bn_fold.dart](lib/core/nn/vision/conv_bn_fold.dart),

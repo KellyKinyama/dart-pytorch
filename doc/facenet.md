@@ -16,9 +16,9 @@ Python reference (cosine 1.000000, max |Δ| ≈ 0 on the same fp32 input).
   [`nchw.dart`](../../lib/core/nn/vision/nchw.dart) — reusable
   building blocks (max-pool, global avg-pool, channel-axis concat,
   row-wise L2 normalize).
-- [`bin/facenet_demo.dart`](../../bin/facenet_demo.dart),
-  [`bin/facenet_gpu_demo.dart`](../../bin/facenet_gpu_demo.dart),
-  [`bin/facenet_verify_demo.dart`](../../bin/facenet_verify_demo.dart)
+- [`bin/facenet/demo.dart`](../../bin/facenet/demo.dart),
+  [`bin/facenet/gpu_demo.dart`](../../bin/facenet/gpu_demo.dart),
+  [`bin/facenet/verify.dart`](../../bin/facenet/verify.dart)
   — runnable demos.
 - [`test/facenet_test.dart`](../../test/facenet_test.dart),
   [`test/facenet_gpu_test.dart`](../../test/facenet_gpu_test.dart)
@@ -48,21 +48,21 @@ python3 scripts/facenet_reference.py "faces_gallery/Brad Pitt/sample_0.jpg"
 CPU embedding + diff:
 
 ```bash
-dart run bin/facenet_demo.dart
+dart run bin/facenet/demo.dart
 ```
 
 GPU embedding + diff (WSL2 / Linux with the CUDA build in place):
 
 ```bash
 LD_LIBRARY_PATH=/usr/lib/wsl/lib \
-  dart run bin/facenet_gpu_demo.dart
+  dart run bin/facenet/gpu_demo.dart
 ```
 
 Face-verification on real JPEG crops from `faces_gallery/`:
 
 ```bash
 LD_LIBRARY_PATH=/usr/lib/wsl/lib \
-  dart run bin/facenet_verify_demo.dart --gpu
+  dart run bin/facenet/verify.dart --gpu
 ```
 
 Prints something like:
@@ -177,7 +177,7 @@ port produces an embedding **bit-identical** to
 | Forward wall-clock   | 2.3 s   | 1.3 s   |
 
 Semantic sanity on the shipped face gallery
-(`bin/facenet_verify_demo.dart --gpu`, default paths):
+(`bin/facenet/verify.dart --gpu`, default paths):
 
 - Brad Pitt sample_0 ↔ sample_1: cosine ≈ 0.63 → **SAME**
 - Brad Pitt ↔ Alia Bhatt (both pairs): cosine ≈ −0.01 / 0.17 → **DIFFERENT**
