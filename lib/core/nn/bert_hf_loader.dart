@@ -74,6 +74,25 @@ class BertHFLoader {
     seed: seed,
   );
 
+  /// BAAI/bge-small-en-v1.5: 12 layers, hidden=384, heads=12, ffn=1536.
+  /// Uses [CLS] pooling + L2 normalize downstream (see `SentenceEncoder`
+  /// with `pooling: PoolingMode.cls`).
+  static BertConfig bgeSmallEnConfig({
+    Device device = Device.CPU,
+    int seed = 0,
+  }) => BertConfig(
+    vocabSize: 30522,
+    maxPositionEmbeddings: 512,
+    embedDim: 384,
+    numLayers: 12,
+    numHeads: 12,
+    intermediateSize: 1536,
+    layerNormEps: 1e-12,
+    typeVocabSize: 2,
+    device: device,
+    seed: seed,
+  );
+
   static BertLoadReport loadFile(
     BertModel model,
     String path, {

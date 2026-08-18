@@ -66,6 +66,9 @@ Float32List lastTokenHiddenLlama(Llama model, List<int> tokenIds) {
 
 LlamaConfig configForLlamaPreset(String preset, Device device) {
   switch (preset) {
+    case 'smollm2-135m':
+    case 'smollm2-135m-instruct':
+      return LlamaHFLoader.smollm2_135mConfig(device: device);
     case 'llama-3.2-1b':
     case 'llama-3.2-1b-instruct':
       return LlamaHFLoader.llama32_1BConfig(device: device);
@@ -78,7 +81,7 @@ LlamaConfig configForLlamaPreset(String preset, Device device) {
     default:
       stderr.writeln(
         'unknown llama preset "$preset"; use '
-        'llama-3.2-1b | llama-3.2-3b | llama-3.1-8b',
+        'smollm2-135m | llama-3.2-1b | llama-3.2-3b | llama-3.1-8b',
       );
       exit(64);
   }

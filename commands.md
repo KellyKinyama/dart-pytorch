@@ -16,6 +16,8 @@ fix so the CUDA driver stub is found. Drop it on native Linux.
 | 7 | pythia-1b        | 1.0B  | GPU    | ✅ local | [bin/pythia/run_1b_gpu_api.dart](bin/pythia/run_1b_gpu_api.dart) |
 | 8 | gpt-j-6b (hybrid)| 6.05B | CPU + GPU | ✅ local | [bin/gptj/run_6b_hybrid_api.dart](bin/gptj/run_6b_hybrid_api.dart) |
 | 9 | gpt-j-6b (CPU)   | 6.05B | CPU    | ✅ local | [bin/gptj/run_6b_cpu_api.dart](bin/gptj/run_6b_cpu_api.dart) |
+| 10 | smollm2-135m-instruct | 135M | CPU/GPU | ✅ local | [bin/smollm2_demo.dart](bin/smollm2_demo.dart) — Llama-arch tiny LM |
+| E1 | bge-small-en-v1.5 | 33M | CPU/GPU | ✅ local | [bin/bge_demo.dart](bin/bge_demo.dart) — SOTA sentence embeddings (CLS-pool + L2) |
 | S1 | whisper tiny.en  | 39M   | CPU    | ✅ local | [bin/whisper_demo.dart](bin/whisper_demo.dart) |
 | S2 | whisper tiny.en  | 39M   | GPU    | ✅ local | [bin/whisper_gpu_demo.dart](bin/whisper_gpu_demo.dart) |
 | F1 | facenet-vggface2 | 39M   | CPU    | n/a     | [bin/facenet/demo.dart](bin/facenet/demo.dart) — bit-exact vs. reference |
@@ -203,6 +205,84 @@ dart run bin/gptj/run_6b_cpu_api.dart \
 ```
 
 No `LD_LIBRARY_PATH` needed — nothing touches CUDA.
+
+## 10. smollm2-135m-instruct (135M, modern tiny LM)
+
+`HuggingFaceTB/SmolLM2-135M-Instruct` — a Llama-3-architecture model
+sized down to 135M parameters (30 layers, hidden=576, GQA 9→3 heads,
+RoPE θ=100k, tied word embeddings, vocab=49k). Uses our existing
+Llama runner via the `smollm2-135m` config preset.
+
+Weights (one-time, ~257 MB):
+
+```sh
+mkdir -p models/smollm2-135m
+for f in model.safetensors config.json tokenizer.json tokenizer_config.json; do
+  curl -L -o "models/smollm2-135m/$f" \
+    "https://huggingface.co/HuggingFaceTB/SmolLM2-135M-Instruct/resolve/main/$f"
+done
+```
+
+Run:
+
+```sh
+LD_LIBRARY_PATH=/usr/lib/wsl/lib \
+  dart run bin/smollm2_demo.dart --gpu \
+    --prompt "The capital of France is" --max-new 20
+```
+
+Verified:
+
+```
+Loaded. LlamaLoadReport(consumed=272, unused=0)
+== completion ==
+The capital of France is Paris. Paris is the largest city in France and the
+capital of the French department of the Espace
+```
+
+## E1. bge-small-en-v1.5 (33M, SOTA sentence embeddings)
+
+`BAAI/bge-small-en-v1.5` — 12-layer BERT (hidden=384, heads=12,
+ffn=1536, vocab=30522). Uses `[CLS]` pooling + L2 normalize, drops
+in wherever the repo currently uses MiniLM-L6-v2. Significantly
+higher discrimination on MTEB and on our tiny in-repo corpus.
+
+Weights + vocab (one-time, ~128 MB):
+
+```sh
+mkdir -p models/bge-small-en
+for f in model.safetensors vocab.txt config.json; do
+  curl -L -o "models/bge-small-en/$f" \
+    "https://huggingface.co/BAAI/bge-small-en-v1.5/resolve/main/$f"
+done
+```
+
+Run:
+
+```sh
+LD_LIBRARY_PATH=/usr/lib/wsl/lib \
+  dart run bin/bge_demo.dart --gpu
+```
+
+On the in-file 6-sentence corpus with query `"Who wrote the first
+computer program?"`:
+
+```
+== top matches ==
+  ★  cos=0.7858   Ada Lovelace wrote the first computer program in the 1840s.
+     cos=0.5582   Isaac Newton unified celestial and terrestrial mechanics.
+     cos=0.4163   The Eiffel Tower was completed in 1889 in Paris.
+     cos=0.3926   Vincent van Gogh painted Starry Night in June 1889.
+     cos=0.3519   The Great Wall of China stretches across northern China.
+     cos=0.3033   A pizza margherita is topped with tomato, mozzarella, and basil.
+```
+
+Gap between the correct match (0.786) and runner-up (0.558) is much
+wider than MiniLM-L6-v2 on the same query (~0.65 vs ~0.50), which is
+the SOTA-vs-legacy story. Same `SentenceEncoder` + `WordPieceTokenizer`
+plumbing as the RAG stack — swap `BertHFLoader.miniLmL6V2Config` for
+`BertHFLoader.bgeSmallEnConfig` and change `pooling` to
+`PoolingMode.cls`.
 
 ## Common overrides
 

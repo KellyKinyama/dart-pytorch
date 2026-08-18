@@ -11,6 +11,8 @@
 /// embedding suitable for cosine-similarity search and reranking.
 library;
 
+import 'dart:typed_data';
+
 import '../../tensor/tensor.dart';
 import '../modalities/text_transformer.dart';
 import '../module.dart';
@@ -49,7 +51,17 @@ Tensor poolTokens(Tensor tokenFeatures, PoolingMode mode) {
       final ones = Tensor.fill([1, s], 1.0 / s, device: tokenFeatures.device);
       return ones.matmul(tokenFeatures);
     case PoolingMode.cls:
-      return tokenFeatures.sliceRows(0, 1);
+      // `[1, S]` one-hot selector @ `[S, D]` = `[1, D]`. Device-native
+      // (matmul works on CPU + GPU), so this handles the GPU path
+      // where `sliceRows` isn't wired.
+      final data = Float32List(s);
+      data[0] = 1.0;
+      final selector = Tensor.fromFloat32List(
+        [1, s],
+        data,
+        device: tokenFeatures.device,
+      );
+      return selector.matmul(tokenFeatures);
   }
 }
 

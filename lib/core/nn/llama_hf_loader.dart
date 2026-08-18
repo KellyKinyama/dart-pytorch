@@ -39,6 +39,28 @@ import 'llama.dart';
 import 'safetensors.dart';
 
 class LlamaHFLoader {
+  /// HuggingFaceTB/SmolLM2-135M-Instruct config. `tieWeights: true`.
+  /// Llama architecture at ~135M params — smaller than any actual
+  /// Llama-3 release, so a good CPU-friendly baseline.
+  static LlamaConfig smollm2_135mConfig({
+    Device device = Device.CPU,
+    int seed = 0,
+    int? maxCtx,
+  }) => LlamaConfig(
+    vocabSize: 49152,
+    maxCtx: maxCtx ?? 8192,
+    embedDim: 576,
+    numLayers: 30,
+    numHeads: 9,
+    numKvHeads: 3,
+    ffnDim: 1536,
+    ropeBase: 100000.0,
+    rmsNormEps: 1e-5,
+    tieWeights: true,
+    device: device,
+    seed: seed,
+  );
+
   /// Llama-3.2-1B-Instruct config. `tieWeights: true`.
   static LlamaConfig llama32_1BConfig({
     Device device = Device.CPU,
