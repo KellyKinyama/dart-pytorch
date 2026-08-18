@@ -18,8 +18,8 @@
 ///   model.encoder.layers.{i}.fc2.*                       blocks.{i}.mlp.2
 ///   model.encoder.layers.{i}.final_layer_norm.*          blocks.{i}.mlp_ln
 ///
-/// Decoder tensors and `proj_out.weight` are ignored (decoder support
-/// is coming in a follow-up).
+/// Decoder loading is handled by [WhisperHFLoader.loadDecoderFile] /
+/// [loadDecoderMap], with an analogous key map for `model.decoder.*`.
 library;
 
 import 'dart:typed_data';
@@ -27,6 +27,7 @@ import 'dart:typed_data';
 import '../tensor/tensor.dart';
 import 'safetensors.dart';
 import 'whisper.dart';
+import 'whisper_decoder.dart';
 
 class WhisperLoadReport {
   final int consumedCount;
@@ -53,6 +54,173 @@ class WhisperHFLoader {
   }) {
     final state = SafeTensors.loadFile(path, keepFp16: keepFp16);
     return loadMap(encoder, state);
+  }
+
+  /// Load `openai/whisper-tiny.en` decoder weights from the same
+  /// safetensors file. Encoder tensors present in the file are
+  /// ignored.
+  static WhisperLoadReport loadDecoderFile(
+    WhisperDecoder decoder,
+    String path, {
+    bool keepFp16 = false,
+  }) {
+    final state = SafeTensors.loadFile(path, keepFp16: keepFp16);
+    return loadDecoderMap(decoder, state);
+  }
+
+  static WhisperLoadReport loadDecoderMap(
+    WhisperDecoder decoder,
+    Map<String, Tensor> state,
+  ) {
+    final consumed = <String>{};
+
+    Tensor take(String name) {
+      final t = state[name];
+      if (t == null) {
+        throw ArgumentError('whisper decoder loader: missing tensor "$name"');
+      }
+      consumed.add(name);
+      return t;
+    }
+
+    // ---- token + positional embedding ----
+    final tokE = take('model.decoder.embed_tokens.weight');
+    _expectShape(
+      tokE,
+      [decoder.vocabSize, decoder.embedDim],
+      'model.decoder.embed_tokens.weight',
+    );
+    _assign1d(decoder.tokenEmbedding.weight, tokE);
+
+    final posE = take('model.decoder.embed_positions.weight');
+    _expectShape(
+      posE,
+      [decoder.nCtx, decoder.embedDim],
+      'model.decoder.embed_positions.weight',
+    );
+    _assign1d(decoder.positionalEmbedding, posE);
+
+    // ---- per block ----
+    for (int i = 0; i < decoder.numLayers; i++) {
+      final blk = decoder.blocks[i];
+      final p = 'model.decoder.layers.$i';
+
+      // Self-attention.
+      _loadLinear(
+        blk.qProj,
+        weight: take('$p.self_attn.q_proj.weight'),
+        bias: take('$p.self_attn.q_proj.bias'),
+        outF: decoder.embedDim,
+        inF: decoder.embedDim,
+      );
+      _loadLinear(
+        blk.kProj,
+        weight: take('$p.self_attn.k_proj.weight'),
+        bias: null,
+        outF: decoder.embedDim,
+        inF: decoder.embedDim,
+      );
+      _loadLinear(
+        blk.vProj,
+        weight: take('$p.self_attn.v_proj.weight'),
+        bias: take('$p.self_attn.v_proj.bias'),
+        outF: decoder.embedDim,
+        inF: decoder.embedDim,
+      );
+      _loadLinear(
+        blk.outProj,
+        weight: take('$p.self_attn.out_proj.weight'),
+        bias: take('$p.self_attn.out_proj.bias'),
+        outF: decoder.embedDim,
+        inF: decoder.embedDim,
+      );
+      _loadLayerNorm(
+        blk.attnLn,
+        weight: take('$p.self_attn_layer_norm.weight'),
+        bias: take('$p.self_attn_layer_norm.bias'),
+        dim: decoder.embedDim,
+      );
+
+      // Cross-attention.
+      _loadLinear(
+        blk.crossQProj,
+        weight: take('$p.encoder_attn.q_proj.weight'),
+        bias: take('$p.encoder_attn.q_proj.bias'),
+        outF: decoder.embedDim,
+        inF: decoder.embedDim,
+      );
+      _loadLinear(
+        blk.crossKProj,
+        weight: take('$p.encoder_attn.k_proj.weight'),
+        bias: null,
+        outF: decoder.embedDim,
+        inF: decoder.embedDim,
+      );
+      _loadLinear(
+        blk.crossVProj,
+        weight: take('$p.encoder_attn.v_proj.weight'),
+        bias: take('$p.encoder_attn.v_proj.bias'),
+        outF: decoder.embedDim,
+        inF: decoder.embedDim,
+      );
+      _loadLinear(
+        blk.crossOutProj,
+        weight: take('$p.encoder_attn.out_proj.weight'),
+        bias: take('$p.encoder_attn.out_proj.bias'),
+        outF: decoder.embedDim,
+        inF: decoder.embedDim,
+      );
+      _loadLayerNorm(
+        blk.crossAttnLn,
+        weight: take('$p.encoder_attn_layer_norm.weight'),
+        bias: take('$p.encoder_attn_layer_norm.bias'),
+        dim: decoder.embedDim,
+      );
+
+      // MLP.
+      _loadLinear(
+        blk.mlp0,
+        weight: take('$p.fc1.weight'),
+        bias: take('$p.fc1.bias'),
+        outF: decoder.embedDim * 4,
+        inF: decoder.embedDim,
+      );
+      _loadLinear(
+        blk.mlp2,
+        weight: take('$p.fc2.weight'),
+        bias: take('$p.fc2.bias'),
+        outF: decoder.embedDim,
+        inF: decoder.embedDim * 4,
+      );
+      _loadLayerNorm(
+        blk.mlpLn,
+        weight: take('$p.final_layer_norm.weight'),
+        bias: take('$p.final_layer_norm.bias'),
+        dim: decoder.embedDim,
+      );
+    }
+
+    // ---- final LayerNorm ----
+    _loadLayerNorm(
+      decoder.ln,
+      weight: take('model.decoder.layer_norm.weight'),
+      bias: take('model.decoder.layer_norm.bias'),
+      dim: decoder.embedDim,
+    );
+
+    final unused = state.keys
+        .where(
+          (k) =>
+              !consumed.contains(k) &&
+              !k.startsWith('model.encoder.') &&
+              k != 'proj_out.weight',
+        )
+        .toList()
+      ..sort();
+    return WhisperLoadReport(
+      consumedCount: consumed.length,
+      unusedKeys: unused,
+    );
   }
 
   static WhisperLoadReport loadMap(
