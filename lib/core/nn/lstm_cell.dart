@@ -39,10 +39,18 @@ class LSTMCell extends Module {
 
   LSTMCell(this.inputSize, this.hiddenSize, {this.device = Device.CPU}) {
     final g = 4 * hiddenSize;
-    weightIhT = Tensor.fill([inputSize, g], 0.0,
-        device: device, requiresGrad: true);
-    weightHhT = Tensor.fill([hiddenSize, g], 0.0,
-        device: device, requiresGrad: true);
+    weightIhT = Tensor.fill(
+      [inputSize, g],
+      0.0,
+      device: device,
+      requiresGrad: true,
+    );
+    weightHhT = Tensor.fill(
+      [hiddenSize, g],
+      0.0,
+      device: device,
+      requiresGrad: true,
+    );
     biasSum = Tensor.fill([1, g], 0.0, device: device, requiresGrad: true);
   }
 

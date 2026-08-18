@@ -10,8 +10,11 @@ const _weightsPath = 'models/silero_vad/silero_vad.dpt';
 void main() {
   group('SileroVad on GPU', () {
     if (!File(_weightsPath).existsSync()) {
-      test('weights missing → GPU tests skipped', () {}, skip:
-          'Run scripts/extract_silero_vad.py first.');
+      test(
+        'weights missing → GPU tests skipped',
+        () {},
+        skip: 'Run scripts/extract_silero_vad.py first.',
+      );
       return;
     }
 
@@ -40,10 +43,7 @@ void main() {
         state: gpuModel.zeroState(),
         context: gpuModel.zeroContext(),
       );
-      expect(
-        rGpu.prob.toList()[0],
-        closeTo(rCpu.prob.toList()[0], 1e-4),
-      );
+      expect(rGpu.prob.toList()[0], closeTo(rCpu.prob.toList()[0], 1e-4));
     });
 
     test('CPU and GPU forward agree on 440 Hz sine sequence', () {

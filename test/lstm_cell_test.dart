@@ -56,13 +56,19 @@ void main() {
       final bIh = Float32List(8);
       final bHh = Float32List(8);
       // With PyTorch order (i, f, g, o) at offsets 0, 2, 4, 6 for hidden=2:
-      bIh[0] = -20; bIh[1] = -20; // i gate biases
-      bIh[2] = 20;  bIh[3] = 20;  // f gate biases (sigmoid ≈ 1)
-      bIh[4] = 0;   bIh[5] = 0;   // g gate biases (tanh(0) = 0)
-      bIh[6] = -20; bIh[7] = -20; // o gate biases (sigmoid ≈ 0)
+      bIh[0] = -20;
+      bIh[1] = -20; // i gate biases
+      bIh[2] = 20;
+      bIh[3] = 20; // f gate biases (sigmoid ≈ 1)
+      bIh[4] = 0;
+      bIh[5] = 0; // g gate biases (tanh(0) = 0)
+      bIh[6] = -20;
+      bIh[7] = -20; // o gate biases (sigmoid ≈ 0)
       cell.loadFromPytorch(
-        weightIh: wIh, weightHh: wHh,
-        biasIh: bIh, biasHh: bHh,
+        weightIh: wIh,
+        weightHh: wHh,
+        biasIh: bIh,
+        biasHh: bHh,
       );
 
       final x = Tensor.fill([1, 1], 0.0, device: Device.CPU);
@@ -99,7 +105,10 @@ void main() {
       final bIh = Float32List(8);
       final bHh = Float32List(8);
       cell.loadFromPytorch(
-        weightIh: wIh, weightHh: wHh, biasIh: bIh, biasHh: bHh,
+        weightIh: wIh,
+        weightHh: wHh,
+        biasIh: bIh,
+        biasHh: bHh,
       );
 
       final x = Tensor.fromFloat32List(
@@ -119,6 +128,7 @@ void main() {
         final e = math.exp(2 * v);
         return (e - 1) / (e + 1);
       }
+
       final iGate = [
         sigmoid(0.1 * 0.5 + 0.2 * (-0.3)),
         sigmoid(0.3 * 0.5 + (-0.1) * (-0.3)),

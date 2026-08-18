@@ -11,10 +11,14 @@ void main() {
   group('SileroVad', () {
     final hasWeights = File(_weightsPath).existsSync();
     if (!hasWeights) {
-      test('weights missing → tests skipped', () {}, skip:
-          'Run `python3 scripts/extract_silero_vad.py '
-          'models/silero_vad/silero_vad.onnx '
-          'models/silero_vad/silero_vad.dpt` first.');
+      test(
+        'weights missing → tests skipped',
+        () {},
+        skip:
+            'Run `python3 scripts/extract_silero_vad.py '
+            'models/silero_vad/silero_vad.onnx '
+            'models/silero_vad/silero_vad.dpt` first.',
+      );
       return;
     }
 
@@ -47,14 +51,7 @@ void main() {
 
     test('440 Hz sine → matches ONNX reference within tolerance', () {
       // Reference values captured from onnxruntime on the same input.
-      const ref = [
-        0.001670,
-        0.066041,
-        0.028639,
-        0.013030,
-        0.009366,
-        0.006642,
-      ];
+      const ref = [0.001670, 0.066041, 0.028639, 0.013030, 0.009366, 0.006642];
       var state = model.zeroState();
       var ctx = model.zeroContext();
       for (int i = 0; i < ref.length; i++) {
@@ -92,11 +89,7 @@ void main() {
       final state0 = model.zeroState();
       final ctx0 = model.zeroContext();
       // One call from zero state.
-      final r1 = model.callChunk(
-        input: silence,
-        state: state0,
-        context: ctx0,
-      );
+      final r1 = model.callChunk(input: silence, state: state0, context: ctx0);
       // Second call from the returned state — result should differ, because
       // LSTM state advances.
       final r2 = model.callChunk(
@@ -112,8 +105,11 @@ void main() {
         final d = (h1[i] - h2[i]).abs();
         if (d > maxDiff) maxDiff = d;
       }
-      expect(maxDiff, greaterThan(1e-6),
-          reason: 'state should evolve between chunks');
+      expect(
+        maxDiff,
+        greaterThan(1e-6),
+        reason: 'state should evolve between chunks',
+      );
     });
   });
 }
