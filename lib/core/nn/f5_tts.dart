@@ -64,10 +64,20 @@ class SinusoidalTimestepEmbedding extends Module {
     required this.embedDim,
     Device device = Device.CPU,
     int seed = 0,
-  })  : proj1 = Linear(freqDim, embedDim,
-            bias: true, device: device, seed: seed),
-        proj2 = Linear(embedDim, embedDim,
-            bias: true, device: device, seed: seed + 1) {
+  }) : proj1 = Linear(
+         freqDim,
+         embedDim,
+         bias: true,
+         device: device,
+         seed: seed,
+       ),
+       proj2 = Linear(
+         embedDim,
+         embedDim,
+         bias: true,
+         device: device,
+         seed: seed + 1,
+       ) {
     if (freqDim.isOdd) {
       throw ArgumentError(
         'SinusoidalTimestepEmbedding: freqDim ($freqDim) must be even',
@@ -103,10 +113,7 @@ class SinusoidalTimestepEmbedding extends Module {
   }
 
   @override
-  List<Tensor> parameters() => [
-        ...proj1.parameters(),
-        ...proj2.parameters(),
-      ];
+  List<Tensor> parameters() => [...proj1.parameters(), ...proj2.parameters()];
 
   @override
   List<Module> submodules() => [proj1, proj2];
@@ -127,29 +134,30 @@ class AdaLNZero extends Module {
   final int embedDim;
   final Linear modulation;
 
-  AdaLNZero({
-    required this.embedDim,
-    Device device = Device.CPU,
-    int seed = 0,
-  }) : modulation = Linear(
-          embedDim,
-          6 * embedDim,
-          bias: true,
-          device: device,
-          seed: seed,
-        ) {
+  AdaLNZero({required this.embedDim, Device device = Device.CPU, int seed = 0})
+    : modulation = Linear(
+        embedDim,
+        6 * embedDim,
+        bias: true,
+        device: device,
+        seed: seed,
+      ) {
     // Zero-initialise the modulation projection so each DiT block
     // starts as an identity residual (per Peebles & Xie 2022).
-    modulation.weight.assign(Tensor.fromList(
-      modulation.weight.shape,
-      List<double>.filled(modulation.weight.length, 0.0),
-      device: modulation.weight.device,
-    ));
-    modulation.bias!.assign(Tensor.fromList(
-      modulation.bias!.shape,
-      List<double>.filled(modulation.bias!.length, 0.0),
-      device: modulation.bias!.device,
-    ));
+    modulation.weight.assign(
+      Tensor.fromList(
+        modulation.weight.shape,
+        List<double>.filled(modulation.weight.length, 0.0),
+        device: modulation.weight.device,
+      ),
+    );
+    modulation.bias!.assign(
+      Tensor.fromList(
+        modulation.bias!.shape,
+        List<double>.filled(modulation.bias!.length, 0.0),
+        device: modulation.bias!.device,
+      ),
+    );
   }
 
   /// Produce the six per-block modulation vectors from the
@@ -256,24 +264,34 @@ class F5DiTBlock extends Module {
     required int mlpDim,
     Device device = Device.CPU,
     int seed = 0,
-  })  : norm1 = LayerNorm(embedDim, eps: 1e-6, device: device),
-        attn = MultiHeadAttention(
-          embedDim,
-          numHeads,
-          bias: true,
-          device: device,
-          seed: seed,
-        ),
-        norm2 = LayerNorm(embedDim, eps: 1e-6, device: device),
-        fc1 = Linear(embedDim, mlpDim,
-            bias: true, device: device, seed: seed + 10_000),
-        fc2 = Linear(mlpDim, embedDim,
-            bias: true, device: device, seed: seed + 20_000),
-        adaLn = AdaLNZero(
-          embedDim: embedDim,
-          device: device,
-          seed: seed + 30_000,
-        );
+  }) : norm1 = LayerNorm(embedDim, eps: 1e-6, device: device),
+       attn = MultiHeadAttention(
+         embedDim,
+         numHeads,
+         bias: true,
+         device: device,
+         seed: seed,
+       ),
+       norm2 = LayerNorm(embedDim, eps: 1e-6, device: device),
+       fc1 = Linear(
+         embedDim,
+         mlpDim,
+         bias: true,
+         device: device,
+         seed: seed + 10_000,
+       ),
+       fc2 = Linear(
+         mlpDim,
+         embedDim,
+         bias: true,
+         device: device,
+         seed: seed + 20_000,
+       ),
+       adaLn = AdaLNZero(
+         embedDim: embedDim,
+         device: device,
+         seed: seed + 30_000,
+       );
 
   /// Forward pass. `x` is `[N, embedDim]` and `c` is the timestep
   /// conditioning vector `[embedDim]`.
@@ -317,22 +335,21 @@ class F5DiTBlock extends Module {
     const a5 = 1.061405429;
     const p = 0.3275911;
     final t = 1.0 / (1.0 + p * x);
-    final y = 1.0 -
-        (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) *
-            t *
-            math.exp(-x * x);
+    final y =
+        1.0 -
+        (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * math.exp(-x * x);
     return sign * y;
   }
 
   @override
   List<Tensor> parameters() => [
-        ...norm1.parameters(),
-        ...attn.parameters(),
-        ...norm2.parameters(),
-        ...fc1.parameters(),
-        ...fc2.parameters(),
-        ...adaLn.parameters(),
-      ];
+    ...norm1.parameters(),
+    ...attn.parameters(),
+    ...norm2.parameters(),
+    ...fc1.parameters(),
+    ...fc2.parameters(),
+    ...adaLn.parameters(),
+  ];
 
   @override
   List<Module> submodules() => [norm1, attn, norm2, fc1, fc2, adaLn];

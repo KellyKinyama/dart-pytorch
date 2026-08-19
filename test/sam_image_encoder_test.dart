@@ -75,25 +75,30 @@ void main() {
       expect(ln(x).shape, equals([1, 4, 3, 3]));
     });
 
-    test('output is per-pixel zero-mean unit-variance after gamma=1, beta=0',
-        () {
-      final ln = LayerNorm2d(8);
-      final x = _fake([1, 8, 2, 2], seed: 2);
-      final out = ln(x);
-      final data = out.toList();
-      // For each pixel (y, x), the channel axis should be normalised.
-      const h = 2, w = 2, c = 8;
-      for (int y = 0; y < h; y++) {
-        for (int px = 0; px < w; px++) {
-          double sum = 0;
-          for (int ci = 0; ci < c; ci++) {
-            sum += data[((0 * c + ci) * h + y) * w + px];
+    test(
+      'output is per-pixel zero-mean unit-variance after gamma=1, beta=0',
+      () {
+        final ln = LayerNorm2d(8);
+        final x = _fake([1, 8, 2, 2], seed: 2);
+        final out = ln(x);
+        final data = out.toList();
+        // For each pixel (y, x), the channel axis should be normalised.
+        const h = 2, w = 2, c = 8;
+        for (int y = 0; y < h; y++) {
+          for (int px = 0; px < w; px++) {
+            double sum = 0;
+            for (int ci = 0; ci < c; ci++) {
+              sum += data[((0 * c + ci) * h + y) * w + px];
+            }
+            expect(
+              sum.abs() < 1e-4,
+              isTrue,
+              reason: 'pixel ($y,$px) mean $sum',
+            );
           }
-          expect(sum.abs() < 1e-4, isTrue,
-              reason: 'pixel ($y,$px) mean $sum');
         }
-      }
-    });
+      },
+    );
   });
 
   group('SamWindowedAttention', () {
@@ -130,8 +135,7 @@ void main() {
       expect(() => attn(_fake([15, 32], seed: 5)), throwsArgumentError);
     });
 
-    test('rel-pos actually affects output — zeroing the tables changes it',
-        () {
+    test('rel-pos actually affects output — zeroing the tables changes it', () {
       final attn = SamWindowedAttention(
         embedDim: 32,
         numHeads: 4,
@@ -153,8 +157,11 @@ void main() {
         final d = (withRelPos[i] - withoutRelPos[i]).abs();
         if (d > maxDiff) maxDiff = d;
       }
-      expect(maxDiff > 1e-3, isTrue,
-          reason: 'rel-pos should meaningfully change attention output');
+      expect(
+        maxDiff > 1e-3,
+        isTrue,
+        reason: 'rel-pos should meaningfully change attention output',
+      );
     });
   });
 

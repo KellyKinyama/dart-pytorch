@@ -65,10 +65,18 @@ class LayerNorm2d extends Module {
   final Tensor beta; // [C]
 
   LayerNorm2d(this.numChannels, {this.eps = 1e-6, Device device = Device.CPU})
-      : gamma =
-            Tensor.fill([numChannels], 1.0, requiresGrad: true, device: device),
-        beta = Tensor.fill([numChannels], 0.0,
-            requiresGrad: true, device: device);
+    : gamma = Tensor.fill(
+        [numChannels],
+        1.0,
+        requiresGrad: true,
+        device: device,
+      ),
+      beta = Tensor.fill(
+        [numChannels],
+        0.0,
+        requiresGrad: true,
+        device: device,
+      );
 
   Tensor call(Tensor x) {
     if (x.shape.length != 4 || x.shape[1] != numChannels) {
@@ -175,46 +183,58 @@ class SamWindowedAttention extends Module {
     required this.windowSize,
     Device device = Device.CPU,
     int seed = 0,
-  })  : headDim = embedDim ~/ numHeads,
-        wq = List<Linear>.generate(
-          numHeads,
-          (h) => Linear(
-            embedDim,
-            embedDim ~/ numHeads,
-            bias: true,
-            device: device,
-            seed: seed + h,
-          ),
-        ),
-        wk = List<Linear>.generate(
-          numHeads,
-          (h) => Linear(
-            embedDim,
-            embedDim ~/ numHeads,
-            bias: true,
-            device: device,
-            seed: seed + 1000 + h,
-          ),
-        ),
-        wv = List<Linear>.generate(
-          numHeads,
-          (h) => Linear(
-            embedDim,
-            embedDim ~/ numHeads,
-            bias: true,
-            device: device,
-            seed: seed + 2000 + h,
-          ),
-        ),
-        wo = Linear(
-          embedDim,
-          embedDim,
-          bias: true,
-          device: device,
-          seed: seed + 3000,
-        ),
-        relPosH = _initRelPos(numHeads, windowSize, embedDim ~/ numHeads, seed + 4000, device),
-        relPosW = _initRelPos(numHeads, windowSize, embedDim ~/ numHeads, seed + 5000, device);
+  }) : headDim = embedDim ~/ numHeads,
+       wq = List<Linear>.generate(
+         numHeads,
+         (h) => Linear(
+           embedDim,
+           embedDim ~/ numHeads,
+           bias: true,
+           device: device,
+           seed: seed + h,
+         ),
+       ),
+       wk = List<Linear>.generate(
+         numHeads,
+         (h) => Linear(
+           embedDim,
+           embedDim ~/ numHeads,
+           bias: true,
+           device: device,
+           seed: seed + 1000 + h,
+         ),
+       ),
+       wv = List<Linear>.generate(
+         numHeads,
+         (h) => Linear(
+           embedDim,
+           embedDim ~/ numHeads,
+           bias: true,
+           device: device,
+           seed: seed + 2000 + h,
+         ),
+       ),
+       wo = Linear(
+         embedDim,
+         embedDim,
+         bias: true,
+         device: device,
+         seed: seed + 3000,
+       ),
+       relPosH = _initRelPos(
+         numHeads,
+         windowSize,
+         embedDim ~/ numHeads,
+         seed + 4000,
+         device,
+       ),
+       relPosW = _initRelPos(
+         numHeads,
+         windowSize,
+         embedDim ~/ numHeads,
+         seed + 5000,
+         device,
+       );
 
   static Tensor _initRelPos(int nh, int size, int hd, int seed, Device device) {
     final rng = math.Random(seed);
@@ -417,11 +437,9 @@ class SamWindowedAttention extends Module {
           outHead[i * headDim + d] = acc;
         }
       }
-      heads.add(Tensor.fromFloat32List(
-        [n, headDim],
-        outHead,
-        device: x.device,
-      ));
+      heads.add(
+        Tensor.fromFloat32List([n, headDim], outHead, device: x.device),
+      );
     }
     final concat = TensorConcat.concat(heads, axis: 1);
     return wo(concat);
@@ -457,13 +475,13 @@ class SamWindowedAttention extends Module {
 
   @override
   List<Tensor> parameters() => [
-        for (final l in wq) ...l.parameters(),
-        for (final l in wk) ...l.parameters(),
-        for (final l in wv) ...l.parameters(),
-        ...wo.parameters(),
-        relPosH,
-        relPosW,
-      ];
+    for (final l in wq) ...l.parameters(),
+    for (final l in wk) ...l.parameters(),
+    for (final l in wv) ...l.parameters(),
+    ...wo.parameters(),
+    relPosH,
+    relPosW,
+  ];
 
   @override
   List<Module> submodules() => [...wq, ...wk, ...wv, wo];
@@ -488,20 +506,30 @@ class SamViTBlock extends Module {
     required int mlpDim,
     Device device = Device.CPU,
     int seed = 0,
-  })  : norm1 = LayerNorm(embedDim, eps: 1e-6, device: device),
-        attn = SamWindowedAttention(
-          embedDim: embedDim,
-          numHeads: numHeads,
-          inputSize: inputSize,
-          windowSize: windowSize,
-          device: device,
-          seed: seed,
-        ),
-        norm2 = LayerNorm(embedDim, eps: 1e-6, device: device),
-        fc1 = Linear(embedDim, mlpDim,
-            bias: true, device: device, seed: seed + 800_000),
-        fc2 = Linear(mlpDim, embedDim,
-            bias: true, device: device, seed: seed + 900_000);
+  }) : norm1 = LayerNorm(embedDim, eps: 1e-6, device: device),
+       attn = SamWindowedAttention(
+         embedDim: embedDim,
+         numHeads: numHeads,
+         inputSize: inputSize,
+         windowSize: windowSize,
+         device: device,
+         seed: seed,
+       ),
+       norm2 = LayerNorm(embedDim, eps: 1e-6, device: device),
+       fc1 = Linear(
+         embedDim,
+         mlpDim,
+         bias: true,
+         device: device,
+         seed: seed + 800_000,
+       ),
+       fc2 = Linear(
+         mlpDim,
+         embedDim,
+         bias: true,
+         device: device,
+         seed: seed + 900_000,
+       );
 
   Tensor call(Tensor x) {
     final h = x + attn(norm1(x));
@@ -531,21 +559,20 @@ class SamViTBlock extends Module {
     const a5 = 1.061405429;
     const p = 0.3275911;
     final t = 1.0 / (1.0 + p * x);
-    final y = 1.0 -
-        (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) *
-            t *
-            math.exp(-x * x);
+    final y =
+        1.0 -
+        (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * math.exp(-x * x);
     return sign * y;
   }
 
   @override
   List<Tensor> parameters() => [
-        ...norm1.parameters(),
-        ...attn.parameters(),
-        ...norm2.parameters(),
-        ...fc1.parameters(),
-        ...fc2.parameters(),
-      ];
+    ...norm1.parameters(),
+    ...attn.parameters(),
+    ...norm2.parameters(),
+    ...fc1.parameters(),
+    ...fc2.parameters(),
+  ];
 
   @override
   List<Module> submodules() => [norm1, attn, norm2, fc1, fc2];
@@ -588,46 +615,43 @@ class SamImageEncoderConfig {
   static SamImageEncoderConfig vitB({
     Device device = Device.CPU,
     int seed = 0,
-  }) =>
-      SamImageEncoderConfig(
-        embedDim: 768,
-        numLayers: 12,
-        numHeads: 12,
-        mlpDim: 3072,
-        globalAttnIndices: const [2, 5, 8, 11],
-        device: device,
-        seed: seed,
-      );
+  }) => SamImageEncoderConfig(
+    embedDim: 768,
+    numLayers: 12,
+    numHeads: 12,
+    mlpDim: 3072,
+    globalAttnIndices: const [2, 5, 8, 11],
+    device: device,
+    seed: seed,
+  );
 
   /// `facebook/sam-vit-large` config.
   static SamImageEncoderConfig vitL({
     Device device = Device.CPU,
     int seed = 0,
-  }) =>
-      SamImageEncoderConfig(
-        embedDim: 1024,
-        numLayers: 24,
-        numHeads: 16,
-        mlpDim: 4096,
-        globalAttnIndices: const [5, 11, 17, 23],
-        device: device,
-        seed: seed,
-      );
+  }) => SamImageEncoderConfig(
+    embedDim: 1024,
+    numLayers: 24,
+    numHeads: 16,
+    mlpDim: 4096,
+    globalAttnIndices: const [5, 11, 17, 23],
+    device: device,
+    seed: seed,
+  );
 
   /// `facebook/sam-vit-huge` config.
   static SamImageEncoderConfig vitH({
     Device device = Device.CPU,
     int seed = 0,
-  }) =>
-      SamImageEncoderConfig(
-        embedDim: 1280,
-        numLayers: 32,
-        numHeads: 16,
-        mlpDim: 5120,
-        globalAttnIndices: const [7, 15, 23, 31],
-        device: device,
-        seed: seed,
-      );
+  }) => SamImageEncoderConfig(
+    embedDim: 1280,
+    numLayers: 32,
+    numHeads: 16,
+    mlpDim: 5120,
+    globalAttnIndices: const [7, 15, 23, 31],
+    device: device,
+    seed: seed,
+  );
 }
 
 class SamImageEncoder extends Module {
@@ -650,57 +674,59 @@ class SamImageEncoder extends Module {
   final LayerNorm2d neckLn2;
 
   SamImageEncoder(this.config)
-      : patchEmbed = Conv2d(
-          3,
-          config.embedDim,
-          kernel: config.patchSize,
-          stride: config.patchSize,
-          padding: 0,
-          bias: true,
-          device: config.device,
-          seed: config.seed,
-        ),
-        posEmbed = _initPosEmbed(
-          config.gridSize,
-          config.embedDim,
-          config.seed + 1,
-          config.device,
-        ),
-        blocks = <SamViTBlock>[],
-        neck1 = Conv2d(
-          config.embedDim,
-          config.outChannels,
-          kernel: 1,
-          stride: 1,
-          padding: 0,
-          bias: false,
-          device: config.device,
-          seed: config.seed + 500_000,
-        ),
-        neckLn1 = LayerNorm2d(config.outChannels, device: config.device),
-        neck2 = Conv2d(
-          config.outChannels,
-          config.outChannels,
-          kernel: 3,
-          stride: 1,
-          padding: 1,
-          bias: false,
-          device: config.device,
-          seed: config.seed + 600_000,
-        ),
-        neckLn2 = LayerNorm2d(config.outChannels, device: config.device) {
+    : patchEmbed = Conv2d(
+        3,
+        config.embedDim,
+        kernel: config.patchSize,
+        stride: config.patchSize,
+        padding: 0,
+        bias: true,
+        device: config.device,
+        seed: config.seed,
+      ),
+      posEmbed = _initPosEmbed(
+        config.gridSize,
+        config.embedDim,
+        config.seed + 1,
+        config.device,
+      ),
+      blocks = <SamViTBlock>[],
+      neck1 = Conv2d(
+        config.embedDim,
+        config.outChannels,
+        kernel: 1,
+        stride: 1,
+        padding: 0,
+        bias: false,
+        device: config.device,
+        seed: config.seed + 500_000,
+      ),
+      neckLn1 = LayerNorm2d(config.outChannels, device: config.device),
+      neck2 = Conv2d(
+        config.outChannels,
+        config.outChannels,
+        kernel: 3,
+        stride: 1,
+        padding: 1,
+        bias: false,
+        device: config.device,
+        seed: config.seed + 600_000,
+      ),
+      neckLn2 = LayerNorm2d(config.outChannels, device: config.device) {
     final globals = config.globalAttnIndices.toSet();
     for (int i = 0; i < config.numLayers; i++) {
       final isGlobal = globals.contains(i);
-      blocks.add(SamViTBlock(
-        embedDim: config.embedDim,
-        numHeads: config.numHeads,
-        inputSize: config.gridSize,
-        windowSize: isGlobal ? config.gridSize : config.windowSize,
-        mlpDim: config.mlpDim,
-        device: config.device,
-        seed: config.seed + 100_000 * (i + 1),
-      ));
+      blocks.add(
+        SamViTBlock(
+          embedDim: config.embedDim,
+          numHeads: config.numHeads,
+          inputSize: config.gridSize,
+          windowSize: isGlobal ? config.gridSize : config.windowSize,
+          mlpDim: config.mlpDim,
+          device: config.device,
+          seed: config.seed + 100_000 * (i + 1),
+        ),
+      );
     }
   }
 
@@ -792,28 +818,31 @@ class SamImageEncoder extends Module {
     final grid = config.gridSize;
     final d = config.embedDim;
     final vals = posEmbed.toFloat32List();
-    return Tensor.fromFloat32List([grid * grid, d], vals,
-        device: posEmbed.device);
+    return Tensor.fromFloat32List(
+      [grid * grid, d],
+      vals,
+      device: posEmbed.device,
+    );
   }
 
   @override
   List<Tensor> parameters() => [
-        ...patchEmbed.parameters(),
-        posEmbed,
-        for (final b in blocks) ...b.parameters(),
-        ...neck1.parameters(),
-        ...neckLn1.parameters(),
-        ...neck2.parameters(),
-        ...neckLn2.parameters(),
-      ];
+    ...patchEmbed.parameters(),
+    posEmbed,
+    for (final b in blocks) ...b.parameters(),
+    ...neck1.parameters(),
+    ...neckLn1.parameters(),
+    ...neck2.parameters(),
+    ...neckLn2.parameters(),
+  ];
 
   @override
   List<Module> submodules() => [
-        patchEmbed,
-        ...blocks,
-        neck1,
-        neckLn1,
-        neck2,
-        neckLn2,
-      ];
+    patchEmbed,
+    ...blocks,
+    neck1,
+    neckLn1,
+    neck2,
+    neckLn2,
+  ];
 }

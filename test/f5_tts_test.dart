@@ -43,10 +43,7 @@ void main() {
 
     test('rejects wrong-shape input', () {
       final emb = SinusoidalTimestepEmbedding(freqDim: 32, embedDim: 64);
-      expect(
-        () => emb(Tensor.fromList([2], [0.5, 0.7])),
-        throwsArgumentError,
-      );
+      expect(() => emb(Tensor.fromList([2], [0.5, 0.7])), throwsArgumentError);
     });
 
     test('rejects odd freqDim', () {
@@ -63,8 +60,11 @@ void main() {
       final c = _fake([16], seed: 1).reshape([16]);
       final mod = adaLn(c).toList();
       for (int i = 0; i < mod.length; i++) {
-        expect(mod[i].abs() < 1e-6, isTrue,
-            reason: 'mod[$i] = ${mod[i]} — should be zero at init');
+        expect(
+          mod[i].abs() < 1e-6,
+          isTrue,
+          reason: 'mod[$i] = ${mod[i]} — should be zero at init',
+        );
       }
     });
 
@@ -80,11 +80,13 @@ void main() {
       // regime. Any non-zero value across the 96-cell block is enough.
       final w = List<double>.filled(adaLn.modulation.weight.length, 0.0);
       w[0] = 0.5;
-      adaLn.modulation.weight.assign(Tensor.fromList(
-        adaLn.modulation.weight.shape,
-        w,
-        device: adaLn.modulation.weight.device,
-      ));
+      adaLn.modulation.weight.assign(
+        Tensor.fromList(
+          adaLn.modulation.weight.shape,
+          w,
+          device: adaLn.modulation.weight.device,
+        ),
+      );
       final c = Tensor.fromList([16], List<double>.filled(16, 1.0));
       final mod = adaLn(c).toList();
       double maxAbs = 0;
@@ -134,8 +136,11 @@ void main() {
         final d = (xVals[i] - yVals[i]).abs();
         if (d > maxDiff) maxDiff = d;
       }
-      expect(maxDiff < 1e-5, isTrue,
-          reason: 'DiT block should be identity at init; max diff = $maxDiff');
+      expect(
+        maxDiff < 1e-5,
+        isTrue,
+        reason: 'DiT block should be identity at init; max diff = $maxDiff',
+      );
     });
 
     test('after perturbing modulation, block leaves identity regime', () {
@@ -143,11 +148,13 @@ void main() {
       // Perturb the AdaLN modulation weight matrix so gate_msa is
       // non-zero.
       final w = List<double>.filled(block.adaLn.modulation.weight.length, 0.1);
-      block.adaLn.modulation.weight.assign(Tensor.fromList(
-        block.adaLn.modulation.weight.shape,
-        w,
-        device: block.adaLn.modulation.weight.device,
-      ));
+      block.adaLn.modulation.weight.assign(
+        Tensor.fromList(
+          block.adaLn.modulation.weight.shape,
+          w,
+          device: block.adaLn.modulation.weight.device,
+        ),
+      );
       final x = _fake([5, 32], seed: 11);
       final c = _fake([32], seed: 12);
       final y = block(x, c);
@@ -158,8 +165,11 @@ void main() {
         final d = (xVals[i] - yVals[i]).abs();
         if (d > maxDiff) maxDiff = d;
       }
-      expect(maxDiff > 1e-3, isTrue,
-          reason: 'perturbed block should differ from identity');
+      expect(
+        maxDiff > 1e-3,
+        isTrue,
+        reason: 'perturbed block should differ from identity',
+      );
     });
 
     test('rejects wrong-shape input', () {
