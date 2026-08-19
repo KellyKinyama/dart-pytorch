@@ -91,13 +91,14 @@ Future<void> main(List<String> args) async {
   for (final code in text.toLowerCase().codeUnits) {
     tokenIds.add(code % _vocabSize);
   }
-  final tokens = Tensor.fromList(
-    [tokenIds.length],
-    tokenIds.map((i) => i.toDouble()).toList(),
-  );
+  final tokens = Tensor.fromList([
+    tokenIds.length,
+  ], tokenIds.map((i) => i.toDouble()).toList());
   swTok.stop();
-  print('tokenise: ${swTok.elapsedMilliseconds} ms  '
-      '(${tokenIds.length} chars → ${tokens.shape})');
+  print(
+    'tokenise: ${swTok.elapsedMilliseconds} ms  '
+    '(${tokenIds.length} chars → ${tokens.shape})',
+  );
 
   // ---------- 2. Build models ----------
   print('');
@@ -141,12 +142,16 @@ Future<void> main(List<String> args) async {
     sw.stop();
     print('  $report  (${sw.elapsedMilliseconds} ms)');
   } else if (f5WeightsPath != null) {
-    stderr.writeln('warning: --f5-weights $f5WeightsPath not found; '
-        'using random init');
+    stderr.writeln(
+      'warning: --f5-weights $f5WeightsPath not found; '
+      'using random init',
+    );
   } else {
     print('');
-    print('(no F5-TTS weights provided; using random init — output '
-        'will be uncorrelated noise)');
+    print(
+      '(no F5-TTS weights provided; using random init — output '
+      'will be uncorrelated noise)',
+    );
   }
   if (vocoderWeightsPath != null && File(vocoderWeightsPath).existsSync()) {
     print('Loading HiFi-GAN weights from $vocoderWeightsPath ...');
@@ -181,10 +186,9 @@ Future<void> main(List<String> args) async {
   // softplus(0) = ln(2). For a proper demo we'd apply this alignment,
   // but at random init we'd get ~0.69 frames per char. Instead use a
   // fixed 5 frames per char so downstream shapes are reasonable.
-  final fixedDur = Tensor.fromList(
-    [tokenIds.length],
-    List<double>.filled(tokenIds.length, 5.0),
-  );
+  final fixedDur = Tensor.fromList([
+    tokenIds.length,
+  ], List<double>.filled(tokenIds.length, 5.0));
   final textCond = F5DurationPredictor.expandTextToFrames(
     textFeatures,
     f5WeightsPath == null ? fixedDur : durations,
@@ -215,8 +219,10 @@ Future<void> main(List<String> args) async {
   final wav = vocoder(melT); // [1, 1, T·256]
   swV.stop();
   final wavData = wav.toList();
-  print('  ${swV.elapsedMilliseconds} ms  → ${wav.shape} '
-      '(${wavData.length ~/ _sampleRate} s at $_sampleRate Hz)');
+  print(
+    '  ${swV.elapsedMilliseconds} ms  → ${wav.shape} '
+    '(${wavData.length ~/ _sampleRate} s at $_sampleRate Hz)',
+  );
 
   // ---------- 7. Write WAV ----------
   _writeWav(outPath, wavData, _sampleRate);

@@ -1107,6 +1107,96 @@ class F5DurationPredictor extends Module {
 
   @override
   List<Module> submodules() => [...blocks, finalNorm, head];
+
+  /// Differentiable forward — returns the **raw** pre-softplus scores
+  /// `[T_chars]` as a Tensor whose gradient tape is preserved. Used by
+  /// [F5DurationLoss] during training. For inference use [call].
+  Tensor rawScores(Tensor textFeatures) {
+    if (textFeatures.shape.length != 2 || textFeatures.shape[1] != textDim) {
+      throw ArgumentError(
+        'F5DurationPredictor.rawScores: expected [T, $textDim]; got '
+        '${textFeatures.shape}',
+      );
+    }
+    final t = textFeatures.shape[0];
+    var h = textFeatures.reshape([1, t, textDim]);
+    for (final b in blocks) {
+      h = b(h);
+    }
+    final flat = h.reshape([t, textDim]);
+    final normed = finalNorm(flat);
+    return head(normed).reshape([t]);
+  }
+}
+
+/// Training losses for [F5DurationPredictor].
+///
+/// Two flavours are provided. Both operate on the pre-softplus raw
+/// scores from [F5DurationPredictor.rawScores] so gradients flow
+/// through the whole predictor.
+///
+///   * [F5DurationLoss.rate] — self-supervised: the total predicted
+///     duration is nudged toward a known mel length. Requires only
+///     `(text_tokens, mel_length)` pairs; no per-character alignment.
+///
+///   * [F5DurationLoss.mse] — supervised per-character MSE against an
+///     oracle duration vector. Use when you have forced-alignment
+///     ground truth (MFA, monotonic-attention pretraining, etc.).
+///
+/// Softplus is applied differentiably via the identity
+///   `softplus(x) = -log(sigmoid(-x))`
+/// so gradients stay finite and there is no `exp` overflow.
+class F5DurationLoss {
+  /// Rate loss: `((sum(softplus(raw)) - targetMelFrames) / T_chars) ** 2`.
+  ///
+  /// Normalising by `T_chars ** 2` keeps the loss scale roughly
+  /// per-character and invariant to sequence length.
+  static Tensor rate({
+    required Tensor rawScores,
+    required double targetMelFrames,
+  }) {
+    if (rawScores.shape.length != 1) {
+      throw ArgumentError(
+        'F5DurationLoss.rate: expected 1D raw scores; got ${rawScores.shape}',
+      );
+    }
+    final t = rawScores.shape[0];
+    final durations = _softplus(rawScores);
+    final total = durations.sum();
+    final delta = total - targetMelFrames;
+    return delta * delta * (1.0 / (t * t));
+  }
+
+  /// Per-character MSE against an oracle duration vector.
+  /// `rawScores: [T_chars]`, `target: [T_chars]` — both non-negative
+  /// mel-frame counts.
+  static Tensor mse({
+    required Tensor rawScores,
+    required Tensor target,
+  }) {
+    if (rawScores.shape.length != 1 ||
+        target.shape.length != 1 ||
+        rawScores.shape[0] != target.shape[0]) {
+      throw ArgumentError(
+        'F5DurationLoss.mse: shape mismatch; scores=${rawScores.shape} '
+        'target=${target.shape}',
+      );
+    }
+    final t = rawScores.shape[0];
+    final pred = _softplus(rawScores);
+    final diff = pred - target;
+    return (diff * diff).sum() * (1.0 / t);
+  }
+
+  /// Differentiable softplus via `-log(sigmoid(-x))`. Numerically safe
+  /// for the duration ranges we care about (predicted mel-frame counts
+  /// stay under a few hundred).
+  static Tensor _softplus(Tensor x) {
+    final negX = x * -1.0;
+    final s = negX.sigmoid();
+    final logS = s.log();
+    return logS * -1.0;
+  }
 }
 
 // ---------------------------------------------------------------------------
