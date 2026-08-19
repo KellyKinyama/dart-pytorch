@@ -204,20 +204,36 @@ class T5Attention extends Module {
   }) : qScale = math.sqrt(dKv.toDouble()),
        wq = List<Linear>.generate(
          numHeads,
-         (h) => Linear(dModel, dKv, bias: false, device: device, seed: seed + h),
+         (h) =>
+             Linear(dModel, dKv, bias: false, device: device, seed: seed + h),
        ),
        wk = List<Linear>.generate(
          numHeads,
-         (h) => Linear(kvDim, dKv,
-             bias: false, device: device, seed: seed + 1000 + h),
+         (h) => Linear(
+           kvDim,
+           dKv,
+           bias: false,
+           device: device,
+           seed: seed + 1000 + h,
+         ),
        ),
        wv = List<Linear>.generate(
          numHeads,
-         (h) => Linear(kvDim, dKv,
-             bias: false, device: device, seed: seed + 2000 + h),
+         (h) => Linear(
+           kvDim,
+           dKv,
+           bias: false,
+           device: device,
+           seed: seed + 2000 + h,
+         ),
        ),
-       wo = Linear(numHeads * dKv, dModel,
-           bias: false, device: device, seed: seed + 3000);
+       wo = Linear(
+         numHeads * dKv,
+         dModel,
+         bias: false,
+         device: device,
+         seed: seed + 3000,
+       );
 
   /// `xq`: `[Nq, dModel]`. `xkv`: `[Nk, kvDim]` (pass `xq` for self-
   /// attention). `mask`: optional additive mask shared across heads
@@ -229,8 +245,7 @@ class T5Attention extends Module {
     Tensor? mask,
     List<Tensor>? relativeBiasPerHead,
   }) {
-    if (relativeBiasPerHead != null &&
-        relativeBiasPerHead.length != numHeads) {
+    if (relativeBiasPerHead != null && relativeBiasPerHead.length != numHeads) {
       throw ArgumentError(
         'T5Attention: relativeBiasPerHead must have $numHeads tensors; '
         'got ${relativeBiasPerHead.length}',
@@ -257,11 +272,11 @@ class T5Attention extends Module {
 
   @override
   List<Tensor> parameters() => [
-        for (final l in wq) ...l.parameters(),
-        for (final l in wk) ...l.parameters(),
-        for (final l in wv) ...l.parameters(),
-        ...wo.parameters(),
-      ];
+    for (final l in wq) ...l.parameters(),
+    for (final l in wk) ...l.parameters(),
+    for (final l in wv) ...l.parameters(),
+    ...wo.parameters(),
+  ];
 
   @override
   List<Module> submodules() => [...wq, ...wk, ...wv, wo];
@@ -283,14 +298,23 @@ class T5Ffn extends Module {
     required this.activation,
     Device device = Device.CPU,
     int seed = 0,
-  })  : wi0 = Linear(dModel, dFf,
-            bias: false, device: device, seed: seed),
-        wi1 = activation == T5FfnActivation.gatedGelu
-            ? Linear(dModel, dFf,
-                bias: false, device: device, seed: seed + 100000)
-            : null,
-        wo = Linear(dFf, dModel,
-            bias: false, device: device, seed: seed + 200000);
+  }) : wi0 = Linear(dModel, dFf, bias: false, device: device, seed: seed),
+       wi1 = activation == T5FfnActivation.gatedGelu
+           ? Linear(
+               dModel,
+               dFf,
+               bias: false,
+               device: device,
+               seed: seed + 100000,
+             )
+           : null,
+       wo = Linear(
+         dFf,
+         dModel,
+         bias: false,
+         device: device,
+         seed: seed + 200000,
+       );
 
   Tensor call(Tensor x) {
     switch (activation) {
@@ -311,10 +335,10 @@ class T5Ffn extends Module {
 
   @override
   List<Tensor> parameters() => [
-        ...wi0.parameters(),
-        if (wi1 != null) ...wi1!.parameters(),
-        ...wo.parameters(),
-      ];
+    ...wi0.parameters(),
+    if (wi1 != null) ...wi1!.parameters(),
+    ...wo.parameters(),
+  ];
 
   @override
   List<Module> submodules() => [wi0, if (wi1 != null) wi1!, wo];
@@ -330,35 +354,38 @@ class T5EncoderBlock extends Module {
   final RMSNorm ffnNorm;
   final T5Ffn ffn;
 
-  T5EncoderBlock({
-    required T5Config cfg,
-    required int seed,
-  })  : selfAttnNorm =
-            RMSNorm(cfg.dModel, eps: cfg.layerNormEps, device: cfg.device),
-        selfAttn = T5Attention(
-          dModel: cfg.dModel,
-          kvDim: cfg.dModel,
-          numHeads: cfg.numHeads,
-          dKv: cfg.dKv,
-          device: cfg.device,
-          seed: seed,
-        ),
-        ffnNorm =
-            RMSNorm(cfg.dModel, eps: cfg.layerNormEps, device: cfg.device),
-        ffn = T5Ffn(
-          dModel: cfg.dModel,
-          dFf: cfg.dFf,
-          activation: cfg.feedForwardProj,
-          device: cfg.device,
-          seed: seed + 10000,
-        );
+  T5EncoderBlock({required T5Config cfg, required int seed})
+    : selfAttnNorm = RMSNorm(
+        cfg.dModel,
+        eps: cfg.layerNormEps,
+        device: cfg.device,
+      ),
+      selfAttn = T5Attention(
+        dModel: cfg.dModel,
+        kvDim: cfg.dModel,
+        numHeads: cfg.numHeads,
+        dKv: cfg.dKv,
+        device: cfg.device,
+        seed: seed,
+      ),
+      ffnNorm = RMSNorm(cfg.dModel, eps: cfg.layerNormEps, device: cfg.device),
+      ffn = T5Ffn(
+        dModel: cfg.dModel,
+        dFf: cfg.dFf,
+        activation: cfg.feedForwardProj,
+        device: cfg.device,
+        seed: seed + 10000,
+      );
 
   /// `x: [N, dModel]`. `relativeBias`: per-head bias tensors from the
   /// shared encoder [T5RelativeBias] (may be null on layer 0 during
   /// param dump; production callers always pass a valid list).
   Tensor call(Tensor x, {required List<Tensor>? relativeBias}) {
-    final a = selfAttn(selfAttnNorm(x), selfAttnNorm(x),
-        relativeBiasPerHead: relativeBias);
+    final a = selfAttn(
+      selfAttnNorm(x),
+      selfAttnNorm(x),
+      relativeBiasPerHead: relativeBias,
+    );
     final h = x + a;
     final f = ffn(ffnNorm(h));
     return h + f;
@@ -366,11 +393,11 @@ class T5EncoderBlock extends Module {
 
   @override
   List<Tensor> parameters() => [
-        ...selfAttnNorm.parameters(),
-        ...selfAttn.parameters(),
-        ...ffnNorm.parameters(),
-        ...ffn.parameters(),
-      ];
+    ...selfAttnNorm.parameters(),
+    ...selfAttn.parameters(),
+    ...ffnNorm.parameters(),
+    ...ffn.parameters(),
+  ];
 
   @override
   List<Module> submodules() => [selfAttnNorm, selfAttn, ffnNorm, ffn];
@@ -388,38 +415,41 @@ class T5DecoderBlock extends Module {
   final RMSNorm ffnNorm;
   final T5Ffn ffn;
 
-  T5DecoderBlock({
-    required T5Config cfg,
-    required int seed,
-  })  : selfAttnNorm =
-            RMSNorm(cfg.dModel, eps: cfg.layerNormEps, device: cfg.device),
-        selfAttn = T5Attention(
-          dModel: cfg.dModel,
-          kvDim: cfg.dModel,
-          numHeads: cfg.numHeads,
-          dKv: cfg.dKv,
-          device: cfg.device,
-          seed: seed,
-        ),
-        crossAttnNorm =
-            RMSNorm(cfg.dModel, eps: cfg.layerNormEps, device: cfg.device),
-        crossAttn = T5Attention(
-          dModel: cfg.dModel,
-          kvDim: cfg.dModel,
-          numHeads: cfg.numHeads,
-          dKv: cfg.dKv,
-          device: cfg.device,
-          seed: seed + 5000,
-        ),
-        ffnNorm =
-            RMSNorm(cfg.dModel, eps: cfg.layerNormEps, device: cfg.device),
-        ffn = T5Ffn(
-          dModel: cfg.dModel,
-          dFf: cfg.dFf,
-          activation: cfg.feedForwardProj,
-          device: cfg.device,
-          seed: seed + 10000,
-        );
+  T5DecoderBlock({required T5Config cfg, required int seed})
+    : selfAttnNorm = RMSNorm(
+        cfg.dModel,
+        eps: cfg.layerNormEps,
+        device: cfg.device,
+      ),
+      selfAttn = T5Attention(
+        dModel: cfg.dModel,
+        kvDim: cfg.dModel,
+        numHeads: cfg.numHeads,
+        dKv: cfg.dKv,
+        device: cfg.device,
+        seed: seed,
+      ),
+      crossAttnNorm = RMSNorm(
+        cfg.dModel,
+        eps: cfg.layerNormEps,
+        device: cfg.device,
+      ),
+      crossAttn = T5Attention(
+        dModel: cfg.dModel,
+        kvDim: cfg.dModel,
+        numHeads: cfg.numHeads,
+        dKv: cfg.dKv,
+        device: cfg.device,
+        seed: seed + 5000,
+      ),
+      ffnNorm = RMSNorm(cfg.dModel, eps: cfg.layerNormEps, device: cfg.device),
+      ffn = T5Ffn(
+        dModel: cfg.dModel,
+        dFf: cfg.dFf,
+        activation: cfg.feedForwardProj,
+        device: cfg.device,
+        seed: seed + 10000,
+      );
 
   /// `x: [Nq, dModel]` decoder input. `memory: [Nk, dModel]` encoder
   /// output. `selfCausalMask`: pre-built causal `[Nq, Nq]` mask.
@@ -430,8 +460,12 @@ class T5DecoderBlock extends Module {
     required Tensor selfCausalMask,
     required List<Tensor>? selfRelativeBias,
   }) {
-    final a = selfAttn(selfAttnNorm(x), selfAttnNorm(x),
-        mask: selfCausalMask, relativeBiasPerHead: selfRelativeBias);
+    final a = selfAttn(
+      selfAttnNorm(x),
+      selfAttnNorm(x),
+      mask: selfCausalMask,
+      relativeBiasPerHead: selfRelativeBias,
+    );
     var h = x + a;
     final c = crossAttn(crossAttnNorm(h), memory);
     h = h + c;
@@ -441,23 +475,23 @@ class T5DecoderBlock extends Module {
 
   @override
   List<Tensor> parameters() => [
-        ...selfAttnNorm.parameters(),
-        ...selfAttn.parameters(),
-        ...crossAttnNorm.parameters(),
-        ...crossAttn.parameters(),
-        ...ffnNorm.parameters(),
-        ...ffn.parameters(),
-      ];
+    ...selfAttnNorm.parameters(),
+    ...selfAttn.parameters(),
+    ...crossAttnNorm.parameters(),
+    ...crossAttn.parameters(),
+    ...ffnNorm.parameters(),
+    ...ffn.parameters(),
+  ];
 
   @override
   List<Module> submodules() => [
-        selfAttnNorm,
-        selfAttn,
-        crossAttnNorm,
-        crossAttn,
-        ffnNorm,
-        ffn,
-      ];
+    selfAttnNorm,
+    selfAttn,
+    crossAttnNorm,
+    crossAttn,
+    ffnNorm,
+    ffn,
+  ];
 }
 
 // ---------------------------------------------------------------------------
@@ -472,21 +506,25 @@ class T5Encoder extends Module {
   final RMSNorm finalNorm;
 
   T5Encoder(this.config, Embedding sharedEmbedding)
-      : tokenEmbedding = sharedEmbedding,
-        relativeBias = T5RelativeBias(
-          numBuckets: config.relativeAttentionNumBuckets,
-          numHeads: config.numHeads,
-          maxDistance: config.relativeAttentionMaxDistance,
-          bidirectional: true,
-          device: config.device,
-          seed: config.seed + 700000,
-        ),
-        blocks = <T5EncoderBlock>[],
-        finalNorm = RMSNorm(config.dModel,
-            eps: config.layerNormEps, device: config.device) {
+    : tokenEmbedding = sharedEmbedding,
+      relativeBias = T5RelativeBias(
+        numBuckets: config.relativeAttentionNumBuckets,
+        numHeads: config.numHeads,
+        maxDistance: config.relativeAttentionMaxDistance,
+        bidirectional: true,
+        device: config.device,
+        seed: config.seed + 700000,
+      ),
+      blocks = <T5EncoderBlock>[],
+      finalNorm = RMSNorm(
+        config.dModel,
+        eps: config.layerNormEps,
+        device: config.device,
+      ) {
     for (int i = 0; i < config.numLayers; i++) {
-      blocks.add(T5EncoderBlock(
-          cfg: config, seed: config.seed + 100000 + i * 1000));
+      blocks.add(
+        T5EncoderBlock(cfg: config, seed: config.seed + 100000 + i * 1000),
+      );
     }
   }
 
@@ -506,10 +544,10 @@ class T5Encoder extends Module {
 
   @override
   List<Tensor> parameters() => [
-        ...relativeBias.parameters(),
-        for (final b in blocks) ...b.parameters(),
-        ...finalNorm.parameters(),
-      ];
+    ...relativeBias.parameters(),
+    for (final b in blocks) ...b.parameters(),
+    ...finalNorm.parameters(),
+  ];
 
   @override
   List<Module> submodules() => [relativeBias, ...blocks, finalNorm];
@@ -523,21 +561,25 @@ class T5Decoder extends Module {
   final RMSNorm finalNorm;
 
   T5Decoder(this.config, Embedding sharedEmbedding)
-      : tokenEmbedding = sharedEmbedding,
-        relativeBias = T5RelativeBias(
-          numBuckets: config.relativeAttentionNumBuckets,
-          numHeads: config.numHeads,
-          maxDistance: config.relativeAttentionMaxDistance,
-          bidirectional: false,
-          device: config.device,
-          seed: config.seed + 800000,
-        ),
-        blocks = <T5DecoderBlock>[],
-        finalNorm = RMSNorm(config.dModel,
-            eps: config.layerNormEps, device: config.device) {
+    : tokenEmbedding = sharedEmbedding,
+      relativeBias = T5RelativeBias(
+        numBuckets: config.relativeAttentionNumBuckets,
+        numHeads: config.numHeads,
+        maxDistance: config.relativeAttentionMaxDistance,
+        bidirectional: false,
+        device: config.device,
+        seed: config.seed + 800000,
+      ),
+      blocks = <T5DecoderBlock>[],
+      finalNorm = RMSNorm(
+        config.dModel,
+        eps: config.layerNormEps,
+        device: config.device,
+      ) {
     for (int i = 0; i < config.numDecoderLayers; i++) {
-      blocks.add(T5DecoderBlock(
-          cfg: config, seed: config.seed + 300000 + i * 1000));
+      blocks.add(
+        T5DecoderBlock(cfg: config, seed: config.seed + 300000 + i * 1000),
+      );
     }
   }
 
@@ -552,20 +594,22 @@ class T5Decoder extends Module {
     final causal = causalMask(nq, device: h.device);
     final biasPerHead = relativeBias.maskPerHead(nq, nq);
     for (final b in blocks) {
-      h = b(h,
-          memory: memory,
-          selfCausalMask: causal,
-          selfRelativeBias: biasPerHead);
+      h = b(
+        h,
+        memory: memory,
+        selfCausalMask: causal,
+        selfRelativeBias: biasPerHead,
+      );
     }
     return finalNorm(h);
   }
 
   @override
   List<Tensor> parameters() => [
-        ...relativeBias.parameters(),
-        for (final b in blocks) ...b.parameters(),
-        ...finalNorm.parameters(),
-      ];
+    ...relativeBias.parameters(),
+    for (final b in blocks) ...b.parameters(),
+    ...finalNorm.parameters(),
+  ];
 
   @override
   List<Module> submodules() => [relativeBias, ...blocks, finalNorm];
@@ -580,32 +624,61 @@ class T5Model extends Module {
   final Embedding sharedEmbedding;
   final T5Encoder encoder;
   final T5Decoder decoder;
-  final Linear? untiedLmHead;
+
+  /// Always allocated. The loader may point this at the checkpoint's
+  /// `lm_head.weight` (untied) or copy `shared.weight` into it
+  /// (tied). See [useUntiedLmHead].
+  final Linear lmHead;
+
+  /// The `1/sqrt(dModel)` rescale HF applies when embeddings are
+  /// tied. Used at inference iff [useUntiedLmHead] is false.
   final double lmHeadScale;
+
+  /// Flipped to `true` by the loader when the checkpoint ships a
+  /// distinct `lm_head.weight`. When true, [logitsLastToken] skips
+  /// the `1/sqrt(dModel)` rescale (mirrors HF's behaviour for
+  /// checkpoints where `shared.weight != lm_head.weight`, e.g.
+  /// `google/flan-t5-*`).
+  bool useUntiedLmHead;
 
   T5Model._(
     this.config,
     this.sharedEmbedding,
     this.encoder,
     this.decoder,
-    this.untiedLmHead,
+    this.lmHead,
     this.lmHeadScale,
+    this.useUntiedLmHead,
   );
 
   factory T5Model(T5Config config) {
-    final shared = Embedding(config.vocabSize, config.dModel,
-        device: config.device, seed: config.seed);
+    final shared = Embedding(
+      config.vocabSize,
+      config.dModel,
+      device: config.device,
+      seed: config.seed,
+    );
     final encoder = T5Encoder(config, shared);
     final decoder = T5Decoder(config, shared);
-    final untied = config.tieWordEmbeddings
-        ? null
-        : Linear(config.dModel, config.vocabSize,
-            bias: false,
-            device: config.device,
-            seed: config.seed + 999000);
-    final scale =
-        config.tieWordEmbeddings ? 1.0 / math.sqrt(config.dModel) : 1.0;
-    return T5Model._(config, shared, encoder, decoder, untied, scale);
+    final lmHead = Linear(
+      config.dModel,
+      config.vocabSize,
+      bias: false,
+      device: config.device,
+      seed: config.seed + 999000,
+    );
+    final scale = 1.0 / math.sqrt(config.dModel);
+    // Default: assume tied per config. Loader flips to untied if it
+    // finds lm_head.weight in the checkpoint.
+    return T5Model._(
+      config,
+      shared,
+      encoder,
+      decoder,
+      lmHead,
+      scale,
+      /*useUntiedLmHead=*/ !config.tieWordEmbeddings,
+    );
   }
 
   /// Runs the encoder over `srcTokens` and returns the `[N, dModel]`
@@ -613,8 +686,10 @@ class T5Model extends Module {
   /// [generate].
   Tensor encode(List<int> srcTokens) {
     final t = Tensor.fromList(
-        [srcTokens.length], srcTokens.map((i) => i.toDouble()).toList(),
-        device: config.device);
+      [srcTokens.length],
+      srcTokens.map((i) => i.toDouble()).toList(),
+      device: config.device,
+    );
     return encoder(t);
   }
 
@@ -623,10 +698,12 @@ class T5Model extends Module {
   /// Returns `[vocabSize]` logits for the last position.
   Tensor logitsLastToken(List<int> tgtTokens, Tensor memory) {
     final t = Tensor.fromList(
-        [tgtTokens.length], tgtTokens.map((i) => i.toDouble()).toList(),
-        device: config.device);
+      [tgtTokens.length],
+      tgtTokens.map((i) => i.toDouble()).toList(),
+      device: config.device,
+    );
     var h = decoder(t, memory: memory);
-    if (config.tieWordEmbeddings) {
+    if (!useUntiedLmHead) {
       h = h * lmHeadScale;
     }
     // Slice last row.
@@ -639,20 +716,7 @@ class T5Model extends Module {
       lastRow[j] = flat[base + j];
     }
     final lastT = Tensor.fromList([1, d], lastRow, device: h.device);
-    Tensor logits;
-    if (config.tieWordEmbeddings) {
-      // logits = last @ sharedEmbedding.weight.T
-      logits = _logitsTied(lastT);
-    } else {
-      logits = untiedLmHead!(lastT);
-    }
-    return logits.reshape([config.vocabSize]);
-  }
-
-  Tensor _logitsTied(Tensor lastT) {
-    // shape: [1, d] @ [vocab, d]^T -> [1, vocab]
-    final w = sharedEmbedding.weight;
-    return lastT.matmul(w.transpose());
+    return lmHead(lastT).reshape([config.vocabSize]);
   }
 
   /// Greedy generation. Encodes once, then decodes up to
@@ -684,17 +748,17 @@ class T5Model extends Module {
 
   @override
   List<Tensor> parameters() => [
-        ...sharedEmbedding.parameters(),
-        ...encoder.parameters(),
-        ...decoder.parameters(),
-        if (untiedLmHead != null) ...untiedLmHead!.parameters(),
-      ];
+    ...sharedEmbedding.parameters(),
+    ...encoder.parameters(),
+    ...decoder.parameters(),
+    ...lmHead.parameters(),
+  ];
 
   @override
   List<Module> submodules() => [
-        sharedEmbedding,
-        encoder,
-        decoder,
-        if (untiedLmHead != null) untiedLmHead!,
-      ];
+    sharedEmbedding,
+    encoder,
+    decoder,
+    lmHead,
+  ];
 }

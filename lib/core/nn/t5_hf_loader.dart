@@ -42,10 +42,7 @@ import 'safetensors.dart';
 class T5LoadReport {
   final int consumedCount;
   final List<String> unusedKeys;
-  const T5LoadReport({
-    required this.consumedCount,
-    required this.unusedKeys,
-  });
+  const T5LoadReport({required this.consumedCount, required this.unusedKeys});
 
   @override
   String toString() =>
@@ -59,18 +56,18 @@ class T5HFLoader {
     int seed = 0,
     int? maxCtx,
   }) => T5Config(
-        vocabSize: 32128,
-        dModel: 512,
-        dFf: 2048,
-        dKv: 64,
-        numLayers: 6,
-        numDecoderLayers: 6,
-        numHeads: 8,
-        feedForwardProj: T5FfnActivation.relu,
-        maxCtx: maxCtx ?? 512,
-        device: device,
-        seed: seed,
-      );
+    vocabSize: 32128,
+    dModel: 512,
+    dFf: 2048,
+    dKv: 64,
+    numLayers: 6,
+    numDecoderLayers: 6,
+    numHeads: 8,
+    feedForwardProj: T5FfnActivation.relu,
+    maxCtx: maxCtx ?? 512,
+    device: device,
+    seed: seed,
+  );
 
   /// `google/t5-v1_1-small` — 60 M params, gated-GELU FFN.
   static T5Config t5V11SmallConfig({
@@ -78,18 +75,18 @@ class T5HFLoader {
     int seed = 0,
     int? maxCtx,
   }) => T5Config(
-        vocabSize: 32128,
-        dModel: 512,
-        dFf: 1024,
-        dKv: 64,
-        numLayers: 8,
-        numDecoderLayers: 8,
-        numHeads: 6,
-        feedForwardProj: T5FfnActivation.gatedGelu,
-        maxCtx: maxCtx ?? 512,
-        device: device,
-        seed: seed,
-      );
+    vocabSize: 32128,
+    dModel: 512,
+    dFf: 1024,
+    dKv: 64,
+    numLayers: 8,
+    numDecoderLayers: 8,
+    numHeads: 6,
+    feedForwardProj: T5FfnActivation.gatedGelu,
+    maxCtx: maxCtx ?? 512,
+    device: device,
+    seed: seed,
+  );
 
   /// `google/flan-t5-small` — same arch as `t5-v1_1-small`, just
   /// instruction-tuned weights.
@@ -106,18 +103,18 @@ class T5HFLoader {
     int seed = 0,
     int? maxCtx,
   }) => T5Config(
-        vocabSize: 32128,
-        dModel: 768,
-        dFf: 2048,
-        dKv: 64,
-        numLayers: 12,
-        numDecoderLayers: 12,
-        numHeads: 12,
-        feedForwardProj: T5FfnActivation.gatedGelu,
-        maxCtx: maxCtx ?? 512,
-        device: device,
-        seed: seed,
-      );
+    vocabSize: 32128,
+    dModel: 768,
+    dFf: 2048,
+    dKv: 64,
+    numLayers: 12,
+    numDecoderLayers: 12,
+    numHeads: 12,
+    feedForwardProj: T5FfnActivation.gatedGelu,
+    maxCtx: maxCtx ?? 512,
+    device: device,
+    seed: seed,
+  );
 
   static T5LoadReport loadFile(T5Model model, String path) {
     final state = SafeTensors.loadFile(path);
@@ -142,8 +139,11 @@ class T5HFLoader {
     }
 
     // shared embedding
-    _assign(model.sharedEmbedding.weight, take('shared.weight'),
-        expectShape: [model.config.vocabSize, model.config.dModel]);
+    _assign(
+      model.sharedEmbedding.weight,
+      take('shared.weight'),
+      expectShape: [model.config.vocabSize, model.config.dModel],
+    );
 
     // encoder blocks
     _loadStack(
@@ -157,18 +157,18 @@ class T5HFLoader {
       ffnLayerIdx: 1,
       isDecoder: false,
       relativeBias: model.encoder.relativeBias,
-      selfAttns:
-          [for (final b in model.encoder.blocks) b.selfAttn],
-      selfAttnNorms:
-          [for (final b in model.encoder.blocks) b.selfAttnNorm],
+      selfAttns: [for (final b in model.encoder.blocks) b.selfAttn],
+      selfAttnNorms: [for (final b in model.encoder.blocks) b.selfAttnNorm],
       crossAttns: null,
       crossAttnNorms: null,
       ffns: [for (final b in model.encoder.blocks) b.ffn],
       ffnNorms: [for (final b in model.encoder.blocks) b.ffnNorm],
     );
-    _assign(model.encoder.finalNorm.gamma,
-        take('encoder.final_layer_norm.weight'),
-        expectShape: [model.config.dModel]);
+    _assign(
+      model.encoder.finalNorm.gamma,
+      take('encoder.final_layer_norm.weight'),
+      expectShape: [model.config.dModel],
+    );
 
     // decoder blocks
     _loadStack(
@@ -182,32 +182,36 @@ class T5HFLoader {
       ffnLayerIdx: 2,
       isDecoder: true,
       relativeBias: model.decoder.relativeBias,
-      selfAttns:
-          [for (final b in model.decoder.blocks) b.selfAttn],
-      selfAttnNorms:
-          [for (final b in model.decoder.blocks) b.selfAttnNorm],
-      crossAttns:
-          [for (final b in model.decoder.blocks) b.crossAttn],
-      crossAttnNorms:
-          [for (final b in model.decoder.blocks) b.crossAttnNorm],
+      selfAttns: [for (final b in model.decoder.blocks) b.selfAttn],
+      selfAttnNorms: [for (final b in model.decoder.blocks) b.selfAttnNorm],
+      crossAttns: [for (final b in model.decoder.blocks) b.crossAttn],
+      crossAttnNorms: [for (final b in model.decoder.blocks) b.crossAttnNorm],
       ffns: [for (final b in model.decoder.blocks) b.ffn],
       ffnNorms: [for (final b in model.decoder.blocks) b.ffnNorm],
     );
-    _assign(model.decoder.finalNorm.gamma,
-        take('decoder.final_layer_norm.weight'),
-        expectShape: [model.config.dModel]);
+    _assign(
+      model.decoder.finalNorm.gamma,
+      take('decoder.final_layer_norm.weight'),
+      expectShape: [model.config.dModel],
+    );
 
-    // untied LM head (only when tie_word_embeddings=false)
-    if (model.untiedLmHead != null) {
-      _assign(model.untiedLmHead!.weight, take('lm_head.weight'),
-          expectShape: [model.config.vocabSize, model.config.dModel]);
+    // LM head. HF checkpoints for T5-v1.1 and FLAN ship a distinct
+    // `lm_head.weight` even when config.tie_word_embeddings is True
+    // — Google's official pretraining stored them separately. When
+    // both are present we honor the checkpoint (untied) and skip
+    // the `1/sqrt(dModel)` rescale HF would otherwise apply.
+    final lmHeadTensor = takeOptional('lm_head.weight');
+    if (lmHeadTensor != null) {
+      _assign(
+        model.lmHead.weight,
+        lmHeadTensor,
+        expectShape: [model.config.vocabSize, model.config.dModel],
+      );
+      model.useUntiedLmHead = true;
     } else {
-      // Ignore lm_head.weight if it exists — HF sometimes ships it
-      // even when tied.
-      final t = takeOptional('lm_head.weight');
-      if (t != null) {
-        // consumed, but we don't overwrite our tied weights.
-      }
+      // Tied path: copy shared.weight into the pre-allocated lmHead.
+      model.lmHead.weight.assign(model.sharedEmbedding.weight);
+      model.useUntiedLmHead = false;
     }
 
     final unused = state.keys.where((k) => !consumed.contains(k)).toList()
@@ -244,16 +248,21 @@ class T5HFLoader {
         base: '$base.$selfAttnLayerIdx.$selfAttnKey',
         cfg: cfg,
       );
-      _assign(selfAttnNorms[i].gamma,
-          take('$base.$selfAttnLayerIdx.layer_norm.weight'),
-          expectShape: [cfg.dModel]);
+      _assign(
+        selfAttnNorms[i].gamma,
+        take('$base.$selfAttnLayerIdx.layer_norm.weight'),
+        expectShape: [cfg.dModel],
+      );
 
       // Relative bias only on block 0.
       if (i == 0) {
         final biasKey =
             '$base.$selfAttnLayerIdx.$selfAttnKey.relative_attention_bias.weight';
-        _assign(relativeBias.table.weight, take(biasKey),
-            expectShape: [cfg.relativeAttentionNumBuckets, cfg.numHeads]);
+        _assign(
+          relativeBias.table.weight,
+          take(biasKey),
+          expectShape: [cfg.relativeAttentionNumBuckets, cfg.numHeads],
+        );
       }
 
       // Decoder-only: cross-attention.
@@ -264,9 +273,11 @@ class T5HFLoader {
           base: '$base.1.EncDecAttention',
           cfg: cfg,
         );
-        _assign(crossAttnNorms![i].gamma,
-            take('$base.1.layer_norm.weight'),
-            expectShape: [cfg.dModel]);
+        _assign(
+          crossAttnNorms![i].gamma,
+          take('$base.1.layer_norm.weight'),
+          expectShape: [cfg.dModel],
+        );
       }
 
       // FFN.
@@ -276,8 +287,11 @@ class T5HFLoader {
         base: '$base.$ffnLayerIdx.DenseReluDense',
         cfg: cfg,
       );
-      _assign(ffnNorms[i].gamma, take('$base.$ffnLayerIdx.layer_norm.weight'),
-          expectShape: [cfg.dModel]);
+      _assign(
+        ffnNorms[i].gamma,
+        take('$base.$ffnLayerIdx.layer_norm.weight'),
+        expectShape: [cfg.dModel],
+      );
     }
   }
 
@@ -299,8 +313,7 @@ class T5HFLoader {
     _sliceHeadRowsInto(qFull, attn.wq, h, d, cfg.dModel);
     _sliceHeadRowsInto(kFull, attn.wk, h, d, attn.kvDim);
     _sliceHeadRowsInto(vFull, attn.wv, h, d, attn.kvDim);
-    _assign(attn.wo.weight, oFull,
-        expectShape: [cfg.dModel, h * d]);
+    _assign(attn.wo.weight, oFull, expectShape: [cfg.dModel, h * d]);
   }
 
   static void _loadT5Ffn(
@@ -310,23 +323,40 @@ class T5HFLoader {
     required T5Config cfg,
   }) {
     if (ffn.wi1 == null) {
-      _assign(ffn.wi0.weight, take('$base.wi.weight'),
-          expectShape: [cfg.dFf, cfg.dModel]);
+      _assign(
+        ffn.wi0.weight,
+        take('$base.wi.weight'),
+        expectShape: [cfg.dFf, cfg.dModel],
+      );
     } else {
-      _assign(ffn.wi0.weight, take('$base.wi_0.weight'),
-          expectShape: [cfg.dFf, cfg.dModel]);
-      _assign(ffn.wi1!.weight, take('$base.wi_1.weight'),
-          expectShape: [cfg.dFf, cfg.dModel]);
+      _assign(
+        ffn.wi0.weight,
+        take('$base.wi_0.weight'),
+        expectShape: [cfg.dFf, cfg.dModel],
+      );
+      _assign(
+        ffn.wi1!.weight,
+        take('$base.wi_1.weight'),
+        expectShape: [cfg.dFf, cfg.dModel],
+      );
     }
-    _assign(ffn.wo.weight, take('$base.wo.weight'),
-        expectShape: [cfg.dModel, cfg.dFf]);
+    _assign(
+      ffn.wo.weight,
+      take('$base.wo.weight'),
+      expectShape: [cfg.dModel, cfg.dFf],
+    );
   }
 
   /// HF QKV weight is `[numHeads * dKv, inDim]`. Slice head `h` as
   /// rows `[h*dKv, (h+1)*dKv)` -> our per-head Linear `weight` is
   /// `[dKv, inDim]`.
   static void _sliceHeadRowsInto(
-      Tensor full, List<dynamic> heads, int numHeads, int dKv, int inDim) {
+    Tensor full,
+    List<dynamic> heads,
+    int numHeads,
+    int dKv,
+    int inDim,
+  ) {
     _expectShape(full, [numHeads * dKv, inDim], 'attention fused Q/K/V');
     final data = full.toList();
     for (int h = 0; h < numHeads; h++) {
@@ -336,9 +366,11 @@ class T5HFLoader {
         rowVals[i] = data[srcBase + i];
       }
       final headLinear = heads[h];
-      _assign(headLinear.weight,
-          Tensor.fromList([dKv, inDim], rowVals, device: full.device),
-          expectShape: [dKv, inDim]);
+      _assign(
+        headLinear.weight,
+        Tensor.fromList([dKv, inDim], rowVals, device: full.device),
+        expectShape: [dKv, inDim],
+      );
     }
   }
 

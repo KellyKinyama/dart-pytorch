@@ -26,15 +26,19 @@ library;
 
 import 'dart:io';
 
+import 'package:dart_pytorch/core/data/t5_sp_tokenizer.dart';
 import 'package:dart_pytorch/dart_pytorch.dart';
 
 const _weightsDefault = 'models/flan-t5-small/model.safetensors';
+const _tokenizerDefault = 'models/flan-t5-small/tokenizer.json';
 
 Future<void> main(List<String> args) async {
   var weightsPath = _weightsDefault;
+  var tokenizerPath = _tokenizerDefault;
   var preset = 'flan-t5-small';
   var maxNew = 20;
   var useGpu = false;
+  String? text;
   List<int>? inputIds;
   for (int i = 0; i < args.length; i++) {
     switch (args[i]) {
@@ -46,6 +50,12 @@ Future<void> main(List<String> args) async {
         break;
       case '--weights':
         weightsPath = args[++i];
+        break;
+      case '--tokenizer':
+        tokenizerPath = args[++i];
+        break;
+      case '--text':
+        text = args[++i];
         break;
       case '--max-new':
         maxNew = int.parse(args[++i]);
@@ -95,7 +105,9 @@ Future<void> main(List<String> args) async {
 
   if (!File(weightsPath).existsSync()) {
     stderr.writeln('');
-    stderr.writeln('warning: $weightsPath not found — running with random init');
+    stderr.writeln(
+      'warning: $weightsPath not found — running with random init',
+    );
     stderr.writeln('         (output will be gibberish; download real weights');
     stderr.writeln('         via the header docstring for real inference).');
   } else {
@@ -106,13 +118,17 @@ Future<void> main(List<String> args) async {
   }
 
   if (inputIds == null) {
-    // Fallback: run on a short synthetic prompt so the demo runs
-    // without a tokenizer. Uses low-numbered ids that are safe for the
-    // real T5 vocab (still yields nonsense on real weights without a
-    // real prompt, but exercises the full pipeline).
-    inputIds = [37, 3, 1200, 6, 1];
-    print('');
-    print('(no --input-ids supplied; using synthetic $inputIds)');
+    if (text != null && File(tokenizerPath).existsSync()) {
+      final tok = T5SpTokenizer.loadFile(tokenizerPath);
+      inputIds = tok.encode(text);
+      print('');
+      print('== tokenizer ($tokenizerPath) ==');
+      print('  "$text" -> $inputIds');
+    } else {
+      inputIds = [37, 3, 1200, 6, 1];
+      print('');
+      print('(no --text or tokenizer; using synthetic $inputIds)');
+    }
   }
 
   print('');
@@ -126,6 +142,13 @@ Future<void> main(List<String> args) async {
     '(${newTokens.length} tokens, '
     '${(newTokens.length * 1000.0 / swG.elapsedMilliseconds).toStringAsFixed(1)} tok/s)',
   );
+
+  if (File(tokenizerPath).existsSync()) {
+    final tok = T5SpTokenizer.loadFile(tokenizerPath);
+    print('');
+    print('== decoded ==');
+    print('  "${tok.decode(newTokens)}"');
+  }
   print('');
   print('output ids: $out');
 }

@@ -3,23 +3,21 @@ import 'package:test/test.dart';
 
 // Tiny config for shape-only tests.
 T5Config _tinyCfg({T5FfnActivation act = T5FfnActivation.relu}) => T5Config(
-      vocabSize: 32,
-      dModel: 16,
-      dFf: 32,
-      dKv: 4,
-      numLayers: 2,
-      numDecoderLayers: 2,
-      numHeads: 4,
-      feedForwardProj: act,
-      maxCtx: 32,
-      seed: 7,
-    );
+  vocabSize: 32,
+  dModel: 16,
+  dFf: 32,
+  dKv: 4,
+  numLayers: 2,
+  numDecoderLayers: 2,
+  numHeads: 4,
+  feedForwardProj: act,
+  maxCtx: 32,
+  seed: 7,
+);
 
 // Deterministic token id sequence.
-Tensor _ids(List<int> ids) => Tensor.fromList(
-      [ids.length],
-      ids.map((i) => i.toDouble()).toList(),
-    );
+Tensor _ids(List<int> ids) =>
+    Tensor.fromList([ids.length], ids.map((i) => i.toDouble()).toList());
 
 void main() {
   group('T5Config presets', () {
@@ -85,8 +83,11 @@ void main() {
       // should generally differ (from different rows of the table).
       final v_0_2 = biasPos[0 * 4 + 2];
       final v_2_0 = biasPos[2 * 4 + 0];
-      expect(v_0_2 != v_2_0, isTrue,
-          reason: 'bidirectional should pick different rows for +2 and -2');
+      expect(
+        v_0_2 != v_2_0,
+        isTrue,
+        reason: 'bidirectional should pick different rows for +2 and -2',
+      );
     });
 
     test('unidirectional: future positions map to bucket 0', () {
@@ -156,16 +157,23 @@ void main() {
       // encoder blocks
       for (int i = 0; i < cfg.numLayers; i++) {
         final b = m.encoder.blocks[i];
-        _dumpAttentionInto(s, b.selfAttn, cfg,
-            base: 'encoder.block.$i.layer.0.SelfAttention');
-        s['encoder.block.$i.layer.0.layer_norm.weight'] =
-            b.selfAttnNorm.gamma;
+        _dumpAttentionInto(
+          s,
+          b.selfAttn,
+          cfg,
+          base: 'encoder.block.$i.layer.0.SelfAttention',
+        );
+        s['encoder.block.$i.layer.0.layer_norm.weight'] = b.selfAttnNorm.gamma;
         if (i == 0) {
           s['encoder.block.0.layer.0.SelfAttention.relative_attention_bias.weight'] =
               m.encoder.relativeBias.table.weight;
         }
-        _dumpFfnInto(s, b.ffn, cfg,
-            base: 'encoder.block.$i.layer.1.DenseReluDense');
+        _dumpFfnInto(
+          s,
+          b.ffn,
+          cfg,
+          base: 'encoder.block.$i.layer.1.DenseReluDense',
+        );
         s['encoder.block.$i.layer.1.layer_norm.weight'] = b.ffnNorm.gamma;
       }
       s['encoder.final_layer_norm.weight'] = m.encoder.finalNorm.gamma;
@@ -173,19 +181,30 @@ void main() {
       // decoder blocks
       for (int i = 0; i < cfg.numDecoderLayers; i++) {
         final b = m.decoder.blocks[i];
-        _dumpAttentionInto(s, b.selfAttn, cfg,
-            base: 'decoder.block.$i.layer.0.SelfAttention');
-        s['decoder.block.$i.layer.0.layer_norm.weight'] =
-            b.selfAttnNorm.gamma;
+        _dumpAttentionInto(
+          s,
+          b.selfAttn,
+          cfg,
+          base: 'decoder.block.$i.layer.0.SelfAttention',
+        );
+        s['decoder.block.$i.layer.0.layer_norm.weight'] = b.selfAttnNorm.gamma;
         if (i == 0) {
           s['decoder.block.0.layer.0.SelfAttention.relative_attention_bias.weight'] =
               m.decoder.relativeBias.table.weight;
         }
-        _dumpAttentionInto(s, b.crossAttn, cfg,
-            base: 'decoder.block.$i.layer.1.EncDecAttention');
+        _dumpAttentionInto(
+          s,
+          b.crossAttn,
+          cfg,
+          base: 'decoder.block.$i.layer.1.EncDecAttention',
+        );
         s['decoder.block.$i.layer.1.layer_norm.weight'] = b.crossAttnNorm.gamma;
-        _dumpFfnInto(s, b.ffn, cfg,
-            base: 'decoder.block.$i.layer.2.DenseReluDense');
+        _dumpFfnInto(
+          s,
+          b.ffn,
+          cfg,
+          base: 'decoder.block.$i.layer.2.DenseReluDense',
+        );
         s['decoder.block.$i.layer.2.layer_norm.weight'] = b.ffnNorm.gamma;
       }
       s['decoder.final_layer_norm.weight'] = m.decoder.finalNorm.gamma;
@@ -220,8 +239,7 @@ void main() {
     test('extra keys land in unusedKeys (not consumed)', () {
       final src = T5Model(_tinyCfg());
       final state = dump(src);
-      state['bogus.extra.weight'] =
-          Tensor.fromList([1], [0.0]);
+      state['bogus.extra.weight'] = Tensor.fromList([1], [0.0]);
       final dst = T5Model(_tinyCfg());
       final report = T5HFLoader.loadMap(dst, state);
       expect(report.unusedKeys, contains('bogus.extra.weight'));
