@@ -21,6 +21,7 @@ fix so the CUDA driver stub is found. Drop it on native Linux.
 | T2 | flan-t5-base | 250M | CPU/GPU | ✅ local | [bin/flan_t5_base_demo.dart](bin/flan_t5_base_demo.dart) — same arch, base config, ~0.7 tok/s CPU |
 | T3 | opus-mt-en-de | 74M | CPU/GPU | ✅ local | [bin/marian_en_de_demo.dart](bin/marian_en_de_demo.dart) — dedicated En→De translator, ~2 tok/s CPU |
 | T4 | opus-mt-en-zh / zh-en | 74M each | CPU/GPU | ✅ local | [bin/marian_translate.dart](bin/marian_translate.dart) — generic runner, `--pair en-de/en-zh/zh-en` |
+| T5 | opus-mt Zambian (Bemba, Chichewa, Tonga, Lozi) | 74M each | CPU/GPU | ✅ local | [bin/marian_translate.dart](bin/marian_translate.dart) — `--pair en-{bem,ny,toi,loz}` and reverse |
 | E1 | bge-small-en-v1.5 | 33M | CPU/GPU | ✅ local | [bin/bge_demo.dart](bin/bge_demo.dart) — SOTA sentence embeddings (CLS-pool + L2) |
 | V4 | dinov2-small | 22M | CPU/GPU | n/a | [bin/dinov2_demo.dart](bin/dinov2_demo.dart) — self-supervised ViT-S/14 image features |
 | S1 | whisper tiny.en  | 39M   | CPU    | ✅ local | [bin/whisper_demo.dart](bin/whisper_demo.dart) |
@@ -521,6 +522,81 @@ Every one of the 200+ opus-mt pairs (En↔Fr, En↔Es, En↔Ar, En↔Ru,
 etc.) can be added in ~5 lines: download + convert the checkpoint,
 add a factory alias with the pair's vocab size, and register the
 preset in `bin/marian_translate.dart`'s `_configForPair` switch.
+
+## T5. opus-mt Zambian languages (Bemba, Chichewa, Tonga, Lozi)
+
+Four Zambian language pairs (both directions each = 8 checkpoints)
+from Helsinki-NLP. Same 74 M Marian architecture as T3 / T4, only
+vocab sizes differ:
+
+| Pair    | Language                    | Speakers | vocab_size |
+|---------|-----------------------------|----------|------------|
+| en-bem  | Bemba                       | 4.1 M    | 59828      |
+| en-ny   | Chichewa (Nyanja)           | 14 M     | 59811      |
+| en-toi  | Tonga                       | 1.5 M    | 61051      |
+| en-loz  | Lozi                        | 700 K    | 57974      |
+
+Loader factories (all just aliases of `opusMtConfig(vocabSize: ...)`):
+
+```dart
+MarianHFLoader.opusMtEnBemConfig()   MarianHFLoader.opusMtBemEnConfig()
+MarianHFLoader.opusMtEnNyConfig()    MarianHFLoader.opusMtNyEnConfig()
+MarianHFLoader.opusMtEnToiConfig()   MarianHFLoader.opusMtToiEnConfig()
+MarianHFLoader.opusMtEnLozConfig()   MarianHFLoader.opusMtLozEnConfig()
+```
+
+One-time setup per pair (~300 MB fp32 each):
+
+```sh
+for pair in en-bem bem-en en-ny ny-en en-toi toi-en en-loz loz-en; do
+  mkdir -p models/opus-mt-$pair
+  for f in pytorch_model.bin vocab.json config.json; do
+    curl -L -o "models/opus-mt-$pair/$f" \
+      "https://huggingface.co/Helsinki-NLP/opus-mt-$pair/resolve/main/$f"
+  done
+  python3 scripts/convert_marian_pt_to_safetensors.py \
+    models/opus-mt-$pair/pytorch_model.bin \
+    models/opus-mt-$pair/model.safetensors
+done
+```
+
+Run via `bin/marian_translate.dart` (same as T4, extended `--pair`):
+
+```sh
+dart run bin/marian_translate.dart --pair en-bem \
+  --text "The weather is nice today." --beams 4
+dart run bin/marian_translate.dart --pair toi-en \
+  --text "Kuli kabotu sunu." --beams 4
+```
+
+Verified end-to-end (beam=4):
+
+```
+== EN -> Zambian ==
+  en-bem   "Hello, my friend."                      -> "Ba Heloo, ifibusa fyandi."
+  en-bem   "The weather is nice today."             -> "Imiceele isuma pali lelo."
+  en-bem   "I love machine learning."               -> "Nalitemenwe ukusambilila mashini."
+  en-ny    "I love machine learning."               -> "Ndimakonda kuphunzira makina."
+  en-toi   "Hello, my friend."                      -> "Mpoonya, mweenzuma."
+  en-toi   "The weather is nice today."             -> "Kutontola kapati mazuba aano."
+  en-toi   "I love machine learning."               -> "Ndilayandisya kwiiya kubelesya muncini ooyu."
+  en-loz   "The weather is nice today."             -> "Muinelo wa sibaka ki o munde kacenu."
+  en-loz   "I love machine learning."               -> "Ni lata hahulu ku ituta mishini."
+
+== Zambian -> EN ==
+  bem-en   "Mwapoleni."                             -> "Be healed."
+  bem-en   "Imiceele isuma pali lelo."              -> "The climate is good today."
+  bem-en   "Nalitemenwe ukusambilila mashini."      -> "I enjoyed studying the machine."
+  toi-en   "Kuli kabotu sunu."                      -> "It is good today."
+  toi-en   "Ndilayandisya kwiiya kubelesya muncini." -> "I love learning to operate this machine."
+  loz-en   "Ni lata hahulu ku ituta mishini."       -> "I love to study"
+```
+
+Some prompts (especially bare greetings for en-ny) produce empty
+output because the model expects a fuller-context sentence — pass
+longer inputs and use `--beams 4` for better results. All 8
+`MarianLoadReport(consumed=256, unused=0)` — every HF key
+mapped.
 
 ## E1. bge-small-en-v1.5 (33M, SOTA sentence embeddings)
 

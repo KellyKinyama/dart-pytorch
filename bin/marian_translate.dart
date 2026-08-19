@@ -28,9 +28,26 @@ MarianConfig _configForPair(String pair, Device device) {
       return MarianHFLoader.opusMtEnZhConfig(device: device);
     case 'zh-en':
       return MarianHFLoader.opusMtZhEnConfig(device: device);
+    case 'en-bem':
+      return MarianHFLoader.opusMtEnBemConfig(device: device);
+    case 'bem-en':
+      return MarianHFLoader.opusMtBemEnConfig(device: device);
+    case 'en-ny':
+      return MarianHFLoader.opusMtEnNyConfig(device: device);
+    case 'ny-en':
+      return MarianHFLoader.opusMtNyEnConfig(device: device);
+    case 'en-toi':
+      return MarianHFLoader.opusMtEnToiConfig(device: device);
+    case 'toi-en':
+      return MarianHFLoader.opusMtToiEnConfig(device: device);
+    case 'en-loz':
+      return MarianHFLoader.opusMtEnLozConfig(device: device);
+    case 'loz-en':
+      return MarianHFLoader.opusMtLozEnConfig(device: device);
     default:
       throw ArgumentError(
-        'unknown pair "$pair"; use en-de | en-zh | zh-en',
+        'unknown pair "$pair"; use en-de | en-zh | zh-en | '
+        'en-{bem,ny,toi,loz} | {bem,ny,toi,loz}-en',
       );
   }
 }
@@ -148,8 +165,20 @@ String _defaultTextFor(String pair) {
   switch (pair) {
     case 'zh-en':
       return '你好，世界。今天天气很好。';
+    case 'bem-en':
+      return 'Mwapoleni. Ubushiku bwaba bwino.';
+    case 'ny-en':
+      return 'Moni. Kunja kuli bwino lero.';
+    case 'toi-en':
+      return 'Mwabuka buti. Kuli kabotu sunu.';
+    case 'loz-en':
+      return 'Mu zuhile cwañi. Ku lukile kacenu.';
     case 'en-zh':
     case 'en-de':
+    case 'en-bem':
+    case 'en-ny':
+    case 'en-toi':
+    case 'en-loz':
     default:
       return 'The weather is nice today.';
   }

@@ -90,6 +90,50 @@ class MarianHFLoader {
     int seed = 0,
   }) => opusMtConfig(vocabSize: 65001, device: device, seed: seed);
 
+  /// `Helsinki-NLP/opus-mt-{en-bem, bem-en}` — English ↔ Bemba
+  /// (most widely spoken Zambian language, ~4.1 M speakers).
+  static MarianConfig opusMtEnBemConfig({
+    Device device = Device.CPU,
+    int seed = 0,
+  }) => opusMtConfig(vocabSize: 59828, device: device, seed: seed);
+  static MarianConfig opusMtBemEnConfig({
+    Device device = Device.CPU,
+    int seed = 0,
+  }) => opusMtConfig(vocabSize: 59828, device: device, seed: seed);
+
+  /// `Helsinki-NLP/opus-mt-{en-ny, ny-en}` — English ↔ Chichewa /
+  /// Nyanja (widely used across Zambia + Malawi, ~14 M speakers).
+  static MarianConfig opusMtEnNyConfig({
+    Device device = Device.CPU,
+    int seed = 0,
+  }) => opusMtConfig(vocabSize: 59811, device: device, seed: seed);
+  static MarianConfig opusMtNyEnConfig({
+    Device device = Device.CPU,
+    int seed = 0,
+  }) => opusMtConfig(vocabSize: 59811, device: device, seed: seed);
+
+  /// `Helsinki-NLP/opus-mt-{en-toi, toi-en}` — English ↔ Tonga
+  /// (Zambia's Southern Province, ~1.5 M speakers).
+  static MarianConfig opusMtEnToiConfig({
+    Device device = Device.CPU,
+    int seed = 0,
+  }) => opusMtConfig(vocabSize: 61051, device: device, seed: seed);
+  static MarianConfig opusMtToiEnConfig({
+    Device device = Device.CPU,
+    int seed = 0,
+  }) => opusMtConfig(vocabSize: 61051, device: device, seed: seed);
+
+  /// `Helsinki-NLP/opus-mt-{en-loz, loz-en}` — English ↔ Lozi
+  /// (Zambia's Western Province, ~700 K speakers).
+  static MarianConfig opusMtEnLozConfig({
+    Device device = Device.CPU,
+    int seed = 0,
+  }) => opusMtConfig(vocabSize: 57974, device: device, seed: seed);
+  static MarianConfig opusMtLozEnConfig({
+    Device device = Device.CPU,
+    int seed = 0,
+  }) => opusMtConfig(vocabSize: 57974, device: device, seed: seed);
+
   static MarianLoadReport loadFile(MarianModel model, String path) {
     final state = SafeTensors.loadFile(path);
     return loadMap(model, state);
