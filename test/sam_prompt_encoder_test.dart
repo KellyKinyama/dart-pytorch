@@ -56,10 +56,16 @@ void main() {
 
     test('rejects wrong-shape input', () {
       final pe = SamPositionEmbeddingRandom(numPosFeats: 8);
-      expect(() => pe.encodeCoords(Tensor.fromList([3], [1, 2, 3])),
-          throwsArgumentError);
-      expect(() => pe.encodeCoords(Tensor.fromList([3, 3], [1, 2, 3, 4, 5, 6, 7, 8, 9])),
-          throwsArgumentError);
+      expect(
+        () => pe.encodeCoords(Tensor.fromList([3], [1, 2, 3])),
+        throwsArgumentError,
+      );
+      expect(
+        () => pe.encodeCoords(
+          Tensor.fromList([3, 3], [1, 2, 3, 4, 5, 6, 7, 8, 9]),
+        ),
+        throwsArgumentError,
+      );
     });
   });
 
@@ -88,8 +94,10 @@ void main() {
       );
       final pts = Tensor.fromList([2, 2], [10.0, 20.0, 25.0, 5.0]);
       final labels = [SamPointType.positive, SamPointType.negative];
-      expect(enc.encodeSparse(pointsXY: pts, pointLabels: labels).shape,
-          equals([2, 32]));
+      expect(
+        enc.encodeSparse(pointsXY: pts, pointLabels: labels).shape,
+        equals([2, 32]),
+      );
     });
 
     test('positive and negative clicks at the same coord differ only by '
@@ -102,12 +110,12 @@ void main() {
         maskInSize: 16,
       );
       final pt = Tensor.fromList([1, 2], [16.0, 16.0]);
-      final posOut =
-          enc.encodeSparse(pointsXY: pt, pointLabels: [SamPointType.positive])
-              .toList();
-      final negOut =
-          enc.encodeSparse(pointsXY: pt, pointLabels: [SamPointType.negative])
-              .toList();
+      final posOut = enc
+          .encodeSparse(pointsXY: pt, pointLabels: [SamPointType.positive])
+          .toList();
+      final negOut = enc
+          .encodeSparse(pointsXY: pt, pointLabels: [SamPointType.negative])
+          .toList();
       final ptEmb = enc.pointEmbeddings.toList();
       // posOut - negOut should equal pointEmbeddings[POS] - pointEmbeddings[NEG].
       final pos = SamPointType.positive.index;
@@ -115,8 +123,11 @@ void main() {
       for (int j = 0; j < 32; j++) {
         final expected = ptEmb[pos * 32 + j] - ptEmb[neg * 32 + j];
         final actual = posOut[j] - negOut[j];
-        expect((actual - expected).abs() < 1e-5, isTrue,
-            reason: 'j=$j: expected $expected, got $actual');
+        expect(
+          (actual - expected).abs() < 1e-5,
+          isTrue,
+          reason: 'j=$j: expected $expected, got $actual',
+        );
       }
     });
 
@@ -162,10 +173,13 @@ void main() {
       );
       final pts = Tensor.fromList([2, 2], [10.0, 20.0, 25.0, 5.0]);
       final labels = [SamPointType.positive, SamPointType.negative];
-      final boxes = Tensor.fromList([2, 4], [
-        4, 4, 20, 20, //
-        8, 8, 24, 24, //
-      ]);
+      final boxes = Tensor.fromList(
+        [2, 4],
+        [
+          4, 4, 20, 20, //
+          8, 8, 24, 24, //
+        ],
+      );
       final out = enc.encodeSparse(
         pointsXY: pts,
         pointLabels: labels,

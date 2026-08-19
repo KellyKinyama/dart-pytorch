@@ -140,8 +140,11 @@ class SamPositionEmbeddingRandom extends Module {
         }
       }
     }
-    return Tensor.fromFloat32List([d, h, w], out,
-        device: gaussianMatrix.device);
+    return Tensor.fromFloat32List(
+      [d, h, w],
+      out,
+      device: gaussianMatrix.device,
+    );
   }
 
   @override
@@ -184,57 +187,57 @@ class SamPromptEncoder extends Module {
     this.maskInputChannels = 16,
     Device device = Device.CPU,
     int seed = 0,
-  })  : posEmbed = SamPositionEmbeddingRandom(
-          numPosFeats: embedDim ~/ 2,
-          seed: 3141592,
-          device: device,
-        ),
-        pointEmbeddings = _initSmallGaussian(
-          [4, embedDim],
-          scale: 1.0, // SAM uses default nn.Embedding init.
-          seed: seed + 1,
-          device: device,
-          requiresGrad: true,
-        ),
-        noMaskEmbedding = _initSmallGaussian(
-          [embedDim],
-          scale: 1.0,
-          seed: seed + 2,
-          device: device,
-          requiresGrad: true,
-        ),
-        maskConv1 = Conv2d(
-          1,
-          maskInputChannels ~/ 4,
-          kernel: 2,
-          stride: 2,
-          padding: 0,
-          bias: true,
-          device: device,
-          seed: seed + 10,
-        ),
-        maskLn1 = LayerNorm2d(maskInputChannels ~/ 4, device: device),
-        maskConv2 = Conv2d(
-          maskInputChannels ~/ 4,
-          maskInputChannels,
-          kernel: 2,
-          stride: 2,
-          padding: 0,
-          bias: true,
-          device: device,
-          seed: seed + 11,
-        ),
-        maskLn2 = LayerNorm2d(maskInputChannels, device: device),
-        maskConv3 = Conv2d(
-          maskInputChannels,
-          embedDim,
-          kernel: 1,
-          stride: 1,
-          padding: 0,
-          bias: true,
-          device: device,
-          seed: seed + 12,
-        );
+  }) : posEmbed = SamPositionEmbeddingRandom(
+         numPosFeats: embedDim ~/ 2,
+         seed: 3141592,
+         device: device,
+       ),
+       pointEmbeddings = _initSmallGaussian(
+         [4, embedDim],
+         scale: 1.0, // SAM uses default nn.Embedding init.
+         seed: seed + 1,
+         device: device,
+         requiresGrad: true,
+       ),
+       noMaskEmbedding = _initSmallGaussian(
+         [embedDim],
+         scale: 1.0,
+         seed: seed + 2,
+         device: device,
+         requiresGrad: true,
+       ),
+       maskConv1 = Conv2d(
+         1,
+         maskInputChannels ~/ 4,
+         kernel: 2,
+         stride: 2,
+         padding: 0,
+         bias: true,
+         device: device,
+         seed: seed + 10,
+       ),
+       maskLn1 = LayerNorm2d(maskInputChannels ~/ 4, device: device),
+       maskConv2 = Conv2d(
+         maskInputChannels ~/ 4,
+         maskInputChannels,
+         kernel: 2,
+         stride: 2,
+         padding: 0,
+         bias: true,
+         device: device,
+         seed: seed + 11,
+       ),
+       maskLn2 = LayerNorm2d(maskInputChannels, device: device),
+       maskConv3 = Conv2d(
+         maskInputChannels,
+         embedDim,
+         kernel: 1,
+         stride: 1,
+         padding: 0,
+         bias: true,
+         device: device,
+         seed: seed + 12,
+       );
 
   static Tensor _initSmallGaussian(
     List<int> shape, {
@@ -251,8 +254,12 @@ class SamPromptEncoder extends Module {
       final z = math.sqrt(-2.0 * math.log(u1)) * math.cos(2 * math.pi * u2);
       return z * scale;
     });
-    return Tensor.fromList(shape, vals,
-        requiresGrad: requiresGrad, device: device);
+    return Tensor.fromList(
+      shape,
+      vals,
+      requiresGrad: requiresGrad,
+      device: device,
+    );
   }
 
   /// Encode a batch of point + box prompts.
@@ -430,30 +437,29 @@ class SamPromptEncoder extends Module {
     const a5 = 1.061405429;
     const p = 0.3275911;
     final t = 1.0 / (1.0 + p * x);
-    final y = 1.0 -
-        (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) *
-            t *
-            math.exp(-x * x);
+    final y =
+        1.0 -
+        (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * math.exp(-x * x);
     return sign * y;
   }
 
   @override
   List<Tensor> parameters() => [
-        pointEmbeddings,
-        noMaskEmbedding,
-        ...maskConv1.parameters(),
-        ...maskLn1.parameters(),
-        ...maskConv2.parameters(),
-        ...maskLn2.parameters(),
-        ...maskConv3.parameters(),
-      ];
+    pointEmbeddings,
+    noMaskEmbedding,
+    ...maskConv1.parameters(),
+    ...maskLn1.parameters(),
+    ...maskConv2.parameters(),
+    ...maskLn2.parameters(),
+    ...maskConv3.parameters(),
+  ];
 
   @override
   List<Module> submodules() => [
-        maskConv1,
-        maskLn1,
-        maskConv2,
-        maskLn2,
-        maskConv3,
-      ];
+    maskConv1,
+    maskLn1,
+    maskConv2,
+    maskLn2,
+    maskConv3,
+  ];
 }

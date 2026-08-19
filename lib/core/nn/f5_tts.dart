@@ -418,8 +418,11 @@ class FlowMatchingSampler {
           final v1 = velocityField(x, tScalar);
           _requireMatchingShape(x, v1, 'midpoint step 1');
           final xMid = x + v1 * (dt / 2);
-          final tMid = Tensor.fromList([1], [tStart + dt / 2],
-              device: x.device);
+          final tMid = Tensor.fromList(
+            [1],
+            [tStart + dt / 2],
+            device: x.device,
+          );
           final v2 = velocityField(xMid, tMid);
           _requireMatchingShape(x, v2, 'midpoint step 2');
           x = x + v2 * dt;
@@ -450,11 +453,7 @@ class FlowMatchingSampler {
 /// Draw a Gaussian noise tensor of the given shape (Box-Muller).
 /// Convenience helper for the sampler — you can also pass your own
 /// noise into [FlowMatchingSampler.sample].
-Tensor gaussianNoise(
-  List<int> shape, {
-  int? seed,
-  Device device = Device.CPU,
-}) {
+Tensor gaussianNoise(List<int> shape, {int? seed, Device device = Device.CPU}) {
   var n = 1;
   for (final d in shape) {
     n *= d;

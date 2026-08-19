@@ -232,8 +232,7 @@ void main() {
       final x0 = Tensor.fromList([2], [0.0, 10.0]);
       final x1 = sampler.sample(
         initialNoise: x0,
-        velocityField: (x, t) =>
-            Tensor.fromList(x.shape, [0.5, 2.0]),
+        velocityField: (x, t) => Tensor.fromList(x.shape, [0.5, 2.0]),
       );
       final vals = x1.toList();
       // x0 + 1 * dv where dv = velocity * 1 for whole interval.
@@ -246,8 +245,7 @@ void main() {
       // dx/dt = 2·t → x(1) = x(0) + t² |₀¹ = x(0) + 1.
       Tensor v(Tensor x, Tensor t) {
         final tt = t.toList()[0];
-        return Tensor.fromList(x.shape,
-            List<double>.filled(x.length, 2 * tt));
+        return Tensor.fromList(x.shape, List<double>.filled(x.length, 2 * tt));
       }
 
       const nSteps = 4;
@@ -261,8 +259,11 @@ void main() {
       final xM = midpoint.sample(initialNoise: x0, velocityField: v);
       final eErr = (xE.toList()[0] - 1.0).abs();
       final mErr = (xM.toList()[0] - 1.0).abs();
-      expect(mErr < eErr, isTrue,
-          reason: 'midpoint err $mErr should beat Euler err $eErr');
+      expect(
+        mErr < eErr,
+        isTrue,
+        reason: 'midpoint err $mErr should beat Euler err $eErr',
+      );
     });
 
     test('velocity shape mismatch throws', () {
