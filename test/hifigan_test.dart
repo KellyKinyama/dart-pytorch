@@ -202,4 +202,93 @@ void main() {
       expect(maxDiff, lessThan(5e-2), reason: 'max cpu/gpu diff = $maxDiff');
     });
   });
+
+  group('HiFiGanLoader', () {
+    /// Build a synthetic torch-style state_dict matching every key our
+    /// loader consumes.
+    Map<String, Tensor> synthState(HiFiGanGenerator model) {
+      final rng = math.Random(0);
+      Tensor rand(List<int> shape) {
+        var n = 1;
+        for (final d in shape) {
+          n *= d;
+        }
+        final v = Float32List(n);
+        for (int i = 0; i < n; i++) {
+          v[i] = (rng.nextDouble() - 0.5) * 0.1;
+        }
+        return Tensor.fromFloat32List(shape, v);
+      }
+
+      final s = <String, Tensor>{};
+      final cfg = model.config;
+      s['conv_pre.weight'] = rand([
+        cfg.upsampleInitialChannels,
+        cfg.melChannels,
+        cfg.preKernelSize,
+      ]);
+      s['conv_pre.bias'] = rand([cfg.upsampleInitialChannels]);
+
+      var ch = cfg.upsampleInitialChannels;
+      for (int i = 0; i < cfg.upsampleRates.length; i++) {
+        final outCh = ch ~/ 2;
+        s['ups.$i.weight'] =
+            rand([ch, outCh, cfg.upsampleKernelSizes[i]]);
+        s['ups.$i.bias'] = rand([outCh]);
+        for (int j = 0; j < cfg.resblockKernelSizes.length; j++) {
+          final flat = i * cfg.resblockKernelSizes.length + j;
+          for (int k = 0;
+              k < cfg.resblockDilations[j].length;
+              k++) {
+            s['resblocks.$flat.convs1.$k.weight'] =
+                rand([outCh, outCh, cfg.resblockKernelSizes[j]]);
+            s['resblocks.$flat.convs1.$k.bias'] = rand([outCh]);
+            s['resblocks.$flat.convs2.$k.weight'] =
+                rand([outCh, outCh, cfg.resblockKernelSizes[j]]);
+            s['resblocks.$flat.convs2.$k.bias'] = rand([outCh]);
+          }
+        }
+        ch = outCh;
+      }
+      s['conv_post.weight'] = rand([1, ch, cfg.postKernelSize]);
+      s['conv_post.bias'] = rand([1]);
+      return s;
+    }
+
+    test('consumes a synthetic state_dict with no unused keys', () {
+      final gen = HiFiGanGenerator(_tinyCfg);
+      final state = synthState(gen);
+      final report = HiFiGanLoader.loadMap(gen, state);
+      expect(report.unusedKeys, isEmpty);
+
+      // Expected count:
+      //   conv_pre.{w,b}                                    = 2
+      //   per stage: ups.{w,b} + kernels * dilations * 4    = 2 + 3*3*4 = 38
+      //   conv_post.{w,b}                                   = 2
+      final perStage = 2 +
+          _tinyCfg.resblockKernelSizes.length *
+              _tinyCfg.resblockDilations[0].length *
+              4;
+      final expected = 2 + _tinyCfg.upsampleRates.length * perStage + 2;
+      expect(report.consumedCount, expected);
+    });
+
+    test('rejects a missing tensor', () {
+      final gen = HiFiGanGenerator(_tinyCfg);
+      final state = synthState(gen);
+      state.remove('conv_post.bias');
+      expect(() => HiFiGanLoader.loadMap(gen, state), throwsArgumentError);
+    });
+
+    test('forward after load produces finite waveform in [-1, 1]', () {
+      final gen = HiFiGanGenerator(_tinyCfg);
+      HiFiGanLoader.loadMap(gen, synthState(gen));
+      final mel = _fake([1, 4, 6], seed: 99);
+      final wav = gen(mel).toList();
+      for (final v in wav) {
+        expect(v.isFinite, isTrue);
+        expect(v.abs() <= 1.0, isTrue, reason: 'sample $v outside tanh');
+      }
+    });
+  });
 }

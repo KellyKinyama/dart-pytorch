@@ -33,6 +33,7 @@ export 'core/nn/whisper_hf_loader.dart';
 export 'core/audio/audio_spectrogram.dart';
 export 'core/audio/whisper_mel.dart';
 export 'core/nn/audio/hifigan.dart';
+export 'core/nn/audio/hifigan_loader.dart';
 export 'core/nn/dropout.dart';
 export 'core/nn/attention/multi_head_attention.dart';
 export 'core/nn/attention/multi_head_cross_attention.dart';
