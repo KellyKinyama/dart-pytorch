@@ -19,6 +19,7 @@ fix so the CUDA driver stub is found. Drop it on native Linux.
 | 10 | smollm2-135m-instruct | 135M | CPU/GPU | ✅ local | [bin/smollm2_demo.dart](bin/smollm2_demo.dart) — Llama-arch tiny LM |
 | T1 | flan-t5-small | 60M | CPU/GPU | ✅ local | [bin/t5_small_demo.dart](bin/t5_small_demo.dart) — encoder-decoder text-to-text (translation, summarization, QA) |
 | T2 | flan-t5-base | 250M | CPU/GPU | ✅ local | [bin/flan_t5_base_demo.dart](bin/flan_t5_base_demo.dart) — same arch, base config, ~0.7 tok/s CPU |
+| T3 | opus-mt-en-de | 74M | CPU/GPU | ✅ local | [bin/marian_en_de_demo.dart](bin/marian_en_de_demo.dart) — dedicated En→De translator, ~2 tok/s CPU |
 | E1 | bge-small-en-v1.5 | 33M | CPU/GPU | ✅ local | [bin/bge_demo.dart](bin/bge_demo.dart) — SOTA sentence embeddings (CLS-pool + L2) |
 | V4 | dinov2-small | 22M | CPU/GPU | n/a | [bin/dinov2_demo.dart](bin/dinov2_demo.dart) — self-supervised ViT-S/14 image features |
 | S1 | whisper tiny.en  | 39M   | CPU    | ✅ local | [bin/whisper_demo.dart](bin/whisper_demo.dart) |
@@ -362,6 +363,76 @@ skips its `1/sqrt(d_model)` rescale. Our loader mirrors this: if
 we skip the rescale. Miss this and the model returns garbage (a
 single repeating token) while the encoder output stays byte-for-byte
 correct.
+
+## T3. opus-mt-en-de (74M, dedicated En→De translator)
+
+`Helsinki-NLP/opus-mt-en-de` — Marian NMT, classic post-LN
+Vaswani transformer with sinusoidal positional embeddings (loaded
+verbatim from the checkpoint, not recomputed), plain SiLU FFN
+(no gating), tied encoder/decoder/lm_head embeddings, and a
+Bart-legacy `final_logits_bias` `[1, vocab]` added to logits.
+6+6 layers, dModel=512, 8 heads.
+
+One-time setup (~300 MB fp32; needs a pytorch->safetensors
+conversion because HF only ships `pytorch_model.bin`):
+
+```sh
+mkdir -p models/opus-mt-en-de
+for f in pytorch_model.bin vocab.json config.json; do
+  curl -L -o "models/opus-mt-en-de/$f" \
+    "https://huggingface.co/Helsinki-NLP/opus-mt-en-de/resolve/main/$f"
+done
+python3 scripts/convert_marian_pt_to_safetensors.py \
+  models/opus-mt-en-de/pytorch_model.bin \
+  models/opus-mt-en-de/model.safetensors
+```
+
+Translate:
+
+```sh
+dart run bin/marian_en_de_demo.dart \
+  --text "The weather is nice today." --max-new 30
+```
+
+Verified end-to-end:
+
+```
+== opus-mt-en-de (dModel=512, layers=6+6, heads=8, ffn=2048, act=silu) ==
+load : 3054 ms  MarianLoadReport(consumed=256, unused=0)
+
+  "Hello world."                       -> "Hallo Welt."
+  "I love machine learning."           -> "Ich liebe maschinelles Lernen."
+  "The weather is nice today."         -> "Das Wetter ist heute schön."
+  "This sentence contains every letter of the alphabet."
+    -> "Dieser Satz enthält jeden Buchstaben des Alphabets."
+```
+
+Genuinely better than FLAN-T5-small on pure En→De ("maschinelles
+Lernen" vs FLAN-T5-small's "Maschinen-Kading"), and only 74 M
+params vs FLAN's 250 M for the base model. Every opus-mt-* pair
+in the Helsinki-NLP catalogue (200+ language pairs) uses the same
+arch and loads via the same `MarianHFLoader.opusMtEnDeConfig`
+shape (vocab size may vary by language pair — check config.json).
+
+CLI:
+
+```
+--text STR              English source sentence
+--max-new N             cap decoder steps (default 60)
+--gpu                   run on GPU
+--no-cache              disable KV cache (A/B numerical check)
+--weights PATH          override model.safetensors
+--vocab PATH            override vocab.json
+```
+
+**Tokenizer note**: Marian ships a SentencePiece BPE model in
+`source.spm` (binary protobuf) that we don't parse. Instead we
+read `vocab.json` and do greedy longest-match with the `▁`
+(U+2581) metaspace marker. Verified byte-for-byte against HF's
+`MarianTokenizer.encode("Hello world.")` = `[16816, 360, 3, 0]`.
+Edge-case inputs (rare compound words, non-Latin text) may
+diverge from the SPM output; for those, encode externally and
+pass raw ids.
 
 ## E1. bge-small-en-v1.5 (33M, SOTA sentence embeddings)
 

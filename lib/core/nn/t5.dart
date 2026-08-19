@@ -134,8 +134,7 @@ class T5RelativeBias extends Module {
     _tableCache = null;
   }
 
-  List<double> _tableData() =>
-      _tableCache ??= table.weight.toList();
+  List<double> _tableData() => _tableCache ??= table.weight.toList();
 
   /// Returns a `[nq, nk]` additive mask if the caller is single-head,
   /// or `[num_heads, nq, nk]` when treated per-head. This impl folds
