@@ -43,7 +43,8 @@ class HiFiGanLoadReport {
   });
 
   @override
-  String toString() => 'HiFiGanLoadReport(consumed=$consumedCount, '
+  String toString() =>
+      'HiFiGanLoadReport(consumed=$consumedCount, '
       'unused=${unusedKeys.length})';
 }
 
@@ -115,8 +116,7 @@ class HiFiGanLoader {
   }
 
   static void _loadConv1d(Conv1d conv, Tensor weight, Tensor bias) {
-    final expectedW =
-        conv.outChannels * conv.inChannels * conv.kernelSize;
+    final expectedW = conv.outChannels * conv.inChannels * conv.kernelSize;
     if (weight.length != expectedW) {
       throw ArgumentError(
         'hifigan loader: conv1d weight length ${weight.length} != '

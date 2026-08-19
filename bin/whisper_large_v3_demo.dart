@@ -66,8 +66,10 @@ Future<void> main(List<String> args) async {
     }
   }
   if (wavPath == null) {
-    stderr.writeln('usage: dart run bin/whisper_large_v3_demo.dart '
-        '--wav PATH [--gpu] [--max-len N]');
+    stderr.writeln(
+      'usage: dart run bin/whisper_large_v3_demo.dart '
+      '--wav PATH [--gpu] [--max-len N]',
+    );
     exit(64);
   }
   for (final p in [weightsPath, tokenizerPath, wavPath]) {
@@ -82,8 +84,9 @@ Future<void> main(List<String> args) async {
 
   print('== log-mel (128 channels for v3) ==');
   final swMel = Stopwatch()..start();
-  final mel = await WhisperMel(const WhisperMelConfig(nMels: 128))
-      .logMelFromFile(wavPath);
+  final mel = await WhisperMel(
+    const WhisperMelConfig(nMels: 128),
+  ).logMelFromFile(wavPath);
   swMel.stop();
   print('  ${swMel.elapsedMilliseconds} ms  ($wavPath)');
   final melT = Tensor.fromFloat32List([1, 128, 3000], mel, device: device);

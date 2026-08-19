@@ -552,38 +552,47 @@ class ClipHFLoader {
 
       _copy(
         block.ln1.gamma,
-        _expectShape(take('$p.layer_norm1.weight'), [d],
-            '$p.layer_norm1.weight'),
+        _expectShape(take('$p.layer_norm1.weight'), [
+          d,
+        ], '$p.layer_norm1.weight'),
       );
       _copy(
         block.ln1.beta,
-        _expectShape(take('$p.layer_norm1.bias'), [d],
-            '$p.layer_norm1.bias'),
+        _expectShape(take('$p.layer_norm1.bias'), [d], '$p.layer_norm1.bias'),
       );
       _copy(
         block.ln2.gamma,
-        _expectShape(take('$p.layer_norm2.weight'), [d],
-            '$p.layer_norm2.weight'),
+        _expectShape(take('$p.layer_norm2.weight'), [
+          d,
+        ], '$p.layer_norm2.weight'),
       );
       _copy(
         block.ln2.beta,
-        _expectShape(take('$p.layer_norm2.bias'), [d],
-            '$p.layer_norm2.bias'),
+        _expectShape(take('$p.layer_norm2.bias'), [d], '$p.layer_norm2.bias'),
       );
 
       // Q / K / V per-head slice with biases.
-      final qW = _expectShape(take('$p.self_attn.q_proj.weight'), [d, d],
-          '$p.self_attn.q_proj.weight');
-      final qB = _expectShape(take('$p.self_attn.q_proj.bias'), [d],
-          '$p.self_attn.q_proj.bias');
-      final kW = _expectShape(take('$p.self_attn.k_proj.weight'), [d, d],
-          '$p.self_attn.k_proj.weight');
-      final kB = _expectShape(take('$p.self_attn.k_proj.bias'), [d],
-          '$p.self_attn.k_proj.bias');
-      final vW = _expectShape(take('$p.self_attn.v_proj.weight'), [d, d],
-          '$p.self_attn.v_proj.weight');
-      final vB = _expectShape(take('$p.self_attn.v_proj.bias'), [d],
-          '$p.self_attn.v_proj.bias');
+      final qW = _expectShape(take('$p.self_attn.q_proj.weight'), [
+        d,
+        d,
+      ], '$p.self_attn.q_proj.weight');
+      final qB = _expectShape(take('$p.self_attn.q_proj.bias'), [
+        d,
+      ], '$p.self_attn.q_proj.bias');
+      final kW = _expectShape(take('$p.self_attn.k_proj.weight'), [
+        d,
+        d,
+      ], '$p.self_attn.k_proj.weight');
+      final kB = _expectShape(take('$p.self_attn.k_proj.bias'), [
+        d,
+      ], '$p.self_attn.k_proj.bias');
+      final vW = _expectShape(take('$p.self_attn.v_proj.weight'), [
+        d,
+        d,
+      ], '$p.self_attn.v_proj.weight');
+      final vB = _expectShape(take('$p.self_attn.v_proj.bias'), [
+        d,
+      ], '$p.self_attn.v_proj.bias');
       for (int hh = 0; hh < h; hh++) {
         _copy(
           block.mha.wq[hh].weight,
@@ -613,19 +622,21 @@ class ClipHFLoader {
 
       _copy(
         block.mha.wo.weight,
-        _expectShape(take('$p.self_attn.out_proj.weight'), [d, d],
-            '$p.self_attn.out_proj.weight'),
+        _expectShape(take('$p.self_attn.out_proj.weight'), [
+          d,
+          d,
+        ], '$p.self_attn.out_proj.weight'),
       );
       _copy(
         block.mha.wo.bias!,
-        _expectShape(take('$p.self_attn.out_proj.bias'), [d],
-            '$p.self_attn.out_proj.bias'),
+        _expectShape(take('$p.self_attn.out_proj.bias'), [
+          d,
+        ], '$p.self_attn.out_proj.bias'),
       );
 
       _copy(
         block.ffn1.weight,
-        _expectShape(take('$p.mlp.fc1.weight'), [ffn, d],
-            '$p.mlp.fc1.weight'),
+        _expectShape(take('$p.mlp.fc1.weight'), [ffn, d], '$p.mlp.fc1.weight'),
       );
       _copy(
         block.ffn1.bias!,
@@ -633,8 +644,7 @@ class ClipHFLoader {
       );
       _copy(
         block.ffn2.weight,
-        _expectShape(take('$p.mlp.fc2.weight'), [d, ffn],
-            '$p.mlp.fc2.weight'),
+        _expectShape(take('$p.mlp.fc2.weight'), [d, ffn], '$p.mlp.fc2.weight'),
       );
       _copy(
         block.ffn2.bias!,
@@ -645,13 +655,13 @@ class ClipHFLoader {
     // ---------- final_layer_norm ----------
     _copy(
       model.finalLayerNorm.gamma,
-      _expectShape(take('final_layer_norm.weight'), [d],
-          'final_layer_norm.weight'),
+      _expectShape(take('final_layer_norm.weight'), [
+        d,
+      ], 'final_layer_norm.weight'),
     );
     _copy(
       model.finalLayerNorm.beta,
-      _expectShape(take('final_layer_norm.bias'), [d],
-          'final_layer_norm.bias'),
+      _expectShape(take('final_layer_norm.bias'), [d], 'final_layer_norm.bias'),
     );
 
     final unused = state.keys.where((k) => !consumed.contains(k)).toList()

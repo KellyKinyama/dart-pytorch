@@ -68,34 +68,34 @@ class CLIPTextModel extends Module {
   final LayerNorm finalLayerNorm;
 
   CLIPTextModel(this.config)
-      : tokenEmbedding = Embedding(
-          config.vocabSize,
-          config.embedDim,
-          device: config.device,
-          seed: config.seed + 1,
-        ),
-        positionEmbedding = _initSmallGaussian(
-          [config.maxCtx, config.embedDim],
-          scale: 0.02,
-          device: config.device,
-          seed: config.seed + 2,
-        ),
-        encoder = TransformerEncoder(
-          config.numLayers,
-          config.embedDim,
-          config.numHeads,
-          ffnDim: config.ffnDim,
-          finalNorm: false,
-          attnBias: true,
-          activation: Activation.quickGelu,
-          device: config.device,
-          seed: config.seed + 100,
-        ),
-        finalLayerNorm = LayerNorm(
-          config.embedDim,
-          eps: config.layerNormEps,
-          device: config.device,
-        );
+    : tokenEmbedding = Embedding(
+        config.vocabSize,
+        config.embedDim,
+        device: config.device,
+        seed: config.seed + 1,
+      ),
+      positionEmbedding = _initSmallGaussian(
+        [config.maxCtx, config.embedDim],
+        scale: 0.02,
+        device: config.device,
+        seed: config.seed + 2,
+      ),
+      encoder = TransformerEncoder(
+        config.numLayers,
+        config.embedDim,
+        config.numHeads,
+        ffnDim: config.ffnDim,
+        finalNorm: false,
+        attnBias: true,
+        activation: Activation.quickGelu,
+        device: config.device,
+        seed: config.seed + 100,
+      ),
+      finalLayerNorm = LayerNorm(
+        config.embedDim,
+        eps: config.layerNormEps,
+        device: config.device,
+      );
 
   static Tensor _initSmallGaussian(
     List<int> shape, {
@@ -193,11 +193,11 @@ class CLIPTextModel extends Module {
 
   @override
   List<Tensor> parameters() => [
-        ...tokenEmbedding.parameters(),
-        positionEmbedding,
-        ...encoder.parameters(),
-        ...finalLayerNorm.parameters(),
-      ];
+    ...tokenEmbedding.parameters(),
+    positionEmbedding,
+    ...encoder.parameters(),
+    ...finalLayerNorm.parameters(),
+  ];
 
   @override
   List<Module> submodules() => [tokenEmbedding, encoder, finalLayerNorm];

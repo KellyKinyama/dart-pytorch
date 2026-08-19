@@ -38,6 +38,7 @@ export 'core/nn/dropout.dart';
 export 'core/nn/attention/multi_head_attention.dart';
 export 'core/nn/attention/multi_head_cross_attention.dart';
 export 'core/nn/attention/aft_attention.dart';
+export 'core/nn/attention/mla.dart';
 export 'core/nn/transformer.dart';
 export 'core/nn/positional.dart';
 export 'core/nn/masks.dart';

@@ -232,19 +232,22 @@ void main() {
       var ch = cfg.upsampleInitialChannels;
       for (int i = 0; i < cfg.upsampleRates.length; i++) {
         final outCh = ch ~/ 2;
-        s['ups.$i.weight'] =
-            rand([ch, outCh, cfg.upsampleKernelSizes[i]]);
+        s['ups.$i.weight'] = rand([ch, outCh, cfg.upsampleKernelSizes[i]]);
         s['ups.$i.bias'] = rand([outCh]);
         for (int j = 0; j < cfg.resblockKernelSizes.length; j++) {
           final flat = i * cfg.resblockKernelSizes.length + j;
-          for (int k = 0;
-              k < cfg.resblockDilations[j].length;
-              k++) {
-            s['resblocks.$flat.convs1.$k.weight'] =
-                rand([outCh, outCh, cfg.resblockKernelSizes[j]]);
+          for (int k = 0; k < cfg.resblockDilations[j].length; k++) {
+            s['resblocks.$flat.convs1.$k.weight'] = rand([
+              outCh,
+              outCh,
+              cfg.resblockKernelSizes[j],
+            ]);
             s['resblocks.$flat.convs1.$k.bias'] = rand([outCh]);
-            s['resblocks.$flat.convs2.$k.weight'] =
-                rand([outCh, outCh, cfg.resblockKernelSizes[j]]);
+            s['resblocks.$flat.convs2.$k.weight'] = rand([
+              outCh,
+              outCh,
+              cfg.resblockKernelSizes[j],
+            ]);
             s['resblocks.$flat.convs2.$k.bias'] = rand([outCh]);
           }
         }
@@ -265,7 +268,8 @@ void main() {
       //   conv_pre.{w,b}                                    = 2
       //   per stage: ups.{w,b} + kernels * dilations * 4    = 2 + 3*3*4 = 38
       //   conv_post.{w,b}                                   = 2
-      final perStage = 2 +
+      final perStage =
+          2 +
           _tinyCfg.resblockKernelSizes.length *
               _tinyCfg.resblockDilations[0].length *
               4;
