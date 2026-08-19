@@ -239,6 +239,37 @@ void main() {
         expect(logits[i].isFinite, isTrue, reason: 'logit $i is ${logits[i]}');
       }
     });
+
+    test('greedy generate appends maxNewTokens ids', () {
+      final m = DeepSeekV2Model(_tinyCfg);
+      final gen = m.generate([1.0, 2.0, 3.0], maxNewTokens: 5);
+      expect(gen.length, 3 + 5);
+      // Prompt prefix preserved.
+      expect(gen.sublist(0, 3), equals([1.0, 2.0, 3.0]));
+      // Generated ids are valid vocab indices.
+      for (int i = 3; i < gen.length; i++) {
+        expect(gen[i] >= 0 && gen[i] < _tinyCfg.vocabSize, isTrue);
+      }
+    });
+
+    test('generate is deterministic at temperature=0', () {
+      final m = DeepSeekV2Model(_tinyCfg);
+      final g1 = m.generate([1.0, 5.0], maxNewTokens: 4);
+      final g2 = m.generate([1.0, 5.0], maxNewTokens: 4);
+      expect(g1, equals(g2));
+    });
+
+    test('generate rejects empty prompt and prompt+new exceeding maxCtx', () {
+      final m = DeepSeekV2Model(_tinyCfg);
+      expect(() => m.generate([], maxNewTokens: 1), throwsArgumentError);
+      expect(
+        () => m.generate(
+          List<double>.filled(_tinyCfg.maxCtx, 1.0),
+          maxNewTokens: 1,
+        ),
+        throwsArgumentError,
+      );
+    });
   });
 
   group('DeepSeekV2 on GPU', () {

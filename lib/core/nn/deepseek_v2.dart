@@ -26,6 +26,8 @@
 ///     (160 routed + 2 shared, top-6, 8 groups, group-top-3) 1..59).
 library;
 
+import 'dart:math' as math;
+
 import '../tensor/tensor.dart';
 import 'attention/mla.dart';
 import 'embedding.dart';
@@ -353,6 +355,78 @@ class DeepSeekV2Model extends Module {
     }
     // Tied head: h @ embedIn.weight.T.
     return h.matmul(embedIn.weight.transpose());
+  }
+
+  /// Greedy (or temperature-sampled) autoregressive generation. Naive
+  /// no-cache implementation — re-runs the full model on every step,
+  /// so cost per token grows linearly with the prompt length. Fine
+  /// for smoke tests; a KV-cached variant is a follow-up (would need
+  /// an MLA-aware cache that stores `c_kv` + `k_rope` only, per the
+  /// paper).
+  ///
+  /// Returns the full sequence (prompt + generated) as a `List<double>`
+  /// of token ids.
+  List<double> generate(
+    List<double> prompt, {
+    required int maxNewTokens,
+    double temperature = 0.0,
+  }) {
+    if (prompt.isEmpty) {
+      throw ArgumentError('DeepSeekV2Model.generate: prompt must be non-empty');
+    }
+    if (prompt.length + maxNewTokens > config.maxCtx) {
+      throw ArgumentError(
+        'DeepSeekV2Model.generate: prompt+maxNewTokens '
+        '(${prompt.length + maxNewTokens}) exceeds maxCtx ${config.maxCtx}',
+      );
+    }
+    final v = config.vocabSize;
+    final out = List<double>.of(prompt);
+    return Tensor.noGrad(() {
+      for (int step = 0; step < maxNewTokens; step++) {
+        final ctx = Tensor.fromList([out.length], out, device: config.device);
+        final logits = call(ctx).toList();
+        final lastBase = (out.length - 1) * v;
+        int next;
+        if (temperature == 0.0) {
+          // Argmax.
+          next = 0;
+          var best = logits[lastBase];
+          for (int i = 1; i < v; i++) {
+            final s = logits[lastBase + i];
+            if (s > best) {
+              best = s;
+              next = i;
+            }
+          }
+        } else {
+          // Softmax temperature sampling — kept simple for smoke.
+          var maxLogit = logits[lastBase];
+          for (int i = 1; i < v; i++) {
+            if (logits[lastBase + i] > maxLogit) maxLogit = logits[lastBase + i];
+          }
+          final probs = List<double>.filled(v, 0);
+          double sum = 0;
+          for (int i = 0; i < v; i++) {
+            final e = math.exp((logits[lastBase + i] - maxLogit) / temperature);
+            probs[i] = e;
+            sum += e;
+          }
+          final r = math.Random().nextDouble() * sum;
+          double acc = 0;
+          next = v - 1;
+          for (int i = 0; i < v; i++) {
+            acc += probs[i];
+            if (r <= acc) {
+              next = i;
+              break;
+            }
+          }
+        }
+        out.add(next.toDouble());
+      }
+      return out;
+    });
   }
 
   @override
