@@ -392,7 +392,13 @@ class T5HFLoader {
         't5 loader: shape mismatch — dst=${dst.shape} src=${src.shape}',
       );
     }
-    dst.assign(src);
+    if (src.device != dst.device) {
+      final vals = src.toList();
+      final matched = Tensor.fromList(dst.shape, vals, device: dst.device);
+      dst.assign(matched);
+    } else {
+      dst.assign(src);
+    }
   }
 
   static void _expectShape(Tensor t, List<int> shape, String label) {

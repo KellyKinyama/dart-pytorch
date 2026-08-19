@@ -99,11 +99,7 @@ Future<void> main(List<String> args) async {
   print('');
   print('== greedy decode (${noCache ? "no cache" : "KV cache"}) ==');
   final swG = Stopwatch()..start();
-  final out = model.generate(
-    ids,
-    maxNewTokens: maxNew,
-    useCache: !noCache,
-  );
+  final out = model.generate(ids, maxNewTokens: maxNew, useCache: !noCache);
   swG.stop();
   final newTokens = out.sublist(1);
   print(
