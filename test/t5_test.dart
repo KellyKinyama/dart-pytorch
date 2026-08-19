@@ -245,17 +245,17 @@ void _dumpAttentionInto(
   s['$base.o.weight'] = attn.wo.weight;
 }
 
-Tensor _concatHeadRows(List heads, int H, int D, int IN) {
-  final out = List<double>.filled(H * D * IN, 0);
-  for (int hi = 0; hi < H; hi++) {
+Tensor _concatHeadRows(List heads, int numHeads, int dKv, int inDim) {
+  final out = List<double>.filled(numHeads * dKv * inDim, 0);
+  for (int hi = 0; hi < numHeads; hi++) {
     final head = heads[hi];
     final row = head.weight.toList();
-    final base = hi * D * IN;
-    for (int i = 0; i < D * IN; i++) {
+    final base = hi * dKv * inDim;
+    for (int i = 0; i < dKv * inDim; i++) {
       out[base + i] = row[i];
     }
   }
-  return Tensor.fromList([H * D, IN], out);
+  return Tensor.fromList([numHeads * dKv, inDim], out);
 }
 
 void _dumpFfnInto(

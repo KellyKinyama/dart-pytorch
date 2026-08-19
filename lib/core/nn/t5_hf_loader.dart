@@ -322,22 +322,23 @@ class T5HFLoader {
         expectShape: [cfg.dModel, cfg.dFf]);
   }
 
-  /// HF QKV weight is `[H * D, IN]`. Slice head `h` as rows
-  /// `[h*D, (h+1)*D)` -> our per-head Linear `weight` is `[D, IN]`.
+  /// HF QKV weight is `[numHeads * dKv, inDim]`. Slice head `h` as
+  /// rows `[h*dKv, (h+1)*dKv)` -> our per-head Linear `weight` is
+  /// `[dKv, inDim]`.
   static void _sliceHeadRowsInto(
-      Tensor full, List<dynamic> heads, int H, int D, int IN) {
-    _expectShape(full, [H * D, IN], 'attention fused Q/K/V');
+      Tensor full, List<dynamic> heads, int numHeads, int dKv, int inDim) {
+    _expectShape(full, [numHeads * dKv, inDim], 'attention fused Q/K/V');
     final data = full.toList();
-    for (int h = 0; h < H; h++) {
-      final rowVals = List<double>.filled(D * IN, 0);
-      final srcBase = h * D * IN;
-      for (int i = 0; i < D * IN; i++) {
+    for (int h = 0; h < numHeads; h++) {
+      final rowVals = List<double>.filled(dKv * inDim, 0);
+      final srcBase = h * dKv * inDim;
+      for (int i = 0; i < dKv * inDim; i++) {
         rowVals[i] = data[srcBase + i];
       }
       final headLinear = heads[h];
       _assign(headLinear.weight,
-          Tensor.fromList([D, IN], rowVals, device: full.device),
-          expectShape: [D, IN]);
+          Tensor.fromList([dKv, inDim], rowVals, device: full.device),
+          expectShape: [dKv, inDim]);
     }
   }
 
