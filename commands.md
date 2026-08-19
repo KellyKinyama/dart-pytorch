@@ -18,6 +18,7 @@ fix so the CUDA driver stub is found. Drop it on native Linux.
 | 9 | gpt-j-6b (CPU)   | 6.05B | CPU    | ✅ local | [bin/gptj/run_6b_cpu_api.dart](bin/gptj/run_6b_cpu_api.dart) |
 | 10 | smollm2-135m-instruct | 135M | CPU/GPU | ✅ local | [bin/smollm2_demo.dart](bin/smollm2_demo.dart) — Llama-arch tiny LM |
 | T1 | flan-t5-small | 60M | CPU/GPU | ✅ local | [bin/t5_small_demo.dart](bin/t5_small_demo.dart) — encoder-decoder text-to-text (translation, summarization, QA) |
+| T2 | flan-t5-base | 250M | CPU/GPU | ✅ local | [bin/flan_t5_base_demo.dart](bin/flan_t5_base_demo.dart) — same arch, base config, ~0.7 tok/s CPU |
 | E1 | bge-small-en-v1.5 | 33M | CPU/GPU | ✅ local | [bin/bge_demo.dart](bin/bge_demo.dart) — SOTA sentence embeddings (CLS-pool + L2) |
 | V4 | dinov2-small | 22M | CPU/GPU | n/a | [bin/dinov2_demo.dart](bin/dinov2_demo.dart) — self-supervised ViT-S/14 image features |
 | S1 | whisper tiny.en  | 39M   | CPU    | ✅ local | [bin/whisper_demo.dart](bin/whisper_demo.dart) |
