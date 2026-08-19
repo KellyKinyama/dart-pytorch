@@ -178,4 +178,119 @@ void main() {
       expect(() => block(_fake([5, 33], seed: 14), c), throwsArgumentError);
     });
   });
+
+  group('gaussianNoise', () {
+    test('produces the requested shape', () {
+      final n = gaussianNoise([4, 5], seed: 1);
+      expect(n.shape, equals([4, 5]));
+    });
+
+    test('empirical mean/std are close to N(0, 1) for large sample', () {
+      final n = gaussianNoise([1000], seed: 2).toList();
+      double sum = 0;
+      for (final v in n) {
+        sum += v;
+      }
+      final mean = sum / n.length;
+      double sq = 0;
+      for (final v in n) {
+        sq += (v - mean) * (v - mean);
+      }
+      final std = math.sqrt(sq / n.length);
+      expect(mean.abs() < 0.1, isTrue, reason: 'mean=$mean');
+      expect((std - 1.0).abs() < 0.1, isTrue, reason: 'std=$std');
+    });
+
+    test('deterministic given the same seed', () {
+      final a = gaussianNoise([16], seed: 42).toList();
+      final b = gaussianNoise([16], seed: 42).toList();
+      expect(a, equals(b));
+    });
+  });
+
+  group('FlowMatchingSampler', () {
+    test('linear velocity v(x, t) = 1 integrates from 0 to 1 exactly', () {
+      // dx/dt = 1  =>  x(1) = x(0) + 1.
+      const sampler = FlowMatchingSampler(numSteps: 8);
+      final x0 = Tensor.fromList([3], [0.0, 5.0, -2.0]);
+      final x1 = sampler.sample(
+        initialNoise: x0,
+        velocityField: (x, t) =>
+            Tensor.fromList(x.shape, List<double>.filled(x.length, 1.0)),
+      );
+      final vals = x1.toList();
+      expect((vals[0] - 1.0).abs() < 1e-5, isTrue);
+      expect((vals[1] - 6.0).abs() < 1e-5, isTrue);
+      expect((vals[2] - -1.0).abs() < 1e-5, isTrue);
+    });
+
+    test('midpoint solver is exact for constant velocity too', () {
+      const sampler = FlowMatchingSampler(
+        numSteps: 4,
+        solver: FlowSolver.midpoint,
+      );
+      final x0 = Tensor.fromList([2], [0.0, 10.0]);
+      final x1 = sampler.sample(
+        initialNoise: x0,
+        velocityField: (x, t) =>
+            Tensor.fromList(x.shape, [0.5, 2.0]),
+      );
+      final vals = x1.toList();
+      // x0 + 1 * dv where dv = velocity * 1 for whole interval.
+      expect((vals[0] - 0.5).abs() < 1e-5, isTrue);
+      expect((vals[1] - 12.0).abs() < 1e-5, isTrue);
+    });
+
+    test('midpoint solver has smaller error than Euler on '
+        'time-varying velocity', () {
+      // dx/dt = 2·t → x(1) = x(0) + t² |₀¹ = x(0) + 1.
+      Tensor v(Tensor x, Tensor t) {
+        final tt = t.toList()[0];
+        return Tensor.fromList(x.shape,
+            List<double>.filled(x.length, 2 * tt));
+      }
+
+      const nSteps = 4;
+      const euler = FlowMatchingSampler(numSteps: nSteps);
+      const midpoint = FlowMatchingSampler(
+        numSteps: nSteps,
+        solver: FlowSolver.midpoint,
+      );
+      final x0 = Tensor.fromList([1], [0.0]);
+      final xE = euler.sample(initialNoise: x0, velocityField: v);
+      final xM = midpoint.sample(initialNoise: x0, velocityField: v);
+      final eErr = (xE.toList()[0] - 1.0).abs();
+      final mErr = (xM.toList()[0] - 1.0).abs();
+      expect(mErr < eErr, isTrue,
+          reason: 'midpoint err $mErr should beat Euler err $eErr');
+    });
+
+    test('velocity shape mismatch throws', () {
+      const sampler = FlowMatchingSampler(numSteps: 4);
+      expect(
+        () => sampler.sample(
+          initialNoise: Tensor.fromList([3], [0, 1, 2]),
+          velocityField: (x, t) => Tensor.fromList([2], [0, 0]),
+        ),
+        throwsArgumentError,
+      );
+    });
+
+    test('numSteps=32 shape roundtrip on a 2-D noise shape', () {
+      const sampler = FlowMatchingSampler(numSteps: 32);
+      final z = gaussianNoise([4, 8], seed: 99);
+      final out = sampler.sample(
+        initialNoise: z,
+        velocityField: (x, t) =>
+            Tensor.fromList(x.shape, List<double>.filled(x.length, 0.0)),
+      );
+      // Zero velocity → sample equals input noise.
+      expect(out.shape, equals([4, 8]));
+      final zVals = z.toList();
+      final outVals = out.toList();
+      for (int i = 0; i < zVals.length; i++) {
+        expect((zVals[i] - outVals[i]).abs() < 1e-5, isTrue);
+      }
+    });
+  });
 }

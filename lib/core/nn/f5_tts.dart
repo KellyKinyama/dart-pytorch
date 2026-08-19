@@ -354,3 +354,122 @@ class F5DiTBlock extends Module {
   @override
   List<Module> submodules() => [norm1, attn, norm2, fc1, fc2, adaLn];
 }
+
+// ---------------------------------------------------------------------------
+// FlowMatchingSampler — ODE integration from noise to mel.
+// ---------------------------------------------------------------------------
+
+/// A velocity-predicting model: given the current sample `x` and
+/// timestep `t ∈ [0, 1]`, return `dx/dt = v(x, t)`. Used by
+/// [FlowMatchingSampler] to integrate the ODE from `t=0` (noise) to
+/// `t=1` (sample). Shape contract: `v(x, t)` must return a tensor
+/// with the same shape as `x`.
+typedef VelocityField = Tensor Function(Tensor x, Tensor t);
+
+/// Integration scheme used by [FlowMatchingSampler].
+///
+///   * [FlowSolver.euler] — one velocity evaluation per step.
+///     `x_{n+1} = x_n + Δt · v(x_n, t_n)`. Fast, adequate at ≥ 32
+///     steps for F5-TTS-style flow-matching mel generation.
+///   * [FlowSolver.midpoint] — two velocity evaluations per step.
+///     Second-order accurate:
+///     `x_{n+1} = x_n + Δt · v(x_n + Δt/2 · v(x_n, t_n),
+///                              t_n + Δt/2)`.
+///     ~2× the compute of Euler at each step; typically halves
+///     the number of steps needed for the same quality.
+enum FlowSolver { euler, midpoint }
+
+/// Conditional Flow Matching ODE sampler. Applies to any velocity
+/// field — F5-TTS's DiT is the intended target, but the sampler
+/// itself is model-agnostic.
+///
+///     x(0) = z ~ N(0, I)
+///     dx/dt = v(x, t)
+///     x(1) = generated sample
+class FlowMatchingSampler {
+  final int numSteps;
+  final FlowSolver solver;
+
+  const FlowMatchingSampler({
+    required this.numSteps,
+    this.solver = FlowSolver.euler,
+  });
+
+  /// Sample by integrating the ODE from `t=0` (starting at
+  /// [initialNoise]) to `t=1`. [velocityField] is called once per
+  /// Euler step, or twice per midpoint step. Returns the final
+  /// `x(1)` on the same device as [initialNoise].
+  Tensor sample({
+    required Tensor initialNoise,
+    required VelocityField velocityField,
+  }) {
+    var x = initialNoise;
+    final dt = 1.0 / numSteps;
+    for (int step = 0; step < numSteps; step++) {
+      final tStart = step * dt;
+      final tScalar = Tensor.fromList([1], [tStart], device: x.device);
+      switch (solver) {
+        case FlowSolver.euler:
+          final v = velocityField(x, tScalar);
+          _requireMatchingShape(x, v, 'euler');
+          x = x + v * dt;
+          break;
+        case FlowSolver.midpoint:
+          final v1 = velocityField(x, tScalar);
+          _requireMatchingShape(x, v1, 'midpoint step 1');
+          final xMid = x + v1 * (dt / 2);
+          final tMid = Tensor.fromList([1], [tStart + dt / 2],
+              device: x.device);
+          final v2 = velocityField(xMid, tMid);
+          _requireMatchingShape(x, v2, 'midpoint step 2');
+          x = x + v2 * dt;
+          break;
+      }
+    }
+    return x;
+  }
+
+  static void _requireMatchingShape(Tensor x, Tensor v, String stage) {
+    if (v.shape.length != x.shape.length) {
+      throw ArgumentError(
+        'FlowMatchingSampler ($stage): velocity shape ${v.shape} does '
+        'not match x shape ${x.shape}',
+      );
+    }
+    for (int i = 0; i < x.shape.length; i++) {
+      if (v.shape[i] != x.shape[i]) {
+        throw ArgumentError(
+          'FlowMatchingSampler ($stage): velocity shape ${v.shape} does '
+          'not match x shape ${x.shape}',
+        );
+      }
+    }
+  }
+}
+
+/// Draw a Gaussian noise tensor of the given shape (Box-Muller).
+/// Convenience helper for the sampler — you can also pass your own
+/// noise into [FlowMatchingSampler.sample].
+Tensor gaussianNoise(
+  List<int> shape, {
+  int? seed,
+  Device device = Device.CPU,
+}) {
+  var n = 1;
+  for (final d in shape) {
+    n *= d;
+  }
+  final rng = seed == null ? math.Random() : math.Random(seed);
+  final v = Float32List(n);
+  int i = 0;
+  while (i < n) {
+    final u1 = rng.nextDouble().clamp(1e-12, 1.0);
+    final u2 = rng.nextDouble();
+    final r = math.sqrt(-2.0 * math.log(u1));
+    final theta = 2 * math.pi * u2;
+    v[i] = r * math.cos(theta);
+    if (i + 1 < n) v[i + 1] = r * math.sin(theta);
+    i += 2;
+  }
+  return Tensor.fromFloat32List(shape, v, device: device);
+}
