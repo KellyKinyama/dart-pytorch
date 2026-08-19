@@ -175,6 +175,7 @@ Future<void> main(List<String> args) async {
   var task = 'transcribe';
   var useGpu = false;
   var maxLen = 200;
+  int? vocabSizeOverride;
   for (int i = 0; i < args.length; i++) {
     switch (args[i]) {
       case '--size':
@@ -200,6 +201,9 @@ Future<void> main(List<String> args) async {
         break;
       case '--max-len':
         maxLen = int.parse(args[++i]);
+        break;
+      case '--vocab':
+        vocabSizeOverride = int.parse(args[++i]);
         break;
     }
   }
@@ -269,7 +273,7 @@ Future<void> main(List<String> args) async {
   );
   final encReport = WhisperHFLoader.loadFile(encoder, weightsPath);
   final decoder = WhisperDecoder(
-    vocabSize: 51865,
+    vocabSize: vocabSizeOverride ?? 51865,
     embedDim: embedDim,
     numHeads: numHeads,
     numLayers: numLayers,

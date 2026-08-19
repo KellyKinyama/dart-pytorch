@@ -29,6 +29,9 @@ fix so the CUDA driver stub is found. Drop it on native Linux.
 | S3 | whisper base (multilingual) | 74M | CPU/GPU | ✅ local | [bin/whisper_multilingual_demo.dart](bin/whisper_multilingual_demo.dart) — 99 languages, `--lang code`, `--translate` mode |
 | S4 | whisper small (multilingual) | 244M | GPU (CPU tight) | ✅ local | same binary with `--size small` — better quality, needs ~7 GB RAM on CPU |
 | S5 | Nyanja ASR (community fine-tune of whisper-tiny) | 39M | CPU/GPU | ✅ local | same binary with `--size tiny --weights <fine-tune>` — verified on `unza/unza-nyanja` samples |
+| S6 | Bemba ASR (community fine-tune of whisper-small) | 244M | CPU | ✅ local | `chiyo123/whisper-small-bemba` — verified on `Chvntala/bembaspeech` samples, near-exact match |
+| S7 | Tonga ASR (community fine-tune of whisper-small) | 244M | CPU | ✅ local | `chiyo123/whisper-small-tonga` — verified on `kalisia/TongaASR_Space_Examples` |
+| S8 | Lozi ASR (community fine-tune of whisper-small)  | 244M | CPU | ✅ local | `simzacademy/whisper-small-lozi1` — needs `--vocab 50364` (truncated vocab, no timestamp tokens) |
 | F1 | facenet-vggface2 | 39M   | CPU    | n/a     | [bin/facenet/demo.dart](bin/facenet/demo.dart) — bit-exact vs. reference |
 | F2 | facenet-vggface2 | 39M   | GPU    | n/a     | [bin/facenet/gpu_demo.dart](bin/facenet/gpu_demo.dart) — same, on device |
 | F3 | facenet-vggface2 | 39M   | CPU/GPU | n/a    | [bin/facenet/verify.dart](bin/facenet/verify.dart) — pair verification |
@@ -1710,6 +1713,78 @@ Bemba / Tonga / Lozi should work with the same recipe once a
 test WAV is on disk. Community fine-tunes for those languages are
 mostly whisper-small-sized (`chiyo123/whisper-small-bemba`,
 `simzacademy/whisper-small-lozi1`, etc.) so use `--size small`.
+
+**Update (2026-08-19): Bemba, Tonga, Lozi ASR verified end-to-end.**
+Three whisper-small fine-tunes downloaded and run under Dart:
+
+- **Bemba**: `chiyo123/whisper-small-bemba` (244 M). Only ships
+  `pytorch_model.bin` — converted to safetensors with
+  `torch.load(weights_only=True) + safetensors.torch.save_file`
+  (keep ALL tensors including tied `proj_out.weight` and
+  `model.decoder.embed_tokens.weight`, do NOT dedup by storage
+  id — decoder loader needs both keys). Reused
+  `models/whisper-small/tokenizer.json` (base tokenizer preserved).
+  Sample WAVs extracted from `Chvntala/bembaspeech` parquet
+  (audio column is a `{'bytes','path'}` dict — raw bytes are
+  already valid WAV).
+
+  ```
+  bemba_0.wav → "cisuma ukwibukusha ukuti iciputulwa icikalamba
+                   icacipingo cakale calembela pakuti tusambilile"
+  reference    → "cisuma ukwibukisho kuti iciputulwa icikalamba
+                   ica cipingo ca kale calembelwe pakuti tusambilile..."
+  ```
+
+- **Tonga**: `chiyo123/whisper-small-tonga` (244 M). Same recipe.
+  Sample WAVs from `kalisia/TongaASR_Space_Examples` (direct WAV
+  URLs).
+
+  ```
+  tonga_0.wav → "bakabaofwaazya aboobo cakabakataazya kujana
+                   mulyango nkubede"
+  ```
+
+- **Lozi**: `simzacademy/whisper-small-lozi1` (244 M) — chain-
+  fine-tuned from `simzacademy/whisper-small-tonga`. Ships native
+  `model.safetensors` but has an unusual **truncated vocab of
+  50364** (dropped the 1500 timestamp tokens; kept only base BPE
+  + language + task specials 0..50363). Loader must be told:
+  `--vocab 50364`. Prompt tokens SoT/`<|en|>`/`<|transcribe|>`/
+  `<|notimestamps|>` are all ≤ 50363 so they still work.
+  No public Lozi audio dataset found (searched
+  zambezivoice / csikasote / buumba641 / Forbes21 / FLEURS);
+  smoke-tested by running the Tonga clip through the Lozi model,
+  which correctly re-shaped the phonology into Lozi
+  (`aboobo`→`ha bobo`, `nkubede`→`nkuubele`):
+
+  ```
+  tonga_0.wav through Lozi model
+           → "bakabaofwa ha bobo cakabakata ha bujana mulyango nkuubele"
+  ```
+
+Runbook (CPU, ~10 min per clip on WSL2 with 8 GB RAM):
+
+```sh
+# Bemba
+LD_LIBRARY_PATH=/usr/lib/wsl/lib \
+  dart run bin/whisper_multilingual_demo.dart --size small \
+    --weights models/bemba-whisper-small/model.safetensors \
+    --tokenizer models/bemba-whisper-small/tokenizer.json \
+    --wav data/zambian/bemba_0.wav --lang en --max-len 40
+# Tonga
+dart run bin/whisper_multilingual_demo.dart --size small \
+  --weights models/tonga-whisper-small/model.safetensors \
+  --tokenizer models/tonga-whisper-small/tokenizer.json \
+  --wav data/zambian/tonga_0.wav --lang en --max-len 40
+# Lozi (truncated vocab)
+dart run bin/whisper_multilingual_demo.dart --size small \
+  --weights models/lozi-whisper-small/model.safetensors \
+  --tokenizer models/lozi-whisper-small/tokenizer.json \
+  --wav <your-lozi.wav> --lang en --max-len 40 --vocab 50364
+```
+
+GPU is faster but whisper-small hits an illegal-memory-access
+error on 6 GB VRAM — CPU is the reliable path here.
 
 ## S4. whisper small (multilingual, 244M, 99 languages)
 
