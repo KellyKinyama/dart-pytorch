@@ -1170,10 +1170,7 @@ class F5DurationLoss {
   /// Per-character MSE against an oracle duration vector.
   /// `rawScores: [T_chars]`, `target: [T_chars]` — both non-negative
   /// mel-frame counts.
-  static Tensor mse({
-    required Tensor rawScores,
-    required Tensor target,
-  }) {
+  static Tensor mse({required Tensor rawScores, required Tensor target}) {
     if (rawScores.shape.length != 1 ||
         target.shape.length != 1 ||
         rawScores.shape[0] != target.shape[0]) {

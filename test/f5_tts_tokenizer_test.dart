@@ -160,10 +160,7 @@ void main() {
         intermediateDim: 32,
         numLayers: 1,
       );
-      final text = Tensor.fromList(
-        [5, 16],
-        List<double>.filled(5 * 16, 0.0),
-      );
+      final text = Tensor.fromList([5, 16], List<double>.filled(5 * 16, 0.0));
       // At init the softplus(scores).sum() is roughly 5 * ln(2) ≈ 3.47.
       // Pick a target far off and verify the loss is > 0.
       final scores = dp.rawScores(text);
@@ -180,28 +177,22 @@ void main() {
         numLayers: 1,
         seed: 42,
       );
-      final text = Tensor.fromList(
-        [4, 16],
-        List<double>.generate(4 * 16, (i) => (i - 32) * 0.01),
-      );
+      final text = Tensor.fromList([
+        4,
+        16,
+      ], List<double>.generate(4 * 16, (i) => (i - 32) * 0.01));
       final params = dp.parameters();
 
       double lossValue() {
         final scores = dp.rawScores(text);
-        final l = F5DurationLoss.rate(
-          rawScores: scores,
-          targetMelFrames: 40,
-        );
+        final l = F5DurationLoss.rate(rawScores: scores, targetMelFrames: 40);
         return l.toList()[0];
       }
 
       final before = lossValue();
       // One manual SGD step against a single loss evaluation.
       final scores2 = dp.rawScores(text);
-      final loss = F5DurationLoss.rate(
-        rawScores: scores2,
-        targetMelFrames: 40,
-      );
+      final loss = F5DurationLoss.rate(rawScores: scores2, targetMelFrames: 40);
       loss.backward();
       const lr = 0.05;
       for (final p in params) {
@@ -218,7 +209,8 @@ void main() {
       expect(
         after < before,
         isTrue,
-        reason: 'rate loss should decrease after SGD step '
+        reason:
+            'rate loss should decrease after SGD step '
             '(before=$before after=$after)',
       );
     });
@@ -248,10 +240,7 @@ void main() {
         numLayers: 1,
         seed: 7,
       );
-      final text = Tensor.fromList(
-        [3, 8],
-        List<double>.filled(3 * 8, 0.1),
-      );
+      final text = Tensor.fromList([3, 8], List<double>.filled(3 * 8, 0.1));
       final scores = dp.rawScores(text);
       final loss = (scores * scores).sum();
       expect(() => loss.backward(), returnsNormally);

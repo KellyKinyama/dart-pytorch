@@ -57,6 +57,8 @@ Future<void> main(List<String> args) async {
   var numSteps = 32;
   String? f5WeightsPath;
   String? vocoderWeightsPath;
+  String? vocabPath;
+  String? cmuDictPath;
   var noiseSeed = 42;
   for (int i = 0; i < args.length; i++) {
     switch (args[i]) {
@@ -75,6 +77,12 @@ Future<void> main(List<String> args) async {
       case '--vocoder-weights':
         vocoderWeightsPath = args[++i];
         break;
+      case '--vocab':
+        vocabPath = args[++i];
+        break;
+      case '--cmu-dict':
+        cmuDictPath = args[++i];
+        break;
       case '--seed':
         noiseSeed = int.parse(args[++i]);
         break;
@@ -87,17 +95,32 @@ Future<void> main(List<String> args) async {
 
   // ---------- 1. Tokenise ----------
   final swTok = Stopwatch()..start();
-  final tokenIds = <int>[];
-  for (final code in text.toLowerCase().codeUnits) {
-    tokenIds.add(code % _vocabSize);
+  final F5TtsTokenizer tokenizer;
+  if (cmuDictPath != null) {
+    tokenizer = F5TtsPhonemeTokenizer.fromCmuDictFile(cmuDictPath);
+    print(
+      '  tokenizer: CMU-dict phoneme '
+      '(${(tokenizer as F5TtsPhonemeTokenizer).numWords} words, '
+      'vocab=${tokenizer.vocabSize})',
+    );
+  } else if (vocabPath != null) {
+    tokenizer = F5TtsCharTokenizer.fromFile(vocabPath);
+    print('  tokenizer: char from $vocabPath (vocab=${tokenizer.vocabSize})');
+  } else {
+    tokenizer = F5TtsCharTokenizer.defaultEnglish();
+    print('  tokenizer: default English char (vocab=${tokenizer.vocabSize})');
   }
+  final effectiveVocab = tokenizer.vocabSize > _vocabSize
+      ? tokenizer.vocabSize
+      : _vocabSize;
+  final tokenIds = tokenizer.encode(text);
   final tokens = Tensor.fromList([
     tokenIds.length,
   ], tokenIds.map((i) => i.toDouble()).toList());
   swTok.stop();
   print(
     'tokenise: ${swTok.elapsedMilliseconds} ms  '
-    '(${tokenIds.length} chars → ${tokens.shape})',
+    '(${tokenIds.length} tokens → ${tokens.shape})',
   );
 
   // ---------- 2. Build models ----------
@@ -105,7 +128,7 @@ Future<void> main(List<String> args) async {
   print('Building F5TextEncoder + F5DurationPredictor + F5DiT + HiFiGAN');
   final swBuild = Stopwatch()..start();
   final textEnc = F5TextEncoder(
-    vocabSize: _vocabSize,
+    vocabSize: effectiveVocab,
     dim: _textDim,
     intermediateDim: 2048,
     numLayers: 4,

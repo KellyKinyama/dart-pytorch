@@ -63,11 +63,14 @@ class F5TtsCharTokenizer implements F5TtsTokenizer {
   final Map<String, int> _tokenToId;
   final bool lowerCase;
 
-  F5TtsCharTokenizer._(this._idToToken, this._tokenToId, {this.lowerCase = true})
-    : padId = _tokenToId[F5SpecialToken.pad]!,
-      unkId = _tokenToId[F5SpecialToken.unk]!,
-      bosId = _tokenToId[F5SpecialToken.bos]!,
-      eosId = _tokenToId[F5SpecialToken.eos]!;
+  F5TtsCharTokenizer._(
+    this._idToToken,
+    this._tokenToId, {
+    this.lowerCase = true,
+  }) : padId = _tokenToId[F5SpecialToken.pad]!,
+       unkId = _tokenToId[F5SpecialToken.unk]!,
+       bosId = _tokenToId[F5SpecialToken.bos]!,
+       eosId = _tokenToId[F5SpecialToken.eos]!;
 
   /// Builds the default English character vocabulary described above.
   factory F5TtsCharTokenizer.defaultEnglish() {
@@ -85,7 +88,10 @@ class F5TtsCharTokenizer implements F5TtsTokenizer {
 
   /// Build from an explicit vocab list. The list must contain the four
   /// special tokens; if any are missing they are prepended.
-  factory F5TtsCharTokenizer.fromVocab(List<String> vocab, {bool lowerCase = true}) {
+  factory F5TtsCharTokenizer.fromVocab(
+    List<String> vocab, {
+    bool lowerCase = true,
+  }) {
     final ordered = <String>[];
     for (final s in F5SpecialToken.all) {
       if (!vocab.contains(s)) ordered.add(s);
@@ -94,7 +100,9 @@ class F5TtsCharTokenizer implements F5TtsTokenizer {
     final map = <String, int>{};
     for (int i = 0; i < ordered.length; i++) {
       if (map.containsKey(ordered[i])) {
-        throw ArgumentError('F5TtsCharTokenizer: duplicate token "${ordered[i]}"');
+        throw ArgumentError(
+          'F5TtsCharTokenizer: duplicate token "${ordered[i]}"',
+        );
       }
       map[ordered[i]] = i;
     }
@@ -237,7 +245,8 @@ class F5TtsPhonemeTokenizer implements F5TtsTokenizer {
     final raw = File(path).readAsStringSync();
     for (final rawLine in LineSplitter.split(raw)) {
       final line = rawLine.trim();
-      if (line.isEmpty || line.startsWith(';;;') || line.startsWith('#')) continue;
+      if (line.isEmpty || line.startsWith(';;;') || line.startsWith('#'))
+        continue;
       final parts = line.split(RegExp(r'\s+'));
       if (parts.length < 2) continue;
       var word = parts[0].toLowerCase();
