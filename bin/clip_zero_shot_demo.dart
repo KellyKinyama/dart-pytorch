@@ -45,6 +45,7 @@ Future<void> main(List<String> args) async {
   var template = 'a photo of a {}';
   var topK = 5;
   var maxCtx = 77;
+  var preset = 'base32';
   for (int i = 0; i < args.length; i++) {
     switch (args[i]) {
       case '--image':
@@ -65,12 +66,16 @@ Future<void> main(List<String> args) async {
       case '--topk':
         topK = int.parse(args[++i]);
         break;
+      case '--preset':
+        preset = args[++i];
+        break;
     }
   }
   if (imagePath == null) {
     stderr.writeln(
       'usage: dart run bin/clip_zero_shot_demo.dart '
-      '--image PATH [--labels LABEL1,LABEL2,...] [--topk N]',
+      '--image PATH [--labels LABEL1,LABEL2,...] [--topk N] '
+      '[--preset base32|base16|large14]',
     );
     exit(64);
   }
@@ -84,10 +89,34 @@ Future<void> main(List<String> args) async {
   if (topK > labels.length) topK = labels.length;
 
   // ---------- Build models ----------
-  final visionCfg = ClipHFLoader.base32Config();
-  final textCfg = ClipHFLoader.baseTextConfig();
+  final CLIPVisionConfig visionCfg;
+  final CLIPTextConfig textCfg;
+  final String presetLabel;
+  switch (preset) {
+    case 'base32':
+      visionCfg = ClipHFLoader.base32Config();
+      textCfg = ClipHFLoader.baseTextConfig();
+      presetLabel = 'CLIP-ViT-B/32';
+      break;
+    case 'base16':
+      visionCfg = ClipHFLoader.base16Config();
+      textCfg = ClipHFLoader.baseTextConfig();
+      presetLabel = 'CLIP-ViT-B/16';
+      break;
+    case 'large14':
+      visionCfg = ClipHFLoader.large14Config();
+      textCfg = ClipHFLoader.largeTextConfig();
+      presetLabel = 'CLIP-ViT-L/14';
+      break;
+    default:
+      stderr.writeln(
+        'unknown preset "$preset"; use base32 | base16 | large14',
+      );
+      exit(64);
+  }
   print(
-    'Building CLIP-ViT-B/32 (vision hidden=${visionCfg.embedDim}, '
+    'Building $presetLabel (image=${visionCfg.imageSize}, '
+    'patch=${visionCfg.patchSize}, vision hidden=${visionCfg.embedDim}, '
     'text hidden=${textCfg.embedDim})',
   );
   final visionModel = CLIPVisionModel(visionCfg);
