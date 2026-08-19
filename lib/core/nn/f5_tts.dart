@@ -40,6 +40,7 @@ import 'embedding.dart';
 import 'layer_norm.dart';
 import 'linear.dart';
 import 'module.dart';
+import 'safetensors.dart';
 
 // ---------------------------------------------------------------------------
 // SinusoidalTimestepEmbedding
@@ -1138,6 +1139,23 @@ class F5DurationPredictor extends Module {
 ///
 /// Duration predictor keys optional (prefixed by `duration.`).
 class F5TtsHFLoader {
+  /// Load from a safetensors file. Convenience wrapper around
+  /// [loadMap].
+  static F5TtsLoadReport loadFile({
+    required F5TextEncoder textEncoder,
+    required F5DiT dit,
+    F5DurationPredictor? durationPredictor,
+    required String path,
+  }) {
+    final state = SafeTensors.loadFile(path);
+    return loadMap(
+      textEncoder: textEncoder,
+      dit: dit,
+      durationPredictor: durationPredictor,
+      state: state,
+    );
+  }
+
   /// Load into a text encoder + DiT bundle. Pass `null` for
   /// [durationPredictor] to skip duration keys.
   static F5TtsLoadReport loadMap({
