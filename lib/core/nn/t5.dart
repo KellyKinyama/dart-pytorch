@@ -36,6 +36,7 @@ import 'dart:math' as math;
 
 import '../tensor/tensor.dart';
 import 'embedding.dart';
+import 'kv_cache.dart';
 import 'linear.dart';
 import 'masks.dart';
 import 'module.dart';
@@ -144,6 +145,22 @@ class T5RelativeBias extends Module {
         }
       }
       out.add(Tensor.fromList([nq, nk], vals, device: table.weight.device));
+    }
+    return out;
+  }
+
+  /// Cached-decode variant. Returns per-head `[1, kLen]` bias tensors
+  /// for a single query token at position `qPos` attending to keys
+  /// `[0, kLen)`. Used by [T5Decoder.callCached].
+  List<Tensor> maskPerHeadSingleQ(int qPos, int kLen) {
+    final tableData = table.weight.toList();
+    final out = <Tensor>[];
+    for (int h = 0; h < numHeads; h++) {
+      final vals = List<double>.filled(kLen, 0);
+      for (int j = 0; j < kLen; j++) {
+        vals[j] = tableData[_bucket(j - qPos) * numHeads + h];
+      }
+      out.add(Tensor.fromList([1, kLen], vals, device: table.weight.device));
     }
     return out;
   }
@@ -270,6 +287,55 @@ class T5Attention extends Module {
     return wo(concat);
   }
 
+  /// Cached self-attention for autoregressive decoding.
+  /// `xqSingle`: `[1, dModel]` — the current token's normed hidden.
+  /// Appends this token's K/V to `cache`, then Q attends to the full
+  /// cached K/V.
+  Tensor callCachedSelf(
+    Tensor xqSingle, {
+    required MHACache cache,
+    List<Tensor>? relativeBiasPerHead,
+  }) {
+    final heads = <Tensor>[];
+    for (int h = 0; h < numHeads; h++) {
+      final q = wq[h](xqSingle) * qScale;
+      final kNew = wk[h](xqSingle);
+      final vNew = wv[h](xqSingle);
+      final kFull = cache.appendK(h, kNew);
+      final vFull = cache.appendV(h, vNew);
+      final bias = relativeBiasPerHead == null ? null : relativeBiasPerHead[h];
+      heads.add(q.scaledDotProductAttention(kFull, vFull, mask: bias));
+    }
+    final concat = TensorConcat.concat(heads, axis: 1);
+    return wo(concat);
+  }
+
+  /// Cached cross-attention for autoregressive decoding.
+  /// `xqSingle`: `[1, dModel]`. K/V come from the precomputed
+  /// [T5CrossAttnCache] (see [primeCross]).
+  Tensor callCachedCross(Tensor xqSingle, T5CrossAttnCache cache) {
+    final heads = <Tensor>[];
+    for (int h = 0; h < numHeads; h++) {
+      final q = wq[h](xqSingle) * qScale;
+      heads.add(q.scaledDotProductAttention(cache.k[h], cache.v[h]));
+    }
+    final concat = TensorConcat.concat(heads, axis: 1);
+    return wo(concat);
+  }
+
+  /// Precompute per-head K/V from a fixed encoder `memory` tensor
+  /// `[Nk, kvDim]`. Called once per generation, cached across all
+  /// decoder steps.
+  T5CrossAttnCache primeCross(Tensor memory) {
+    final ks = <Tensor>[];
+    final vs = <Tensor>[];
+    for (int h = 0; h < numHeads; h++) {
+      ks.add(wk[h](memory));
+      vs.add(wv[h](memory));
+    }
+    return T5CrossAttnCache(ks, vs);
+  }
+
   @override
   List<Tensor> parameters() => [
     for (final l in wq) ...l.parameters(),
@@ -280,6 +346,39 @@ class T5Attention extends Module {
 
   @override
   List<Module> submodules() => [...wq, ...wk, ...wv, wo];
+}
+
+/// Precomputed cross-attention K/V for one decoder block. Populated
+/// once from the encoder memory on the first decode step, then
+/// reused unchanged for every subsequent step.
+class T5CrossAttnCache {
+  final List<Tensor> k;
+  final List<Tensor> v;
+  T5CrossAttnCache(this.k, this.v);
+}
+
+/// Per-block cache state for one T5 decoder layer: a running
+/// self-attention KV cache plus a lazily-populated cross-attention
+/// cache.
+class T5DecoderBlockCache {
+  final MHACache selfAttn;
+  T5CrossAttnCache? crossAttn;
+  T5DecoderBlockCache(int numHeads) : selfAttn = MHACache.empty(numHeads);
+}
+
+/// Whole-stack cache for autoregressive T5 decoding. `seqLen` is the
+/// number of tokens already fed through the decoder (i.e., the
+/// position of the next Q).
+class T5DecoderCache {
+  final List<T5DecoderBlockCache> blocks;
+  int seqLen;
+  T5DecoderCache(int numLayers, int numHeads)
+    : blocks = List.generate(
+        numLayers,
+        (_) => T5DecoderBlockCache(numHeads),
+        growable: false,
+      ),
+      seqLen = 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -473,6 +572,33 @@ class T5DecoderBlock extends Module {
     return h + f;
   }
 
+  /// Cached forward for autoregressive decoding. `xSingle`:
+  /// `[1, dModel]` — the current token's residual input. Uses the
+  /// self-attn cache in [blockCache], and lazily primes the cross-
+  /// attn cache from `memory` on the first call.
+  Tensor callCached(
+    Tensor xSingle, {
+    required Tensor memory,
+    required T5DecoderBlockCache blockCache,
+    required List<Tensor> selfRelativeBias,
+  }) {
+    final normedForSelf = selfAttnNorm(xSingle);
+    final a = selfAttn.callCachedSelf(
+      normedForSelf,
+      cache: blockCache.selfAttn,
+      relativeBiasPerHead: selfRelativeBias,
+    );
+    var h = xSingle + a;
+    blockCache.crossAttn ??= crossAttn.primeCross(memory);
+    final c = crossAttn.callCachedCross(
+      crossAttnNorm(h),
+      blockCache.crossAttn!,
+    );
+    h = h + c;
+    final f = ffn(ffnNorm(h));
+    return h + f;
+  }
+
   @override
   List<Tensor> parameters() => [
     ...selfAttnNorm.parameters(),
@@ -604,6 +730,40 @@ class T5Decoder extends Module {
     return finalNorm(h);
   }
 
+  /// Cached forward for autoregressive decoding. Feeds a single new
+  /// token id, using and updating [cache]. Returns the decoder
+  /// hidden `[1, dModel]` for that token. Advances `cache.seqLen`.
+  Tensor callCached(
+    int newTokenId, {
+    required Tensor memory,
+    required T5DecoderCache cache,
+  }) {
+    if (cache.blocks.length != blocks.length) {
+      throw ArgumentError(
+        'T5Decoder.callCached: cache has ${cache.blocks.length} blocks; '
+        'model has ${blocks.length}',
+      );
+    }
+    final qPos = cache.seqLen;
+    final tokens = Tensor.fromList(
+      [1],
+      [newTokenId.toDouble()],
+      device: config.device,
+    );
+    var h = tokenEmbedding(tokens);
+    final biasPerHead = relativeBias.maskPerHeadSingleQ(qPos, qPos + 1);
+    for (int i = 0; i < blocks.length; i++) {
+      h = blocks[i].callCached(
+        h,
+        memory: memory,
+        blockCache: cache.blocks[i],
+        selfRelativeBias: biasPerHead,
+      );
+    }
+    cache.seqLen = qPos + 1;
+    return finalNorm(h);
+  }
+
   @override
   List<Tensor> parameters() => [
     ...relativeBias.parameters(),
@@ -721,16 +881,58 @@ class T5Model extends Module {
 
   /// Greedy generation. Encodes once, then decodes up to
   /// [maxNewTokens] tokens, stopping on `eosTokenId` (default 1).
+  /// Uses the fast KV-cached decoder path by default; pass
+  /// `useCache: false` to fall back to the recompute-everything
+  /// path (useful for A/B numerical checks).
   List<int> generate(
     List<int> srcTokens, {
     int maxNewTokens = 32,
     int decoderStartTokenId = 0,
     int eosTokenId = 1,
+    bool useCache = true,
   }) {
     final memory = encode(srcTokens);
+    if (!useCache) {
+      final out = <int>[decoderStartTokenId];
+      for (int step = 0; step < maxNewTokens; step++) {
+        final logits = logitsLastToken(out, memory);
+        final data = logits.toList();
+        var bestIdx = 0;
+        var bestVal = data[0];
+        for (int i = 1; i < data.length; i++) {
+          if (data[i] > bestVal) {
+            bestVal = data[i];
+            bestIdx = i;
+          }
+        }
+        out.add(bestIdx);
+        if (bestIdx == eosTokenId) break;
+      }
+      return out;
+    }
+    return _generateCached(
+      memory: memory,
+      maxNewTokens: maxNewTokens,
+      decoderStartTokenId: decoderStartTokenId,
+      eosTokenId: eosTokenId,
+    );
+  }
+
+  List<int> _generateCached({
+    required Tensor memory,
+    required int maxNewTokens,
+    required int decoderStartTokenId,
+    required int eosTokenId,
+  }) {
+    final cache = T5DecoderCache(config.numDecoderLayers, config.numHeads);
     final out = <int>[decoderStartTokenId];
+    var feed = decoderStartTokenId;
     for (int step = 0; step < maxNewTokens; step++) {
-      final logits = logitsLastToken(out, memory);
+      var h = decoder.callCached(feed, memory: memory, cache: cache);
+      if (!useUntiedLmHead) {
+        h = h * lmHeadScale;
+      }
+      final logits = lmHead(h).reshape([config.vocabSize]);
       final data = logits.toList();
       var bestIdx = 0;
       var bestVal = data[0];
@@ -742,6 +944,7 @@ class T5Model extends Module {
       }
       out.add(bestIdx);
       if (bestIdx == eosTokenId) break;
+      feed = bestIdx;
     }
     return out;
   }
@@ -755,10 +958,5 @@ class T5Model extends Module {
   ];
 
   @override
-  List<Module> submodules() => [
-    sharedEmbedding,
-    encoder,
-    decoder,
-    lmHead,
-  ];
+  List<Module> submodules() => [sharedEmbedding, encoder, decoder, lmHead];
 }

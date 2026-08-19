@@ -308,7 +308,8 @@ Presets supported by `--preset`:
 - `t5-small` — T5-v1.0-small (6 layers, 8 heads, dFf=2048, ReLU FFN)
 - `t5-v1_1-small` — T5-v1.1-small (8 layers, 6 heads, dFf=1024, gated-GELU)
 - `flan-t5-small` — default; same arch as v1.1-small
-- `flan-t5-base` — 12 layers, dModel=768, dFf=2048
+- `flan-t5-base` — 12 layers, dModel=768, dFf=2048, verified end-to-end
+- `codet5p-220m` — `Salesforce/codet5p-220m`, same arch as t5-v1.1-base, code-tuned
 
 CLI:
 
@@ -323,9 +324,29 @@ CLI:
 --seed S                deterministic sampling (greedy = deterministic anyway)
 ```
 
-CPU throughput: ~1.5-2 tok/s on WSL2/laptop, single-batch. Encoder is
-run once (~200 ms for a short prompt), then greedy decode is
-dominated by the 8-layer decoder + 8-way cross-attention per step.
+CPU throughput: **~3 tok/s cached** on WSL2/laptop, single-batch
+(default). Greedy decode uses a per-block KV cache for self-attn
+(appending new K/V per step) plus a one-shot cross-attn K/V
+precompute from the encoder memory — 1.6-1.8× faster than the
+recompute-everything fallback. Pass `useCache: false` in-code to
+disable for A/B numerical checks.
+
+Verified against `google/flan-t5-base` (~990 MB):
+
+```sh
+mkdir -p models/flan-t5-base
+for f in model.safetensors tokenizer.json; do
+  curl -L -o "models/flan-t5-base/$f" \
+    "https://huggingface.co/google/flan-t5-base/resolve/main/$f"
+done
+dart run bin/t5_small_demo.dart --preset flan-t5-base \
+  --weights models/flan-t5-base/model.safetensors \
+  --tokenizer models/flan-t5-base/tokenizer.json \
+  --text "translate English to German: I love machine learning." \
+  --max-new 20
+# T5LoadReport(consumed=282, unused=0)
+# "Ich liebe die Maschinelearning."
+```
 
 **T5 gotcha (documented for future ports)**: FLAN-T5 checkpoints ship
 a distinct `lm_head.weight` even though config says

@@ -116,6 +116,16 @@ class T5HFLoader {
     seed: seed,
   );
 
+  /// `Salesforce/codet5p-220m` — CodeT5+ 220M. T5-v1.1-base
+  /// architecture (12 encoder + 12 decoder layers, dModel=768,
+  /// gated-GELU FFN with dFf=2048), fine-tuned for code. Uses the
+  /// same 32100-token vocab as regular T5.
+  static T5Config codeT5pBaseConfig({
+    Device device = Device.CPU,
+    int seed = 0,
+    int? maxCtx,
+  }) => flanT5BaseConfig(device: device, seed: seed, maxCtx: maxCtx);
+
   static T5LoadReport loadFile(T5Model model, String path) {
     final state = SafeTensors.loadFile(path);
     return loadMap(model, state);

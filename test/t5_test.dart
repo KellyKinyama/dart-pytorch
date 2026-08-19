@@ -64,6 +64,16 @@ void main() {
       expect(c.dKv, 64);
       expect(c.feedForwardProj, T5FfnActivation.gatedGelu);
     });
+
+    test('codet5p-220m aliases flan-t5-base', () {
+      final a = T5HFLoader.codeT5pBaseConfig();
+      final b = T5HFLoader.flanT5BaseConfig();
+      expect(a.dModel, b.dModel);
+      expect(a.dFf, b.dFf);
+      expect(a.numLayers, b.numLayers);
+      expect(a.numHeads, b.numHeads);
+      expect(a.feedForwardProj, b.feedForwardProj);
+    });
   });
 
   group('T5RelativeBias bucketing', () {
@@ -143,6 +153,20 @@ void main() {
       // start token + up to 5 new
       expect(out.length, greaterThan(1));
       expect(out.first, equals(0));
+    });
+
+    test('cached generate matches non-cached generate (relu FFN)', () {
+      final m = T5Model(_tinyCfg());
+      final cached = m.generate([1, 2, 3, 4], maxNewTokens: 8);
+      final recomp = m.generate([1, 2, 3, 4], maxNewTokens: 8, useCache: false);
+      expect(cached, equals(recomp));
+    });
+
+    test('cached generate matches non-cached generate (gated-GELU FFN)', () {
+      final m = T5Model(_tinyCfg(act: T5FfnActivation.gatedGelu));
+      final cached = m.generate([1, 2, 3, 4], maxNewTokens: 8);
+      final recomp = m.generate([1, 2, 3, 4], maxNewTokens: 8, useCache: false);
+      expect(cached, equals(recomp));
     });
   });
 

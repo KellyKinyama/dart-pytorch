@@ -84,10 +84,14 @@ Future<void> main(List<String> args) async {
     case 'flan-t5-base':
       cfg = T5HFLoader.flanT5BaseConfig(device: device);
       break;
+    case 'codet5p-220m':
+      cfg = T5HFLoader.codeT5pBaseConfig(device: device);
+      break;
     default:
       stderr.writeln(
         'unknown preset "$preset"; use '
-        't5-small | t5-v1_1-small | flan-t5-small | flan-t5-base',
+        't5-small | t5-v1_1-small | flan-t5-small | flan-t5-base | '
+        'codet5p-220m',
       );
       exit(64);
   }
