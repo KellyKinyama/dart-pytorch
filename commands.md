@@ -26,6 +26,7 @@ fix so the CUDA driver stub is found. Drop it on native Linux.
 | V4 | dinov2-small | 22M | CPU/GPU | n/a | [bin/dinov2_demo.dart](bin/dinov2_demo.dart) — self-supervised ViT-S/14 image features |
 | S1 | whisper tiny.en  | 39M   | CPU    | ✅ local | [bin/whisper_demo.dart](bin/whisper_demo.dart) |
 | S2 | whisper tiny.en  | 39M   | GPU    | ✅ local | [bin/whisper_gpu_demo.dart](bin/whisper_gpu_demo.dart) |
+| S3 | whisper base (multilingual) | 74M | CPU/GPU | ✅ local | [bin/whisper_multilingual_demo.dart](bin/whisper_multilingual_demo.dart) — 99 languages, `--lang code`, `--translate` mode |
 | F1 | facenet-vggface2 | 39M   | CPU    | n/a     | [bin/facenet/demo.dart](bin/facenet/demo.dart) — bit-exact vs. reference |
 | F2 | facenet-vggface2 | 39M   | GPU    | n/a     | [bin/facenet/gpu_demo.dart](bin/facenet/gpu_demo.dart) — same, on device |
 | F3 | facenet-vggface2 | 39M   | CPU/GPU | n/a    | [bin/facenet/verify.dart](bin/facenet/verify.dart) — pair verification |
@@ -1584,6 +1585,95 @@ Sources: [bin/whisper_demo.dart](bin/whisper_demo.dart),
 [lib/core/nn/whisper_hf_loader.dart](lib/core/nn/whisper_hf_loader.dart),
 [lib/core/audio/whisper_mel.dart](lib/core/audio/whisper_mel.dart),
 [doc/whisper.md](doc/whisper.md).
+
+## S3. whisper base (multilingual, 74M, 99 languages)
+
+`openai/whisper-base` — same arch as `whisper-base.en` (6+6 layers,
+d_model=512, 8 heads) but the multilingual vocab (+1 token,
+vocab=51865) and a multi-token decoder prompt:
+
+```
+[<|startoftranscript|>=50258, <|lang|>, <|task|>, <|notimestamps|>=50363]
+```
+
+`<|lang|>` picks the source language; `<|task|>` is either
+`<|transcribe|>=50359` (same-language output) or `<|translate|>=50358`
+(to English, works from any of the 99 supported languages).
+
+One-time setup (~290 MB fp32):
+
+```sh
+mkdir -p models/whisper-base
+for f in model.safetensors tokenizer.json config.json; do
+  curl -L -o "models/whisper-base/$f" \
+    "https://huggingface.co/openai/whisper-base/resolve/main/$f"
+done
+```
+
+Run (defaults: English, transcribe mode, `data/jfk.wav`):
+
+```sh
+dart run bin/whisper_multilingual_demo.dart
+dart run bin/whisper_multilingual_demo.dart --lang sw          # Swahili
+dart run bin/whisper_multilingual_demo.dart --translate        # to English
+LD_LIBRARY_PATH=/usr/lib/wsl/lib \
+  dart run bin/whisper_multilingual_demo.dart --gpu
+```
+
+Verified on `data/jfk.wav` (`--lang en`, CPU):
+
+```
+== transcript ==
+  " And so my fellow Americans, ask not what your country can do for you,
+     ask what you can do for your country."
+
+WhisperLoadReport(encoder consumed=97, unused=0)
+WhisperLoadReport(decoder consumed=148, unused=0)
+```
+
+Total ~139 s CPU end-to-end (encoder dominates — 84 s at 6 layers ×
+1500 tokens). GPU cuts this to ~15 s (see the S2 timing table for
+per-phase breakdown; the multilingual base has the same shape as
+tiny.en at the block level).
+
+### 99-language table
+
+`--lang` accepts any Whisper ISO code. Common ones with likely
+relevance:
+
+| Code | Language | Zambia relevance |
+|---|---|---|
+| en | English | official |
+| sw | Swahili | some regions |
+| zh | Chinese | trade |
+| ha | Hausa | (West Africa) |
+| yo | Yoruba | (West Africa) |
+| af | Afrikaans | (Southern Africa) |
+| sn | Shona | (Zimbabwe, Zambian border) |
+| so | Somali | (East Africa) |
+
+**Zambian language ASR** — Whisper's language list does NOT include
+Bemba, Nyanja/Chichewa, Tonga, or Lozi. The path forward:
+
+1. Download a community fine-tune (all whisper-tiny / -base / -small
+   sized). Examples on HuggingFace:
+   - `buumba641/nyanja-asr-whisper-tiny` (39 M)
+   - `buumba641/nyanja-asr-whisper-base` (74 M)
+   - `chiyo123/whisper-small-bemba` (244 M)
+   - `chiyo123/whisper-small-tonga` (244 M)
+   - `simzacademy/whisper-small-lozi1` (244 M)
+2. Fine-tunes typically hijack an existing language token (often
+   `<|en|>` or `<|sw|>`) at training time. Check the fine-tune's
+   `generation_config.json` for a `forced_decoder_ids` hint, then
+   pass that as `--lang`. When there's no hint, try `--lang en`
+   first, then `--lang sw`.
+3. Point `--weights` at the fine-tune's `model.safetensors` (may
+   need conversion from `pytorch_model.bin` via a Python one-liner
+   if only `.bin` is shipped). Tokenizer stays as the vanilla base
+   one because fine-tunes don't retrain the tokenizer.
+
+Verifying Zambian ASR end-to-end is deferred pending a test audio
+clip in one of the four languages.
 
 ## F1 / F2 / F3. FaceNet InceptionResnetV1 — face embeddings (39M, CPU or GPU)
 
