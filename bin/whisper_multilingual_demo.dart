@@ -209,6 +209,11 @@ Future<void> main(List<String> args) async {
       tokenizerPathOverride ?? 'models/whisper-$size/tokenizer.json';
   final int embedDim, numHeads, numLayers;
   switch (size) {
+    case 'tiny':
+      embedDim = 384;
+      numHeads = 6;
+      numLayers = 4;
+      break;
     case 'base':
       embedDim = 512;
       numHeads = 8;
@@ -220,7 +225,7 @@ Future<void> main(List<String> args) async {
       numLayers = 12;
       break;
     default:
-      stderr.writeln('unknown size "$size"; use base | small');
+      stderr.writeln('unknown size "$size"; use tiny | base | small');
       exit(64);
   }
   for (final p in [weightsPath, tokenizerPath, wavPath]) {

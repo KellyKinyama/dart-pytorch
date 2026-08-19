@@ -28,6 +28,7 @@ fix so the CUDA driver stub is found. Drop it on native Linux.
 | S2 | whisper tiny.en  | 39M   | GPU    | ✅ local | [bin/whisper_gpu_demo.dart](bin/whisper_gpu_demo.dart) |
 | S3 | whisper base (multilingual) | 74M | CPU/GPU | ✅ local | [bin/whisper_multilingual_demo.dart](bin/whisper_multilingual_demo.dart) — 99 languages, `--lang code`, `--translate` mode |
 | S4 | whisper small (multilingual) | 244M | GPU (CPU tight) | ✅ local | same binary with `--size small` — better quality, needs ~7 GB RAM on CPU |
+| S5 | Nyanja ASR (community fine-tune of whisper-tiny) | 39M | CPU/GPU | ✅ local | same binary with `--size tiny --weights <fine-tune>` — verified on `unza/unza-nyanja` samples |
 | F1 | facenet-vggface2 | 39M   | CPU    | n/a     | [bin/facenet/demo.dart](bin/facenet/demo.dart) — bit-exact vs. reference |
 | F2 | facenet-vggface2 | 39M   | GPU    | n/a     | [bin/facenet/gpu_demo.dart](bin/facenet/gpu_demo.dart) — same, on device |
 | F3 | facenet-vggface2 | 39M   | CPU/GPU | n/a    | [bin/facenet/verify.dart](bin/facenet/verify.dart) — pair verification |
@@ -1675,6 +1676,40 @@ Bemba, Nyanja/Chichewa, Tonga, or Lozi. The path forward:
 
 Verifying Zambian ASR end-to-end is deferred pending a test audio
 clip in one of the four languages.
+
+**Update (2026-08-19): Nyanja ASR verified end-to-end.** Downloaded
+`buumba641/nyanja-asr-whisper-tiny` (39 M) and three sample WAVs
+from the `unza/unza-nyanja` dataset on HuggingFace (16 kHz mono
+PCM, elicited speech describing pictures). Fine-tune hijacks the
+`<|en|>` language token at training time. Command:
+
+```sh
+dart run bin/whisper_multilingual_demo.dart --size tiny \
+  --weights models/nyanja-whisper-tiny/model.safetensors \
+  --tokenizer models/nyanja-whisper-tiny/tokenizer.json \
+  --wav data/zambian/nyanja_0.wav --lang en --max-len 80
+```
+
+Real fluent Chichewa/Nyanja transcriptions:
+
+```
+nyanja_0.wav → "mamuna akugwiritsa ntchito b udowu za kapena bhobe
+                 kati kukumba nkhaka"
+nyanja_1.wav → "kamtsikana kakangono kavana bib yamizere ya pink
+                 ndi yoyera akudya othamewo patebulo togiyera"
+nyanja_2.wav → "mwamuna wopwata chipewa chakuda chichetsi chofiyira
+                 ma thalauza akuda ndi nsapato akuthamanga m
+                 mphepete mwa mseu wamadzi wundana"
+
+WhisperLoadReport(encoder consumed=67, unused=0)
+WhisperLoadReport(decoder consumed=100, unused=0)
+Wall: ~55 s CPU per 15 s clip.
+```
+
+Bemba / Tonga / Lozi should work with the same recipe once a
+test WAV is on disk. Community fine-tunes for those languages are
+mostly whisper-small-sized (`chiyo123/whisper-small-bemba`,
+`simzacademy/whisper-small-lozi1`, etc.) so use `--size small`.
 
 ## S4. whisper small (multilingual, 244M, 99 languages)
 
