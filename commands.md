@@ -17,6 +17,7 @@ fix so the CUDA driver stub is found. Drop it on native Linux.
 | 8 | gpt-j-6b (hybrid)| 6.05B | CPU + GPU | ✅ local | [bin/gptj/run_6b_hybrid_api.dart](bin/gptj/run_6b_hybrid_api.dart) |
 | 9 | gpt-j-6b (CPU)   | 6.05B | CPU    | ✅ local | [bin/gptj/run_6b_cpu_api.dart](bin/gptj/run_6b_cpu_api.dart) |
 | 10 | smollm2-135m-instruct | 135M | CPU/GPU | ✅ local | [bin/smollm2_demo.dart](bin/smollm2_demo.dart) — Llama-arch tiny LM |
+| T1 | flan-t5-small | 60M | CPU/GPU | ✅ local | [bin/t5_small_demo.dart](bin/t5_small_demo.dart) — encoder-decoder text-to-text (translation, summarization, QA) |
 | E1 | bge-small-en-v1.5 | 33M | CPU/GPU | ✅ local | [bin/bge_demo.dart](bin/bge_demo.dart) — SOTA sentence embeddings (CLS-pool + L2) |
 | V4 | dinov2-small | 22M | CPU/GPU | n/a | [bin/dinov2_demo.dart](bin/dinov2_demo.dart) — self-supervised ViT-S/14 image features |
 | S1 | whisper tiny.en  | 39M   | CPU    | ✅ local | [bin/whisper_demo.dart](bin/whisper_demo.dart) |
@@ -240,6 +241,100 @@ Loaded. LlamaLoadReport(consumed=272, unused=0)
 The capital of France is Paris. Paris is the largest city in France and the
 capital of the French department of the Espace
 ```
+
+## T1. flan-t5-small (60M, encoder-decoder text-to-text)
+
+`google/flan-t5-small` — 8-layer encoder + 8-layer decoder, dModel=512,
+6 heads, d_kv=64, gated-GELU FFN (dFf=1024), learned relative-position
+bias, SentencePiece Unigram vocab (32100 tokens). Instruction-tuned so
+one binary handles translation, summarization, extractive QA, and
+short generation via prompt prefixes.
+
+Weights + tokenizer (one-time, ~300 MB):
+
+```sh
+mkdir -p models/flan-t5-small
+for f in model.safetensors tokenizer.json config.json; do
+  curl -L -o "models/flan-t5-small/$f" \
+    "https://huggingface.co/google/flan-t5-small/resolve/main/$f"
+done
+```
+
+Translation:
+
+```sh
+LD_LIBRARY_PATH=/usr/lib/wsl/lib \
+  dart run bin/t5_small_demo.dart \
+    --text "translate English to German: I love machine learning." \
+    --max-new 20
+```
+
+Verified:
+
+```
+== flan-t5-small (dModel=512, layers=8, heads=6, dKv=64, ffn=gatedGelu) ==
+load : 3072 ms  T5LoadReport(consumed=190, unused=0)
+== tokenizer (models/flan-t5-small/tokenizer.json) ==
+  "translate English to German: I love machine learning."
+    -> [13959, 1566, 12, 2968, 10, 27, 333, 1437, 1036, 5, 1]
+== decoded ==
+  "Ich liebe Maschinen-Kading."
+```
+
+Summarization:
+
+```sh
+dart run bin/t5_small_demo.dart \
+  --text "Please summarize: The quick brown fox jumps over the lazy dog. \
+          This sentence contains every letter of the alphabet." \
+  --max-new 30
+```
+
+```
+== decoded ==
+  "The brown fox jumps over the dog."
+```
+
+Smoke (matches HF exactly):
+
+```sh
+dart run bin/t5_small_demo.dart \
+  --text "translate English to German: Hello." --max-new 8
+# output ids: [0, 8774, 5, 1]  → "Hello."
+```
+
+Presets supported by `--preset`:
+
+- `t5-small` — T5-v1.0-small (6 layers, 8 heads, dFf=2048, ReLU FFN)
+- `t5-v1_1-small` — T5-v1.1-small (8 layers, 6 heads, dFf=1024, gated-GELU)
+- `flan-t5-small` — default; same arch as v1.1-small
+- `flan-t5-base` — 12 layers, dModel=768, dFf=2048
+
+CLI:
+
+```
+--text STR              English prompt (uses SentencePiece tokenizer)
+--input-ids "a,b,c"     bypass tokenizer, feed raw ints
+--preset NAME           see above
+--weights PATH          override model.safetensors
+--tokenizer PATH        override tokenizer.json
+--max-new N             cap decoder steps (default 20)
+--gpu                   run on GPU (CPU works fine; GPU faster on batch)
+--seed S                deterministic sampling (greedy = deterministic anyway)
+```
+
+CPU throughput: ~1.5-2 tok/s on WSL2/laptop, single-batch. Encoder is
+run once (~200 ms for a short prompt), then greedy decode is
+dominated by the 8-layer decoder + 8-way cross-attention per step.
+
+**T5 gotcha (documented for future ports)**: FLAN-T5 checkpoints ship
+a distinct `lm_head.weight` even though config says
+`tie_word_embeddings=True`. HF silently uses the untied head and
+skips its `1/sqrt(d_model)` rescale. Our loader mirrors this: if
+`lm_head.weight` is in the safetensors, `useUntiedLmHead=true` and
+we skip the rescale. Miss this and the model returns garbage (a
+single repeating token) while the encoder output stays byte-for-byte
+correct.
 
 ## E1. bge-small-en-v1.5 (33M, SOTA sentence embeddings)
 
