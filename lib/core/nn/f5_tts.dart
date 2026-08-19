@@ -36,6 +36,7 @@ import 'dart:typed_data';
 
 import '../tensor/tensor.dart';
 import 'attention/multi_head_attention.dart';
+import 'embedding.dart';
 import 'layer_norm.dart';
 import 'linear.dart';
 import 'module.dart';
@@ -471,4 +472,499 @@ Tensor gaussianNoise(List<int> shape, {int? seed, Device device = Device.CPU}) {
     i += 2;
   }
   return Tensor.fromFloat32List(shape, v, device: device);
+}
+
+// ---------------------------------------------------------------------------
+// DepthwiseConv1d — one filter per channel, applied along the time axis.
+// ---------------------------------------------------------------------------
+
+/// 1-D depthwise convolution (`groups == inChannels`). Input
+/// `[N, C, T]` → output `[N, C, T]` (same-length when
+/// `padding == (kernelSize - 1) / 2`). Each channel has its own
+/// `[kernelSize]` kernel. Ports PyTorch's
+/// `nn.Conv1d(dim, dim, kernel_size, groups=dim)`.
+///
+/// Host-side compute — trades correctness for simplicity. For F5-TTS
+/// text encoder scale (dim ≤ 512, T ≤ 512) this is fine.
+class DepthwiseConv1d extends Module {
+  final int channels;
+  final int kernelSize;
+  final int padding;
+  final Tensor weight; // [channels, kernelSize]
+  final Tensor? bias; // [channels]
+
+  DepthwiseConv1d({
+    required this.channels,
+    required this.kernelSize,
+    this.padding = 0,
+    bool bias = true,
+    Device device = Device.CPU,
+    int seed = 0,
+  })  : weight = _initWeight(channels, kernelSize, seed, device),
+        bias = bias
+            ? Tensor.fill([channels], 0.0, requiresGrad: true, device: device)
+            : null;
+
+  static Tensor _initWeight(int c, int k, int seed, Device device) {
+    final rng = math.Random(seed);
+    final bound = 1.0 / math.sqrt(k);
+    final vals = List<double>.generate(
+      c * k,
+      (_) => (rng.nextDouble() * 2 - 1) * bound,
+    );
+    return Tensor.fromList([c, k], vals,
+        requiresGrad: true, device: device);
+  }
+
+  Tensor call(Tensor x) {
+    if (x.shape.length != 3 || x.shape[1] != channels) {
+      throw ArgumentError(
+        'DepthwiseConv1d: expected [N, $channels, T]; got ${x.shape}',
+      );
+    }
+    final n = x.shape[0];
+    final t = x.shape[2];
+    final tOut = t + 2 * padding - kernelSize + 1;
+    if (tOut <= 0) {
+      throw ArgumentError(
+        'DepthwiseConv1d: padded T=${t + 2 * padding} < kernel=$kernelSize',
+      );
+    }
+    final data = x.toFloat32List();
+    final wData = weight.toFloat32List();
+    final bData = bias?.toList();
+    final out = Float32List(n * channels * tOut);
+    for (int ni = 0; ni < n; ni++) {
+      for (int c = 0; c < channels; c++) {
+        final srcBase = (ni * channels + c) * t;
+        final dstBase = (ni * channels + c) * tOut;
+        final b = bData?[c] ?? 0.0;
+        for (int oi = 0; oi < tOut; oi++) {
+          double acc = b;
+          final start = oi - padding;
+          for (int k = 0; k < kernelSize; k++) {
+            final idx = start + k;
+            if (idx >= 0 && idx < t) {
+              acc += wData[c * kernelSize + k] * data[srcBase + idx];
+            }
+          }
+          out[dstBase + oi] = acc;
+        }
+      }
+    }
+    return Tensor.fromFloat32List([n, channels, tOut], out, device: x.device);
+  }
+
+  @override
+  List<Tensor> parameters() => [weight, if (bias != null) bias!];
+}
+
+// ---------------------------------------------------------------------------
+// GlobalResponseNormalization — ConvNeXt V2's GRN.
+// ---------------------------------------------------------------------------
+
+/// Global Response Normalization (Woo et al. 2023). Given
+/// `[N, T, C]` input:
+///
+///     Gx  = ||x||_2 along the T axis                    # [N, 1, C]
+///     Nx  = Gx / mean(Gx, dim=-1, keepdim=True)         # [N, 1, C]
+///     out = γ · (x · Nx) + β + x                        # residual add
+///
+/// Both `γ` and `β` are learned `[C]` vectors initialised to zero,
+/// so at init GRN is an identity residual.
+class GlobalResponseNormalization extends Module {
+  final int channels;
+  final Tensor gamma;
+  final Tensor beta;
+  final double eps;
+
+  GlobalResponseNormalization({
+    required this.channels,
+    this.eps = 1e-6,
+    Device device = Device.CPU,
+  })  : gamma = Tensor.fill([channels], 0.0,
+            requiresGrad: true, device: device),
+        beta = Tensor.fill([channels], 0.0,
+            requiresGrad: true, device: device);
+
+  Tensor call(Tensor x) {
+    if (x.shape.length != 3 || x.shape[2] != channels) {
+      throw ArgumentError(
+        'GlobalResponseNormalization: expected [N, T, $channels]; '
+        'got ${x.shape}',
+      );
+    }
+    final n = x.shape[0];
+    final t = x.shape[1];
+    final data = x.toFloat32List();
+    final gData = gamma.toList();
+    final bData = beta.toList();
+
+    // Gx[n, c] = ||x[n, :, c]||_2
+    final gx = List<double>.filled(n * channels, 0);
+    for (int ni = 0; ni < n; ni++) {
+      for (int c = 0; c < channels; c++) {
+        double sq = 0;
+        for (int ti = 0; ti < t; ti++) {
+          final v = data[(ni * t + ti) * channels + c];
+          sq += v * v;
+        }
+        gx[ni * channels + c] = math.sqrt(sq);
+      }
+    }
+    // Nx[n, c] = Gx[n, c] / mean(Gx[n, :])
+    final nx = List<double>.filled(n * channels, 0);
+    for (int ni = 0; ni < n; ni++) {
+      double sum = 0;
+      for (int c = 0; c < channels; c++) {
+        sum += gx[ni * channels + c];
+      }
+      final m = sum / channels + eps;
+      for (int c = 0; c < channels; c++) {
+        nx[ni * channels + c] = gx[ni * channels + c] / m;
+      }
+    }
+    final out = Float32List(n * t * channels);
+    for (int ni = 0; ni < n; ni++) {
+      for (int ti = 0; ti < t; ti++) {
+        for (int c = 0; c < channels; c++) {
+          final i = (ni * t + ti) * channels + c;
+          out[i] = gData[c] * (data[i] * nx[ni * channels + c]) +
+              bData[c] +
+              data[i];
+        }
+      }
+    }
+    return Tensor.fromFloat32List([n, t, channels], out, device: x.device);
+  }
+
+  @override
+  List<Tensor> parameters() => [gamma, beta];
+}
+
+// ---------------------------------------------------------------------------
+// ConvNeXtV2Block — one block of the F5-TTS character text encoder.
+// ---------------------------------------------------------------------------
+
+/// ConvNeXt V2 block used inside F5-TTS's character-level text encoder.
+/// Input/output `[N, T, dim]`:
+///
+///     y = dwconv([N, dim, T])  (kernel 7, padding 3) → [N, dim, T]
+///     y = LayerNorm(y[N, T, dim])
+///     y = pwconv1(y)                # dim → intermediateDim
+///     y = GELU(y)
+///     y = GRN(y)
+///     y = pwconv2(y)                # intermediateDim → dim
+///     return x + y
+class ConvNeXtV2Block extends Module {
+  final int dim;
+  final int intermediateDim;
+  final DepthwiseConv1d dwconv;
+  final LayerNorm norm;
+  final Linear pwconv1;
+  final GlobalResponseNormalization grn;
+  final Linear pwconv2;
+
+  ConvNeXtV2Block({
+    required this.dim,
+    required this.intermediateDim,
+    int kernelSize = 7,
+    Device device = Device.CPU,
+    int seed = 0,
+  })  : dwconv = DepthwiseConv1d(
+          channels: dim,
+          kernelSize: kernelSize,
+          padding: (kernelSize - 1) ~/ 2,
+          bias: true,
+          device: device,
+          seed: seed,
+        ),
+        norm = LayerNorm(dim, eps: 1e-6, device: device),
+        pwconv1 = Linear(dim, intermediateDim,
+            bias: true, device: device, seed: seed + 1_000),
+        grn = GlobalResponseNormalization(
+          channels: intermediateDim,
+          device: device,
+        ),
+        pwconv2 = Linear(intermediateDim, dim,
+            bias: true, device: device, seed: seed + 2_000);
+
+  /// `x: [N, T, dim]`.
+  Tensor call(Tensor x) {
+    if (x.shape.length != 3 || x.shape[2] != dim) {
+      throw ArgumentError(
+        'ConvNeXtV2Block: expected [N, T, $dim]; got ${x.shape}',
+      );
+    }
+    final n = x.shape[0];
+    final t = x.shape[1];
+    // Transpose [N, T, dim] -> [N, dim, T] on host.
+    final xData = x.toFloat32List();
+    final ntBuf = Float32List(n * dim * t);
+    for (int ni = 0; ni < n; ni++) {
+      for (int ti = 0; ti < t; ti++) {
+        for (int c = 0; c < dim; c++) {
+          ntBuf[(ni * dim + c) * t + ti] = xData[(ni * t + ti) * dim + c];
+        }
+      }
+    }
+    final ntc = Tensor.fromFloat32List([n, dim, t], ntBuf, device: x.device);
+    var y = dwconv(ntc); // [N, dim, T]
+    // Transpose back to [N, T, dim].
+    final yData = y.toFloat32List();
+    final ttcBuf = Float32List(n * t * dim);
+    for (int ni = 0; ni < n; ni++) {
+      for (int ti = 0; ti < t; ti++) {
+        for (int c = 0; c < dim; c++) {
+          ttcBuf[(ni * t + ti) * dim + c] = yData[(ni * dim + c) * t + ti];
+        }
+      }
+    }
+    y = Tensor.fromFloat32List([n, t, dim], ttcBuf, device: x.device);
+    // Standard LayerNorm operates on 2-D input, so squash the leading
+    // (N, T) into a single (N*T) row axis.
+    final yFlat = y.reshape([n * t, dim]);
+    var yn = norm(yFlat);
+    yn = pwconv1(yn); // [N*T, intermediateDim]
+    yn = _gelu(yn);
+    // GRN wants [N, T, C].
+    yn = yn.reshape([n, t, intermediateDim]);
+    yn = grn(yn);
+    yn = pwconv2(yn.reshape([n * t, intermediateDim]));
+    yn = yn.reshape([n, t, dim]);
+    return x + yn;
+  }
+
+  static Tensor _gelu(Tensor x) {
+    const invSqrt2 = 0.7071067811865475;
+    final data = x.toFloat32List();
+    final out = Float32List(data.length);
+    for (int i = 0; i < data.length; i++) {
+      out[i] = 0.5 * data[i] * (1.0 + _erf(data[i] * invSqrt2));
+    }
+    return Tensor.fromFloat32List(x.shape, out, device: x.device);
+  }
+
+  static double _erf(double x) {
+    final sign = x < 0 ? -1.0 : 1.0;
+    x = x.abs();
+    const a1 = 0.254829592;
+    const a2 = -0.284496736;
+    const a3 = 1.421413741;
+    const a4 = -1.453152027;
+    const a5 = 1.061405429;
+    const p = 0.3275911;
+    final t = 1.0 / (1.0 + p * x);
+    final y = 1.0 -
+        (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) *
+            t *
+            math.exp(-x * x);
+    return sign * y;
+  }
+
+  @override
+  List<Tensor> parameters() => [
+        ...dwconv.parameters(),
+        ...norm.parameters(),
+        ...pwconv1.parameters(),
+        ...grn.parameters(),
+        ...pwconv2.parameters(),
+      ];
+
+  @override
+  List<Module> submodules() => [dwconv, norm, pwconv1, grn, pwconv2];
+}
+
+// ---------------------------------------------------------------------------
+// F5TextEncoder — character-level text embedding + N × ConvNeXtV2Block.
+// ---------------------------------------------------------------------------
+
+/// F5-TTS character-level text encoder. Takes `[T]` character token
+/// ids (as float32), maps them through an embedding table, and runs
+/// [numLayers] × [ConvNeXtV2Block] to produce `[T, dim]` text features
+/// that condition the DiT's mel-velocity prediction.
+class F5TextEncoder extends Module {
+  final int vocabSize;
+  final int dim;
+  final int intermediateDim;
+  final int numLayers;
+  final Embedding tokenEmbedding;
+  final List<ConvNeXtV2Block> blocks;
+  final LayerNorm finalNorm;
+
+  F5TextEncoder({
+    required this.vocabSize,
+    this.dim = 512,
+    this.intermediateDim = 2048,
+    this.numLayers = 4,
+    int convKernelSize = 7,
+    Device device = Device.CPU,
+    int seed = 0,
+  })  : tokenEmbedding = Embedding(vocabSize, dim,
+            device: device, seed: seed),
+        blocks = <ConvNeXtV2Block>[],
+        finalNorm = LayerNorm(dim, eps: 1e-6, device: device) {
+    for (int i = 0; i < numLayers; i++) {
+      blocks.add(ConvNeXtV2Block(
+        dim: dim,
+        intermediateDim: intermediateDim,
+        kernelSize: convKernelSize,
+        device: device,
+        seed: seed + 10_000 * (i + 1),
+      ));
+    }
+  }
+
+  /// `tokens: [T]` returns `[T, dim]`.
+  Tensor call(Tensor tokens) {
+    if (tokens.shape.length != 1) {
+      throw ArgumentError(
+        'F5TextEncoder: expected 1D [T]; got ${tokens.shape}',
+      );
+    }
+    // Embedding is a lookup; result shape [T, dim].
+    var h = tokenEmbedding(tokens);
+    // ConvNeXtV2Block expects [N, T, dim]; add N=1.
+    final t = h.shape[0];
+    h = h.reshape([1, t, dim]);
+    for (final b in blocks) {
+      h = b(h);
+    }
+    // Final LN over the last dim.
+    final flat = h.reshape([t, dim]);
+    return finalNorm(flat);
+  }
+
+  @override
+  List<Tensor> parameters() => [
+        ...tokenEmbedding.parameters(),
+        for (final b in blocks) ...b.parameters(),
+        ...finalNorm.parameters(),
+      ];
+
+  @override
+  List<Module> submodules() => [tokenEmbedding, ...blocks, finalNorm];
+}
+
+// ---------------------------------------------------------------------------
+// F5DiT — full DiT stack: mel input + text + timestep → mel velocity.
+// ---------------------------------------------------------------------------
+
+/// F5-TTS DiT stack. Takes the current noisy mel `[T, melDim]`, the
+/// text conditioning `[T, textDim]` (from [F5TextEncoder]), and a
+/// scalar timestep, and returns the predicted mel-velocity
+/// `[T, melDim]` for the flow-matching sampler.
+///
+/// Architecture:
+///
+///     x = concat([mel, text_broadcast], last-axis) → project to embedDim
+///     c = SinusoidalTimestepEmbedding(t)
+///     for block in blocks: x = block(x, c)      # [F5DiTBlock]
+///     x = LayerNorm(x)
+///     v = Linear(embedDim, melDim)(x)
+///     return v
+///
+/// Text is aligned with mel via a nearest-neighbour "duration" broadcast:
+/// each mel frame reads the text embedding at the same frame index
+/// (SAM's F5-TTS conditioning is a bit more involved with duration
+/// modelling; this simplification lets us wire the pieces together and
+/// verify shape invariants — the alignment implementation is a
+/// follow-up).
+class F5DiT extends Module {
+  final int melDim;
+  final int textDim;
+  final int embedDim;
+  final int numLayers;
+  final int numHeads;
+  final int mlpDim;
+  final int freqDim;
+
+  final Linear inputProj;
+  final SinusoidalTimestepEmbedding timeEmbed;
+  final List<F5DiTBlock> blocks;
+  final LayerNorm finalNorm;
+  final Linear outputProj;
+
+  F5DiT({
+    required this.melDim,
+    required this.textDim,
+    this.embedDim = 1024,
+    this.numLayers = 22,
+    this.numHeads = 16,
+    this.mlpDim = 2048,
+    this.freqDim = 256,
+    Device device = Device.CPU,
+    int seed = 0,
+  })  : inputProj = Linear(melDim + textDim, embedDim,
+            bias: true, device: device, seed: seed),
+        timeEmbed = SinusoidalTimestepEmbedding(
+          freqDim: freqDim,
+          embedDim: embedDim,
+          device: device,
+          seed: seed + 1000,
+        ),
+        blocks = <F5DiTBlock>[],
+        finalNorm = LayerNorm(embedDim, eps: 1e-6, device: device),
+        outputProj = Linear(embedDim, melDim,
+            bias: true, device: device, seed: seed + 2000) {
+    for (int i = 0; i < numLayers; i++) {
+      blocks.add(F5DiTBlock(
+        embedDim: embedDim,
+        numHeads: numHeads,
+        mlpDim: mlpDim,
+        device: device,
+        seed: seed + 100_000 * (i + 1),
+      ));
+    }
+  }
+
+  /// Forward pass.
+  ///
+  /// `mel: [T, melDim]` — current noisy mel spectrogram.
+  /// `text: [T, textDim]` — text conditioning aligned frame-by-frame.
+  /// `t: [1]` — flow-matching timestep in `[0, 1]`.
+  ///
+  /// Returns `[T, melDim]` mel velocity.
+  Tensor call(Tensor mel, Tensor text, Tensor t) {
+    if (mel.shape.length != 2 || mel.shape[1] != melDim) {
+      throw ArgumentError(
+        'F5DiT: expected mel=[T, $melDim]; got ${mel.shape}',
+      );
+    }
+    if (text.shape.length != 2 ||
+        text.shape[0] != mel.shape[0] ||
+        text.shape[1] != textDim) {
+      throw ArgumentError(
+        'F5DiT: expected text=[${mel.shape[0]}, $textDim]; '
+        'got ${text.shape}',
+      );
+    }
+    // Concatenate mel and text on last axis: [T, melDim + textDim].
+    final combined = TensorConcat.concat([mel, text], axis: 1);
+    var x = inputProj(combined); // [T, embedDim]
+    final c = timeEmbed(t);
+    for (final b in blocks) {
+      x = b(x, c);
+    }
+    x = finalNorm(x);
+    return outputProj(x);
+  }
+
+  @override
+  List<Tensor> parameters() => [
+        ...inputProj.parameters(),
+        ...timeEmbed.parameters(),
+        for (final b in blocks) ...b.parameters(),
+        ...finalNorm.parameters(),
+        ...outputProj.parameters(),
+      ];
+
+  @override
+  List<Module> submodules() => [
+        inputProj,
+        timeEmbed,
+        ...blocks,
+        finalNorm,
+        outputProj,
+      ];
 }

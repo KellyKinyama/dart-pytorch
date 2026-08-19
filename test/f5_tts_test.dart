@@ -294,4 +294,175 @@ void main() {
       }
     });
   });
+
+  group('DepthwiseConv1d', () {
+    test('preserves shape when padding = (k-1)/2', () {
+      final dw = DepthwiseConv1d(
+        channels: 4,
+        kernelSize: 7,
+        padding: 3,
+      );
+      final x = _fake([2, 4, 16], seed: 100);
+      expect(dw(x).shape, equals([2, 4, 16]));
+    });
+
+    test('channel independence — perturbing one channel does not affect others',
+        () {
+      final dw = DepthwiseConv1d(
+        channels: 3,
+        kernelSize: 3,
+        padding: 1,
+      );
+      final base = _fake([1, 3, 8], seed: 200);
+      final vals = base.toList();
+      // Perturb only channel 0.
+      for (int i = 0; i < 8; i++) {
+        vals[i] += 5.0;
+      }
+      final perturbed = Tensor.fromList([1, 3, 8], vals);
+      final outBase = dw(base).toList();
+      final outPert = dw(perturbed).toList();
+      // Channel 0 (indices 0..7) differs; channels 1 and 2 (indices
+      // 8..15 and 16..23) are unchanged.
+      double maxCh0 = 0;
+      for (int i = 0; i < 8; i++) {
+        final d = (outBase[i] - outPert[i]).abs();
+        if (d > maxCh0) maxCh0 = d;
+      }
+      double maxOthers = 0;
+      for (int i = 8; i < 24; i++) {
+        final d = (outBase[i] - outPert[i]).abs();
+        if (d > maxOthers) maxOthers = d;
+      }
+      expect(maxCh0 > 0.1, isTrue);
+      expect(maxOthers < 1e-5, isTrue);
+    });
+
+    test('rejects wrong-shape input', () {
+      final dw = DepthwiseConv1d(channels: 4, kernelSize: 3);
+      expect(() => dw(_fake([1, 5, 8], seed: 300)), throwsArgumentError);
+    });
+  });
+
+  group('GlobalResponseNormalization', () {
+    test('preserves shape', () {
+      final grn = GlobalResponseNormalization(channels: 4);
+      final x = _fake([2, 8, 4], seed: 400);
+      expect(grn(x).shape, equals([2, 8, 4]));
+    });
+
+    test('at init (γ=0, β=0) is identity residual', () {
+      final grn = GlobalResponseNormalization(channels: 6);
+      final x = _fake([1, 5, 6], seed: 500);
+      final out = grn(x);
+      // With γ=β=0 the block collapses to x + 0 = x.
+      final xVals = x.toList();
+      final outVals = out.toList();
+      double maxDiff = 0;
+      for (int i = 0; i < xVals.length; i++) {
+        final d = (xVals[i] - outVals[i]).abs();
+        if (d > maxDiff) maxDiff = d;
+      }
+      expect(maxDiff < 1e-5, isTrue,
+          reason: 'GRN identity at init; max diff = $maxDiff');
+    });
+  });
+
+  group('ConvNeXtV2Block', () {
+    test('preserves [N, T, dim] shape', () {
+      final b = ConvNeXtV2Block(dim: 16, intermediateDim: 32);
+      final x = _fake([2, 10, 16], seed: 600);
+      expect(b(x).shape, equals([2, 10, 16]));
+    });
+
+    test('rejects wrong-shape input', () {
+      final b = ConvNeXtV2Block(dim: 16, intermediateDim: 32);
+      expect(() => b(_fake([2, 10, 17], seed: 700)), throwsArgumentError);
+    });
+  });
+
+  group('F5TextEncoder', () {
+    test('forward output shape [T, dim]', () {
+      final enc = F5TextEncoder(
+        vocabSize: 100,
+        dim: 32,
+        intermediateDim: 64,
+        numLayers: 2,
+      );
+      final tokens = Tensor.fromList([12], List<double>.generate(12,
+          (i) => (i * 7 % 100).toDouble()));
+      expect(enc(tokens).shape, equals([12, 32]));
+    });
+
+    test('rejects non-1D input', () {
+      final enc = F5TextEncoder(
+        vocabSize: 50,
+        dim: 32,
+        intermediateDim: 64,
+        numLayers: 1,
+      );
+      expect(() => enc(Tensor.fromList([2, 3], [1, 2, 3, 4, 5, 6])),
+          throwsArgumentError);
+    });
+  });
+
+  group('F5DiT', () {
+    test('forward output shape [T, melDim]', () {
+      final dit = F5DiT(
+        melDim: 8,
+        textDim: 16,
+        embedDim: 32,
+        numLayers: 2,
+        numHeads: 4,
+        mlpDim: 64,
+        freqDim: 16,
+      );
+      final mel = _fake([6, 8], seed: 800).reshape([6, 8]);
+      final text = _fake([6, 16], seed: 801).reshape([6, 16]);
+      final t = Tensor.fromList([1], [0.5]);
+      expect(dit(mel, text, t).shape, equals([6, 8]));
+    });
+
+    test('at init the DiT preserves the mel signal shape but does not '
+        'necessarily match input (only DiT blocks are identity at init; '
+        'inputProj + outputProj still transform the signal)', () {
+      final dit = F5DiT(
+        melDim: 8,
+        textDim: 16,
+        embedDim: 32,
+        numLayers: 2,
+        numHeads: 4,
+        mlpDim: 64,
+        freqDim: 16,
+      );
+      final mel = _fake([4, 8], seed: 900);
+      final text = _fake([4, 16], seed: 901);
+      final t = Tensor.fromList([1], [0.2]);
+      final v = dit(mel, text, t);
+      expect(v.shape, equals([4, 8]));
+      for (final x in v.toList()) {
+        expect(x.isFinite, isTrue);
+      }
+    });
+
+    test('rejects mismatched T', () {
+      final dit = F5DiT(
+        melDim: 8,
+        textDim: 16,
+        embedDim: 32,
+        numLayers: 1,
+        numHeads: 4,
+        mlpDim: 32,
+        freqDim: 16,
+      );
+      expect(
+        () => dit(
+          _fake([5, 8], seed: 1000),
+          _fake([6, 16], seed: 1001), // wrong T
+          Tensor.fromList([1], [0.5]),
+        ),
+        throwsArgumentError,
+      );
+    });
+  });
 }
