@@ -12,21 +12,33 @@ void _zeroExpertBiases(MoEFeedForward moe) {
   for (final e in [...moe.routedExperts, ...moe.sharedExperts]) {
     if (e.w1.bias != null) {
       final n = e.w1.bias!.length;
-      e.w1.bias!.assign(Tensor.fromList(
-          e.w1.bias!.shape, List<double>.filled(n, 0.0),
-          device: e.w1.bias!.device));
+      e.w1.bias!.assign(
+        Tensor.fromList(
+          e.w1.bias!.shape,
+          List<double>.filled(n, 0.0),
+          device: e.w1.bias!.device,
+        ),
+      );
     }
     if (e.w2.bias != null) {
       final n = e.w2.bias!.length;
-      e.w2.bias!.assign(Tensor.fromList(
-          e.w2.bias!.shape, List<double>.filled(n, 0.0),
-          device: e.w2.bias!.device));
+      e.w2.bias!.assign(
+        Tensor.fromList(
+          e.w2.bias!.shape,
+          List<double>.filled(n, 0.0),
+          device: e.w2.bias!.device,
+        ),
+      );
     }
     if (e.w3 != null && e.w3!.bias != null) {
       final n = e.w3!.bias!.length;
-      e.w3!.bias!.assign(Tensor.fromList(
-          e.w3!.bias!.shape, List<double>.filled(n, 0.0),
-          device: e.w3!.bias!.device));
+      e.w3!.bias!.assign(
+        Tensor.fromList(
+          e.w3!.bias!.shape,
+          List<double>.filled(n, 0.0),
+          device: e.w3!.bias!.device,
+        ),
+      );
     }
   }
 }
@@ -160,11 +172,13 @@ Map<String, Tensor> _dumpToHF(DeepSeekV2Model m) {
     // Per-head fused Q: rows [head_h] = [nope | rope].
     final qRowsPerHead = <Tensor>[];
     for (int hh = 0; hh < h; hh++) {
-      qRowsPerHead.add(concatRows(
-        [attn.qUpNope[hh].weight, attn.qUpRope[hh].weight],
-        headDim,
-        mla.qInDim,
-      ));
+      qRowsPerHead.add(
+        concatRows(
+          [attn.qUpNope[hh].weight, attn.qUpRope[hh].weight],
+          headDim,
+          mla.qInDim,
+        ),
+      );
     }
     final qFused = concatRows(qRowsPerHead, h * headDim, mla.qInDim);
     if (mla.qLoraRank != null) {
@@ -184,14 +198,19 @@ Map<String, Tensor> _dumpToHF(DeepSeekV2Model m) {
     // kv_b_proj: per-head [nope | v].
     final kvRowsPerHead = <Tensor>[];
     for (int hh = 0; hh < h; hh++) {
-      kvRowsPerHead.add(concatRows(
-        [attn.kUpNope[hh].weight, attn.vUp[hh].weight],
-        nopeD + vD,
-        kvL,
-      ));
+      kvRowsPerHead.add(
+        concatRows(
+          [attn.kUpNope[hh].weight, attn.vUp[hh].weight],
+          nopeD + vD,
+          kvL,
+        ),
+      );
     }
-    state['$p.self_attn.kv_b_proj.weight'] =
-        concatRows(kvRowsPerHead, h * (nopeD + vD), kvL);
+    state['$p.self_attn.kv_b_proj.weight'] = concatRows(
+      kvRowsPerHead,
+      h * (nopeD + vD),
+      kvL,
+    );
     state['$p.self_attn.o_proj.weight'] = attn.oProj.weight;
 
     // ---- FFN ----
@@ -213,21 +232,30 @@ Map<String, Tensor> _dumpToHF(DeepSeekV2Model m) {
       }
       // Shared experts: our N separate bodies fused into one big body.
       final sharedGateParts = <Tensor>[
-        for (final e in moe.sharedExperts) e.w1.weight
+        for (final e in moe.sharedExperts) e.w1.weight,
       ];
       final sharedUpParts = <Tensor>[
-        for (final e in moe.sharedExperts) e.w3!.weight
+        for (final e in moe.sharedExperts) e.w3!.weight,
       ];
       final sharedDownParts = <Tensor>[
-        for (final e in moe.sharedExperts) e.w2.weight
+        for (final e in moe.sharedExperts) e.w2.weight,
       ];
       final sharedFfn = cfg.numSharedExperts * cfg.moeExpertHiddenDim;
-      state['$p.mlp.shared_experts.gate_proj.weight'] =
-          concatRows(sharedGateParts, sharedFfn, d);
-      state['$p.mlp.shared_experts.up_proj.weight'] =
-          concatRows(sharedUpParts, sharedFfn, d);
-      state['$p.mlp.shared_experts.down_proj.weight'] =
-          concatCols(sharedDownParts, d, sharedFfn);
+      state['$p.mlp.shared_experts.gate_proj.weight'] = concatRows(
+        sharedGateParts,
+        sharedFfn,
+        d,
+      );
+      state['$p.mlp.shared_experts.up_proj.weight'] = concatRows(
+        sharedUpParts,
+        sharedFfn,
+        d,
+      );
+      state['$p.mlp.shared_experts.down_proj.weight'] = concatCols(
+        sharedDownParts,
+        d,
+        sharedFfn,
+      );
     }
   }
 
@@ -244,20 +272,22 @@ void main() {
       final src = DeepSeekV2Model(_tinyCfg);
       final state = _dumpToHF(src);
 
-      final dst = DeepSeekV2Model(DeepSeekV2Config(
-        vocabSize: _tinyCfg.vocabSize,
-        maxCtx: _tinyCfg.maxCtx,
-        embedDim: _tinyCfg.embedDim,
-        numLayers: _tinyCfg.numLayers,
-        firstKDenseReplace: _tinyCfg.firstKDenseReplace,
-        denseFfnDim: _tinyCfg.denseFfnDim,
-        moeExpertHiddenDim: _tinyCfg.moeExpertHiddenDim,
-        numRoutedExperts: _tinyCfg.numRoutedExperts,
-        numSharedExperts: _tinyCfg.numSharedExperts,
-        numExpertsPerTok: _tinyCfg.numExpertsPerTok,
-        mlaConfig: _tinyCfg.mlaConfig,
-        seed: 999, // different init
-      ));
+      final dst = DeepSeekV2Model(
+        DeepSeekV2Config(
+          vocabSize: _tinyCfg.vocabSize,
+          maxCtx: _tinyCfg.maxCtx,
+          embedDim: _tinyCfg.embedDim,
+          numLayers: _tinyCfg.numLayers,
+          firstKDenseReplace: _tinyCfg.firstKDenseReplace,
+          denseFfnDim: _tinyCfg.denseFfnDim,
+          moeExpertHiddenDim: _tinyCfg.moeExpertHiddenDim,
+          numRoutedExperts: _tinyCfg.numRoutedExperts,
+          numSharedExperts: _tinyCfg.numSharedExperts,
+          numExpertsPerTok: _tinyCfg.numExpertsPerTok,
+          mlaConfig: _tinyCfg.mlaConfig,
+          seed: 999, // different init
+        ),
+      );
 
       final report = DeepSeekV2HFLoader.loadMap(dst, state);
       expect(report.unusedKeys, isEmpty);
@@ -280,24 +310,30 @@ void main() {
       final state = _dumpToHF(src);
       // Should include the q_a_* + q_b_* keys.
       expect(
-          state.containsKey('model.layers.0.self_attn.q_a_proj.weight'), isTrue);
-      expect(state.containsKey('model.layers.0.self_attn.q_proj.weight'),
-          isFalse);
+        state.containsKey('model.layers.0.self_attn.q_a_proj.weight'),
+        isTrue,
+      );
+      expect(
+        state.containsKey('model.layers.0.self_attn.q_proj.weight'),
+        isFalse,
+      );
 
-      final dst = DeepSeekV2Model(DeepSeekV2Config(
-        vocabSize: _tinyCompressedCfg.vocabSize,
-        maxCtx: _tinyCompressedCfg.maxCtx,
-        embedDim: _tinyCompressedCfg.embedDim,
-        numLayers: _tinyCompressedCfg.numLayers,
-        firstKDenseReplace: _tinyCompressedCfg.firstKDenseReplace,
-        denseFfnDim: _tinyCompressedCfg.denseFfnDim,
-        moeExpertHiddenDim: _tinyCompressedCfg.moeExpertHiddenDim,
-        numRoutedExperts: _tinyCompressedCfg.numRoutedExperts,
-        numSharedExperts: _tinyCompressedCfg.numSharedExperts,
-        numExpertsPerTok: _tinyCompressedCfg.numExpertsPerTok,
-        mlaConfig: _tinyCompressedCfg.mlaConfig,
-        seed: 42,
-      ));
+      final dst = DeepSeekV2Model(
+        DeepSeekV2Config(
+          vocabSize: _tinyCompressedCfg.vocabSize,
+          maxCtx: _tinyCompressedCfg.maxCtx,
+          embedDim: _tinyCompressedCfg.embedDim,
+          numLayers: _tinyCompressedCfg.numLayers,
+          firstKDenseReplace: _tinyCompressedCfg.firstKDenseReplace,
+          denseFfnDim: _tinyCompressedCfg.denseFfnDim,
+          moeExpertHiddenDim: _tinyCompressedCfg.moeExpertHiddenDim,
+          numRoutedExperts: _tinyCompressedCfg.numRoutedExperts,
+          numSharedExperts: _tinyCompressedCfg.numSharedExperts,
+          numExpertsPerTok: _tinyCompressedCfg.numExpertsPerTok,
+          mlaConfig: _tinyCompressedCfg.mlaConfig,
+          seed: 42,
+        ),
+      );
       final report = DeepSeekV2HFLoader.loadMap(dst, state);
       expect(report.unusedKeys, isEmpty);
 
@@ -317,28 +353,25 @@ void main() {
       final src = DeepSeekV2Model(_tinyCfg);
       final state = _dumpToHF(src);
       state.remove('model.norm.weight');
-      expect(
-        () => DeepSeekV2HFLoader.loadMap(src, state),
-        throwsArgumentError,
-      );
+      expect(() => DeepSeekV2HFLoader.loadMap(src, state), throwsArgumentError);
     });
 
     test('rejects a shape mismatch', () {
       final src = DeepSeekV2Model(_tinyCfg);
       final state = _dumpToHF(src);
-      state['model.norm.weight'] =
-          Tensor.fromList([16], List<double>.filled(16, 1.0));
-      expect(
-        () => DeepSeekV2HFLoader.loadMap(src, state),
-        throwsArgumentError,
-      );
+      state['model.norm.weight'] = Tensor.fromList([
+        16,
+      ], List<double>.filled(16, 1.0));
+      expect(() => DeepSeekV2HFLoader.loadMap(src, state), throwsArgumentError);
     });
 
     test('silently absorbs the recomputed rotary buffer', () {
       final src = DeepSeekV2Model(_tinyCfg);
       final state = _dumpToHF(src);
-      state['model.layers.0.self_attn.rotary_emb.inv_freq'] =
-          Tensor.fromList([2], [1.0, 0.5]);
+      state['model.layers.0.self_attn.rotary_emb.inv_freq'] = Tensor.fromList(
+        [2],
+        [1.0, 0.5],
+      );
       final report = DeepSeekV2HFLoader.loadMap(src, state);
       expect(report.unusedKeys, isEmpty);
     });

@@ -55,6 +55,14 @@ class DeepSeekV2Config {
   final int numExpertGroups;
   final int topKGroups;
 
+  /// MoE router activation. V2 uses [GateFunction.softmax]; V3 uses
+  /// [GateFunction.sigmoid] with aux-loss-free routing.
+  final GateFunction moeGateFunction;
+
+  /// Whether top-K gate weights are renormalised to sum to 1.
+  /// V2 (softmax): false. V3 (sigmoid + `norm_topk_prob=true`): true.
+  final bool moeRenormalizeTopK;
+
   final MLAConfig mlaConfig;
   final double rmsNormEps;
   final double ropeBase;
@@ -76,6 +84,8 @@ class DeepSeekV2Config {
     required this.mlaConfig,
     this.numExpertGroups = 1,
     this.topKGroups = 1,
+    this.moeGateFunction = GateFunction.softmax,
+    this.moeRenormalizeTopK = false,
     this.rmsNormEps = 1e-6,
     this.ropeBase = 10000.0,
     this.tieWordEmbeddings = false,
@@ -122,6 +132,58 @@ class DeepSeekV2Config {
         numExpertGroups: 8,
         topKGroups: 3,
         mlaConfig: MLAConfig.deepseekV2Config(),
+        rmsNormEps: 1e-6,
+        ropeBase: 10000.0,
+        tieWordEmbeddings: false,
+        device: device,
+        seed: seed,
+      );
+
+  /// `deepseek-ai/DeepSeek-V3` base config (671 B total / 37 B active).
+  /// Same architectural family as V2 with **three deltas**:
+  ///
+  ///   * MoE gate is **sigmoid** (not softmax) with `norm_topk_prob`
+  ///     turned on — the top-K gate weights are renormalised to sum
+  ///     to 1 after selection.
+  ///   * Routing uses the **aux-loss-free** bias-based scheme
+  ///     (Wang et al. 2024). Our [MoEFeedForward.updateRoutingBias]
+  ///     implements the sign-of-load-delta variant that the V3
+  ///     paper reports as best.
+  ///   * More experts (256 routed × 1 shared, top-8, 8 groups ×
+  ///     top-4). `first_k_dense_replace = 3` (V2 uses 1). And
+  ///     `hidden_size = 7168`, 61 layers, 128 heads, `q_lora_rank
+  ///     = 1536`.
+  ///
+  /// Does not include YaRN rope scaling — the model can still be
+  /// loaded and run at up to `maxCtx` under the base `ropeBase = 10000`;
+  /// YaRN scaling for the full 128k context is a follow-on config
+  /// tweak.
+  static DeepSeekV2Config v3({Device device = Device.CPU, int seed = 0}) =>
+      DeepSeekV2Config(
+        vocabSize: 129280,
+        maxCtx: 4096, // base pre-YaRN; use 163_840 for full config
+        embedDim: 7168,
+        numLayers: 61,
+        firstKDenseReplace: 3,
+        denseFfnDim: 18432,
+        moeExpertHiddenDim: 2048,
+        numRoutedExperts: 256,
+        numSharedExperts: 1,
+        numExpertsPerTok: 8,
+        numExpertGroups: 8,
+        topKGroups: 4,
+        moeGateFunction: GateFunction.sigmoid,
+        moeRenormalizeTopK: true,
+        mlaConfig: MLAConfig(
+          embedDim: 7168,
+          numHeads: 128,
+          qLoraRank: 1536,
+          kvLoraRank: 512,
+          qkNopeHeadDim: 128,
+          qkRopeHeadDim: 64,
+          vHeadDim: 128,
+          rmsNormEps: 1e-6,
+        ),
         rmsNormEps: 1e-6,
         ropeBase: 10000.0,
         tieWordEmbeddings: false,
@@ -183,7 +245,8 @@ class DeepSeekV2Block extends Module {
                topKGroups: config.topKGroups,
                activation: ExpertActivation.silu,
                expertVariant: ExpertVariant.swiGlu,
-               gateFunction: GateFunction.softmax,
+               gateFunction: config.moeGateFunction,
+               renormalizeTopK: config.moeRenormalizeTopK,
                device: config.device,
                seed: config.seed + layerIndex * 1_000_000 + 950_000,
              )

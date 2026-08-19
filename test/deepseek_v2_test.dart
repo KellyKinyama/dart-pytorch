@@ -72,6 +72,26 @@ void main() {
       expect(cfg.numExpertGroups, 8);
       expect(cfg.topKGroups, 3);
       expect(cfg.mlaConfig.qLoraRank, 1536);
+      // V2 uses softmax gate, no top-K renormalisation.
+      expect(cfg.moeGateFunction, GateFunction.softmax);
+      expect(cfg.moeRenormalizeTopK, isFalse);
+    });
+
+    test('v3 matches HF DeepSeek-V3 config.json (sigmoid + norm topk)', () {
+      final cfg = DeepSeekV2Config.v3();
+      expect(cfg.vocabSize, 129280);
+      expect(cfg.embedDim, 7168);
+      expect(cfg.numLayers, 61);
+      expect(cfg.numRoutedExperts, 256);
+      expect(cfg.numSharedExperts, 1);
+      expect(cfg.numExpertsPerTok, 8);
+      expect(cfg.numExpertGroups, 8);
+      expect(cfg.topKGroups, 4);
+      expect(cfg.firstKDenseReplace, 3);
+      expect(cfg.mlaConfig.qLoraRank, 1536);
+      // V3 deltas: sigmoid gate + norm_topk.
+      expect(cfg.moeGateFunction, GateFunction.sigmoid);
+      expect(cfg.moeRenormalizeTopK, isTrue);
     });
   });
 
@@ -112,6 +132,46 @@ void main() {
       );
       final b = DeepSeekV2Block(layerIndex: 1, config: _tinyCfg, rope: rope);
       final rng = math.Random(2);
+      final vals = Float32List.fromList(
+        List.generate(4 * 32, (_) => rng.nextDouble()),
+      );
+      final x = Tensor.fromFloat32List([4, 32], vals);
+      expect(b(x).shape, equals([4, 32]));
+    });
+
+    test('V3-style block (sigmoid gate + norm topk) forward preserves shape',
+        () {
+      const v3Tiny = DeepSeekV2Config(
+        vocabSize: 128,
+        maxCtx: 32,
+        embedDim: 32,
+        numLayers: 2,
+        firstKDenseReplace: 1,
+        denseFfnDim: 64,
+        moeExpertHiddenDim: 32,
+        numRoutedExperts: 4,
+        numSharedExperts: 1,
+        numExpertsPerTok: 2,
+        numExpertGroups: 1,
+        topKGroups: 1,
+        moeGateFunction: GateFunction.sigmoid,
+        moeRenormalizeTopK: true,
+        mlaConfig: MLAConfig(
+          embedDim: 32,
+          numHeads: 4,
+          qLoraRank: 16, // V3 uses Q compression
+          kvLoraRank: 12,
+          qkNopeHeadDim: 6,
+          qkRopeHeadDim: 4,
+          vHeadDim: 6,
+        ),
+      );
+      final rope = RopeCache(
+        maxCtx: v3Tiny.maxCtx,
+        headDim: v3Tiny.mlaConfig.qkRopeHeadDim,
+      );
+      final b = DeepSeekV2Block(layerIndex: 1, config: v3Tiny, rope: rope);
+      final rng = math.Random(3);
       final vals = Float32List.fromList(
         List.generate(4 * 32, (_) => rng.nextDouble()),
       );

@@ -110,8 +110,10 @@ class DeepSeekV2HFLoader {
     // ---------- token embedding ----------
     _copy(
       model.embedIn.weight,
-      _expectShape(take('model.embed_tokens.weight'), [cfg.vocabSize, d],
-          'model.embed_tokens.weight'),
+      _expectShape(take('model.embed_tokens.weight'), [
+        cfg.vocabSize,
+        d,
+      ], 'model.embed_tokens.weight'),
     );
 
     // ---------- per-layer ----------
@@ -121,13 +123,17 @@ class DeepSeekV2HFLoader {
 
       _copy(
         block.attnLn.gamma,
-        _expectShape(take('$p.input_layernorm.weight'), [d],
-            '$p.input_layernorm.weight'),
+        _expectShape(take('$p.input_layernorm.weight'), [
+          d,
+        ], '$p.input_layernorm.weight'),
       );
       _copy(
         block.ffnLn.gamma,
-        _expectShape(take('$p.post_attention_layernorm.weight'), [d],
-            '$p.post_attention_layernorm.weight'),
+        _expectShape(
+          take('$p.post_attention_layernorm.weight'),
+          [d],
+          '$p.post_attention_layernorm.weight',
+        ),
       );
 
       // ============ MLA ============
@@ -136,21 +142,30 @@ class DeepSeekV2HFLoader {
         // Compressed Q path.
         _copy(
           attn.qDown!.weight,
-          _expectShape(take('$p.self_attn.q_a_proj.weight'),
-              [mla.qLoraRank!, d], '$p.self_attn.q_a_proj.weight'),
+          _expectShape(take('$p.self_attn.q_a_proj.weight'), [
+            mla.qLoraRank!,
+            d,
+          ], '$p.self_attn.q_a_proj.weight'),
         );
         _copy(
           attn.qLn!.gamma,
-          _expectShape(take('$p.self_attn.q_a_layernorm.weight'),
-              [mla.qLoraRank!], '$p.self_attn.q_a_layernorm.weight'),
+          _expectShape(
+            take('$p.self_attn.q_a_layernorm.weight'),
+            [mla.qLoraRank!],
+            '$p.self_attn.q_a_layernorm.weight',
+          ),
         );
-        final qBw = _expectShape(take('$p.self_attn.q_b_proj.weight'),
-            [h * headDim, mla.qLoraRank!], '$p.self_attn.q_b_proj.weight');
+        final qBw = _expectShape(take('$p.self_attn.q_b_proj.weight'), [
+          h * headDim,
+          mla.qLoraRank!,
+        ], '$p.self_attn.q_b_proj.weight');
         _loadPerHeadQ(attn, qBw, h, nopeD, ropeD, mla.qLoraRank!);
       } else {
         // Direct Q path (Lite).
-        final qW = _expectShape(take('$p.self_attn.q_proj.weight'),
-            [h * headDim, d], '$p.self_attn.q_proj.weight');
+        final qW = _expectShape(take('$p.self_attn.q_proj.weight'), [
+          h * headDim,
+          d,
+        ], '$p.self_attn.q_proj.weight');
         _loadPerHeadQ(attn, qW, h, nopeD, ropeD, d);
       }
 
@@ -166,24 +181,33 @@ class DeepSeekV2HFLoader {
 
       _copy(
         attn.kvLn.gamma,
-        _expectShape(take('$p.self_attn.kv_a_layernorm.weight'), [kvL],
-            '$p.self_attn.kv_a_layernorm.weight'),
+        _expectShape(
+          take('$p.self_attn.kv_a_layernorm.weight'),
+          [kvL],
+          '$p.self_attn.kv_a_layernorm.weight',
+        ),
       );
 
       // kv_b_proj: [H · (nopeD + vD), kvL], per-head split into K_nope + V.
-      final kvBw = _expectShape(take('$p.self_attn.kv_b_proj.weight'),
-          [h * (nopeD + vD), kvL], '$p.self_attn.kv_b_proj.weight');
+      final kvBw = _expectShape(take('$p.self_attn.kv_b_proj.weight'), [
+        h * (nopeD + vD),
+        kvL,
+      ], '$p.self_attn.kv_b_proj.weight');
       for (int hh = 0; hh < h; hh++) {
         final base = hh * (nopeD + vD);
         _copy(attn.kUpNope[hh].weight, _sliceRows(kvBw, base, base + nopeD));
-        _copy(attn.vUp[hh].weight,
-            _sliceRows(kvBw, base + nopeD, base + nopeD + vD));
+        _copy(
+          attn.vUp[hh].weight,
+          _sliceRows(kvBw, base + nopeD, base + nopeD + vD),
+        );
       }
 
       _copy(
         attn.oProj.weight,
-        _expectShape(take('$p.self_attn.o_proj.weight'), [d, h * vD],
-            '$p.self_attn.o_proj.weight'),
+        _expectShape(take('$p.self_attn.o_proj.weight'), [
+          d,
+          h * vD,
+        ], '$p.self_attn.o_proj.weight'),
       );
 
       // Silently absorb the recomputed rotary buffer if HF included it.
@@ -196,18 +220,24 @@ class DeepSeekV2HFLoader {
         final ffn = block.denseFfn!;
         _copy(
           ffn.gateProj.weight,
-          _expectShape(take('$p.mlp.gate_proj.weight'), [cfg.denseFfnDim, d],
-              '$p.mlp.gate_proj.weight'),
+          _expectShape(take('$p.mlp.gate_proj.weight'), [
+            cfg.denseFfnDim,
+            d,
+          ], '$p.mlp.gate_proj.weight'),
         );
         _copy(
           ffn.upProj.weight,
-          _expectShape(take('$p.mlp.up_proj.weight'), [cfg.denseFfnDim, d],
-              '$p.mlp.up_proj.weight'),
+          _expectShape(take('$p.mlp.up_proj.weight'), [
+            cfg.denseFfnDim,
+            d,
+          ], '$p.mlp.up_proj.weight'),
         );
         _copy(
           ffn.downProj.weight,
-          _expectShape(take('$p.mlp.down_proj.weight'), [d, cfg.denseFfnDim],
-              '$p.mlp.down_proj.weight'),
+          _expectShape(take('$p.mlp.down_proj.weight'), [
+            d,
+            cfg.denseFfnDim,
+          ], '$p.mlp.down_proj.weight'),
         );
       } else {
         _loadMoE(block.moeFfn!, cfg, take, p);
@@ -224,8 +254,10 @@ class DeepSeekV2HFLoader {
     if (!cfg.tieWordEmbeddings) {
       _copy(
         model.untiedHead!.weight,
-        _expectShape(take('lm_head.weight'), [cfg.vocabSize, d],
-            'lm_head.weight'),
+        _expectShape(take('lm_head.weight'), [
+          cfg.vocabSize,
+          d,
+        ], 'lm_head.weight'),
       );
     } else if (state.containsKey('lm_head.weight')) {
       consumed.add('lm_head.weight');
@@ -255,8 +287,10 @@ class DeepSeekV2HFLoader {
     for (int hh = 0; hh < h; hh++) {
       final base = hh * headDim;
       _copy(attn.qUpNope[hh].weight, _sliceRows(fused, base, base + nopeD));
-      _copy(attn.qUpRope[hh].weight,
-          _sliceRows(fused, base + nopeD, base + headDim));
+      _copy(
+        attn.qUpRope[hh].weight,
+        _sliceRows(fused, base + nopeD, base + headDim),
+      );
     }
   }
 
@@ -270,11 +304,10 @@ class DeepSeekV2HFLoader {
     final ffn = cfg.moeExpertHiddenDim;
 
     // Router — HF stores `[numRoutedExperts, D]`; ours is `[D, E]`.
-    final routerHF = _expectShape(
-      take('$layerPrefix.mlp.gate.weight'),
-      [cfg.numRoutedExperts, d],
-      '$layerPrefix.mlp.gate.weight',
-    );
+    final routerHF = _expectShape(take('$layerPrefix.mlp.gate.weight'), [
+      cfg.numRoutedExperts,
+      d,
+    ], '$layerPrefix.mlp.gate.weight');
     _copy(moe.gateW, _transpose2D(routerHF));
 
     // Routed experts.
@@ -283,18 +316,24 @@ class DeepSeekV2HFLoader {
       final ep = '$layerPrefix.mlp.experts.$j';
       _copy(
         expert.w1.weight,
-        _expectShape(take('$ep.gate_proj.weight'), [ffn, d],
-            '$ep.gate_proj.weight'),
+        _expectShape(take('$ep.gate_proj.weight'), [
+          ffn,
+          d,
+        ], '$ep.gate_proj.weight'),
       );
       _copy(
         expert.w3!.weight,
-        _expectShape(take('$ep.up_proj.weight'), [ffn, d],
-            '$ep.up_proj.weight'),
+        _expectShape(take('$ep.up_proj.weight'), [
+          ffn,
+          d,
+        ], '$ep.up_proj.weight'),
       );
       _copy(
         expert.w2.weight,
-        _expectShape(take('$ep.down_proj.weight'), [d, ffn],
-            '$ep.down_proj.weight'),
+        _expectShape(take('$ep.down_proj.weight'), [
+          d,
+          ffn,
+        ], '$ep.down_proj.weight'),
       );
       // HF's DeepseekV2MLP has no biases — zero the biases our
       // `Expert` allocates by default so they don't drift the
@@ -308,12 +347,18 @@ class DeepSeekV2HFLoader {
     // row-slice of gate/up and outputs a column-slice of down).
     final sharedFfn = cfg.numSharedExperts * ffn;
     final sp = '$layerPrefix.mlp.shared_experts';
-    final gateFused = _expectShape(take('$sp.gate_proj.weight'), [sharedFfn, d],
-        '$sp.gate_proj.weight');
-    final upFused = _expectShape(take('$sp.up_proj.weight'), [sharedFfn, d],
-        '$sp.up_proj.weight');
-    final downFused = _expectShape(take('$sp.down_proj.weight'), [d, sharedFfn],
-        '$sp.down_proj.weight');
+    final gateFused = _expectShape(take('$sp.gate_proj.weight'), [
+      sharedFfn,
+      d,
+    ], '$sp.gate_proj.weight');
+    final upFused = _expectShape(take('$sp.up_proj.weight'), [
+      sharedFfn,
+      d,
+    ], '$sp.up_proj.weight');
+    final downFused = _expectShape(take('$sp.down_proj.weight'), [
+      d,
+      sharedFfn,
+    ], '$sp.down_proj.weight');
     for (int k = 0; k < cfg.numSharedExperts; k++) {
       final e = moe.sharedExperts[k];
       final rStart = k * ffn;
@@ -331,22 +376,31 @@ class DeepSeekV2HFLoader {
     if (expert.w1.bias != null) {
       final shape = expert.w1.bias!.shape as List<int>;
       final n = shape.fold<int>(1, (a, b) => a * b);
-      final zeros = Tensor.fromList(shape, List<double>.filled(n, 0.0),
-          device: expert.w1.bias!.device);
+      final zeros = Tensor.fromList(
+        shape,
+        List<double>.filled(n, 0.0),
+        device: expert.w1.bias!.device,
+      );
       expert.w1.bias!.assign(zeros);
     }
     if (expert.w2.bias != null) {
       final shape = expert.w2.bias!.shape as List<int>;
       final n = shape.fold<int>(1, (a, b) => a * b);
-      final zeros = Tensor.fromList(shape, List<double>.filled(n, 0.0),
-          device: expert.w2.bias!.device);
+      final zeros = Tensor.fromList(
+        shape,
+        List<double>.filled(n, 0.0),
+        device: expert.w2.bias!.device,
+      );
       expert.w2.bias!.assign(zeros);
     }
     if (expert.w3 != null && expert.w3!.bias != null) {
       final shape = expert.w3!.bias!.shape as List<int>;
       final n = shape.fold<int>(1, (a, b) => a * b);
-      final zeros = Tensor.fromList(shape, List<double>.filled(n, 0.0),
-          device: expert.w3!.bias!.device);
+      final zeros = Tensor.fromList(
+        shape,
+        List<double>.filled(n, 0.0),
+        device: expert.w3!.bias!.device,
+      );
       expert.w3!.bias!.assign(zeros);
     }
   }
@@ -354,8 +408,7 @@ class DeepSeekV2HFLoader {
   // -------------------- tensor helpers --------------------
 
   static Tensor _expectShape(Tensor t, List<int> expected, String name) {
-    if (t.shape.length != expected.length ||
-        !_shapesEqual(t.shape, expected)) {
+    if (t.shape.length != expected.length || !_shapesEqual(t.shape, expected)) {
       throw ArgumentError(
         'deepseek-v2 loader: "$name" expected shape $expected, got ${t.shape}',
       );
