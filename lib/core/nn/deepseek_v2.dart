@@ -403,7 +403,8 @@ class DeepSeekV2Model extends Module {
           // Softmax temperature sampling — kept simple for smoke.
           var maxLogit = logits[lastBase];
           for (int i = 1; i < v; i++) {
-            if (logits[lastBase + i] > maxLogit) maxLogit = logits[lastBase + i];
+            if (logits[lastBase + i] > maxLogit)
+              maxLogit = logits[lastBase + i];
           }
           final probs = List<double>.filled(v, 0);
           double sum = 0;

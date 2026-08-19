@@ -87,6 +87,7 @@ export 'core/nn/vision/dinov2_loader.dart';
 export 'core/nn/vision/resnet.dart';
 export 'core/nn/vision/resnet_loader.dart';
 export 'core/nn/vision/arcface.dart';
+export 'core/nn/vision/sam_image_encoder.dart';
 export 'core/nn/esm2.dart';
 export 'core/nn/esm2_hf_loader.dart';
 export 'core/nn/prelu.dart';

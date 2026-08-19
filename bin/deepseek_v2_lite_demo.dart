@@ -30,8 +30,7 @@ import 'dart:io';
 
 import 'package:dart_pytorch/dart_pytorch.dart';
 
-const _weightsDefault =
-    'models/deepseek-v2-lite/model.safetensors.index.json';
+const _weightsDefault = 'models/deepseek-v2-lite/model.safetensors.index.json';
 const _tokenizerDefault = 'models/deepseek-v2-lite/tokenizer.json';
 
 Future<void> main(List<String> args) async {
@@ -59,15 +58,19 @@ Future<void> main(List<String> args) async {
   for (final p in [weightsPath, tokenizerPath]) {
     if (!File(p).existsSync()) {
       stderr.writeln('missing: $p');
-      stderr.writeln('See the docstring at the top of '
-          'bin/deepseek_v2_lite_demo.dart for setup steps.');
+      stderr.writeln(
+        'See the docstring at the top of '
+        'bin/deepseek_v2_lite_demo.dart for setup steps.',
+      );
       exit(2);
     }
   }
 
   final swBuild = Stopwatch()..start();
-  print('Building DeepSeekV2-Lite (27 layers, hidden 2048, 16 heads, '
-      'MLA + 64 routed + 2 shared experts)');
+  print(
+    'Building DeepSeekV2-Lite (27 layers, hidden 2048, 16 heads, '
+    'MLA + 64 routed + 2 shared experts)',
+  );
   final model = DeepSeekV2Model(DeepSeekV2Config.lite());
   swBuild.stop();
   print('  build: ${swBuild.elapsedMilliseconds} ms');
@@ -105,8 +108,10 @@ Future<void> main(List<String> args) async {
   final newTokens = full.sublist(ids.length);
   final text = tokenizer.decode(newTokens);
   final tokPerSec = newTokens.length * 1000.0 / swG.elapsedMilliseconds;
-  print('  ${swG.elapsedMilliseconds} ms  '
-      '(${newTokens.length} new tokens, ${tokPerSec.toStringAsFixed(3)} tok/s)');
+  print(
+    '  ${swG.elapsedMilliseconds} ms  '
+    '(${newTokens.length} new tokens, ${tokPerSec.toStringAsFixed(3)} tok/s)',
+  );
 
   print('');
   print('== completion ==');
