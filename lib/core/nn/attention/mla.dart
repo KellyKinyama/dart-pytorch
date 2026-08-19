@@ -38,7 +38,11 @@ import '../rotary.dart';
 class MLAConfig {
   final int embedDim;
   final int numHeads;
-  final int qLoraRank;
+  /// When non-null, Q is passed through a `Linear(embedDim, qLoraRank)`
+  /// + `RMSNorm(qLoraRank)` bottleneck before the per-head Q up-
+  /// projections. When null (DeepSeek-V2-Lite), Q goes directly from
+  /// `x` to the per-head projections at full embed dim — no bottleneck.
+  final int? qLoraRank;
   final int kvLoraRank;
   final int qkNopeHeadDim;
   final int qkRopeHeadDim;
@@ -59,13 +63,30 @@ class MLAConfig {
   /// Combined Q/K head dim used inside the softmax (`√(nope + rope)`).
   int get qkHeadDim => qkNopeHeadDim + qkRopeHeadDim;
 
+  /// Input dim for the per-head Q up-projections. `qLoraRank` when
+  /// Q is compressed; `embedDim` when it isn't (DeepSeek-V2-Lite).
+  int get qInDim => qLoraRank ?? embedDim;
+
+  /// DeepSeek-V2 full (~236B, uses Q compression at `qLoraRank=1536`)
+  /// attention shape numbers.
+  static MLAConfig deepseekV2Config() => const MLAConfig(
+    embedDim: 5120,
+    numHeads: 128,
+    qLoraRank: 1536,
+    kvLoraRank: 512,
+    qkNopeHeadDim: 128,
+    qkRopeHeadDim: 64,
+    vHeadDim: 128,
+    rmsNormEps: 1e-6,
+  );
+
   /// DeepSeek-V2-Lite (~16B, 27 layers, hidden 2048) attention config.
-  /// Single reference for the shape numbers; use inside a wrapper model
-  /// once the full LM is ported.
+  /// **No Q compression** (`qLoraRank == null`) — matches HF
+  /// `deepseek-ai/DeepSeek-V2-Lite` config.json exactly.
   static MLAConfig deepseekV2LiteConfig() => const MLAConfig(
     embedDim: 2048,
     numHeads: 16,
-    qLoraRank: 1536,
+    qLoraRank: null,
     kvLoraRank: 512,
     qkNopeHeadDim: 128,
     qkRopeHeadDim: 64,
@@ -77,13 +98,15 @@ class MLAConfig {
 class MultiHeadLatentAttention extends Module {
   final MLAConfig config;
 
-  /// `x -> c_q` low-rank Q projection. Shape `[qLoraRank, embedDim]`.
-  final Linear qDown;
-  final RMSNorm qLn;
+  /// `x -> c_q` low-rank Q projection. **Null when Q is not compressed**
+  /// (DeepSeek-V2-Lite / `MLAConfig.qLoraRank == null`).
+  final Linear? qDown;
+  final RMSNorm? qLn;
 
-  /// Per-head "no-rope" and "rope" up-projections from `c_q`.
-  final List<Linear> qUpNope; // c_q -> [N, qkNopeHeadDim] per head
-  final List<Linear> qUpRope; // c_q -> [N, qkRopeHeadDim] per head
+  /// Per-head "no-rope" and "rope" up-projections. Input dim is
+  /// `config.qInDim` (`qLoraRank` when compressed, `embedDim` otherwise).
+  final List<Linear> qUpNope;
+  final List<Linear> qUpRope;
 
   /// `x -> c_kv` low-rank KV projection.
   final Linear kvDown;
@@ -108,80 +131,88 @@ class MultiHeadLatentAttention extends Module {
     this.config, {
     Device device = Device.CPU,
     int seed = 0,
-  }) : qDown = Linear(
-         config.embedDim,
-         config.qLoraRank,
-         bias: false,
-         device: device,
-         seed: seed,
-       ),
-       qLn = RMSNorm(config.qLoraRank, eps: config.rmsNormEps, device: device),
-       qUpNope = List<Linear>.generate(
-         config.numHeads,
-         (h) => Linear(
-           config.qLoraRank,
-           config.qkNopeHeadDim,
-           bias: false,
-           device: device,
-           seed: seed + 100_000 + h,
-         ),
-       ),
-       qUpRope = List<Linear>.generate(
-         config.numHeads,
-         (h) => Linear(
-           config.qLoraRank,
-           config.qkRopeHeadDim,
-           bias: false,
-           device: device,
-           seed: seed + 200_000 + h,
-         ),
-       ),
-       kvDown = Linear(
-         config.embedDim,
-         config.kvLoraRank,
-         bias: false,
-         device: device,
-         seed: seed + 300_000,
-       ),
-       kvLn = RMSNorm(
-         config.kvLoraRank,
-         eps: config.rmsNormEps,
-         device: device,
-       ),
-       kRope = Linear(
-         config.embedDim,
-         config.qkRopeHeadDim,
-         bias: false,
-         device: device,
-         seed: seed + 400_000,
-       ),
-       kUpNope = List<Linear>.generate(
-         config.numHeads,
-         (h) => Linear(
-           config.kvLoraRank,
-           config.qkNopeHeadDim,
-           bias: false,
-           device: device,
-           seed: seed + 500_000 + h,
-         ),
-       ),
-       vUp = List<Linear>.generate(
-         config.numHeads,
-         (h) => Linear(
-           config.kvLoraRank,
-           config.vHeadDim,
-           bias: false,
-           device: device,
-           seed: seed + 600_000 + h,
-         ),
-       ),
-       oProj = Linear(
-         config.numHeads * config.vHeadDim,
-         config.embedDim,
-         bias: false,
-         device: device,
-         seed: seed + 700_000,
-       );
+  })  : qDown = config.qLoraRank == null
+            ? null
+            : Linear(
+                config.embedDim,
+                config.qLoraRank!,
+                bias: false,
+                device: device,
+                seed: seed,
+              ),
+        qLn = config.qLoraRank == null
+            ? null
+            : RMSNorm(
+                config.qLoraRank!,
+                eps: config.rmsNormEps,
+                device: device,
+              ),
+        qUpNope = List<Linear>.generate(
+          config.numHeads,
+          (h) => Linear(
+            config.qLoraRank ?? config.embedDim,
+            config.qkNopeHeadDim,
+            bias: false,
+            device: device,
+            seed: seed + 100_000 + h,
+          ),
+        ),
+        qUpRope = List<Linear>.generate(
+          config.numHeads,
+          (h) => Linear(
+            config.qLoraRank ?? config.embedDim,
+            config.qkRopeHeadDim,
+            bias: false,
+            device: device,
+            seed: seed + 200_000 + h,
+          ),
+        ),
+        kvDown = Linear(
+          config.embedDim,
+          config.kvLoraRank,
+          bias: false,
+          device: device,
+          seed: seed + 300_000,
+        ),
+        kvLn = RMSNorm(
+          config.kvLoraRank,
+          eps: config.rmsNormEps,
+          device: device,
+        ),
+        kRope = Linear(
+          config.embedDim,
+          config.qkRopeHeadDim,
+          bias: false,
+          device: device,
+          seed: seed + 400_000,
+        ),
+        kUpNope = List<Linear>.generate(
+          config.numHeads,
+          (h) => Linear(
+            config.kvLoraRank,
+            config.qkNopeHeadDim,
+            bias: false,
+            device: device,
+            seed: seed + 500_000 + h,
+          ),
+        ),
+        vUp = List<Linear>.generate(
+          config.numHeads,
+          (h) => Linear(
+            config.kvLoraRank,
+            config.vHeadDim,
+            bias: false,
+            device: device,
+            seed: seed + 600_000 + h,
+          ),
+        ),
+        oProj = Linear(
+          config.numHeads * config.vHeadDim,
+          config.embedDim,
+          bias: false,
+          device: device,
+          seed: seed + 700_000,
+        );
 
   /// Forward pass. `x` is `[N, embedDim]`. Optional additive attention
   /// `mask` is broadcast to `[N, N]` (typical causal mask).
@@ -203,7 +234,9 @@ class MultiHeadLatentAttention extends Module {
     }
 
     // ---- Q path ----
-    final cQ = qLn(qDown(x));
+    // With compression: x -> qDown -> qLn -> cQ.
+    // Without (Lite):    cQ = x directly (per-head Linears take embedDim).
+    final cQ = qDown == null ? x : qLn!(qDown!(x));
 
     // ---- KV path ----
     final cKv = kvLn(kvDown(x));
@@ -235,8 +268,8 @@ class MultiHeadLatentAttention extends Module {
 
   @override
   List<Tensor> parameters() => [
-    ...qDown.parameters(),
-    ...qLn.parameters(),
+    if (qDown != null) ...qDown!.parameters(),
+    if (qLn != null) ...qLn!.parameters(),
     for (final l in qUpNope) ...l.parameters(),
     for (final l in qUpRope) ...l.parameters(),
     ...kvDown.parameters(),
@@ -249,8 +282,8 @@ class MultiHeadLatentAttention extends Module {
 
   @override
   List<Module> submodules() => [
-    qDown,
-    qLn,
+    if (qDown != null) qDown!,
+    if (qLn != null) qLn!,
     ...qUpNope,
     ...qUpRope,
     kvDown,

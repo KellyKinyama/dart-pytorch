@@ -48,16 +48,25 @@ void main() {
       expect(_tinyCfg.qkHeadDim, 10);
     });
 
-    test('deepseekV2LiteConfig matches paper numbers', () {
+    test('deepseekV2LiteConfig matches HF config.json exactly', () {
       final cfg = MLAConfig.deepseekV2LiteConfig();
       expect(cfg.embedDim, 2048);
       expect(cfg.numHeads, 16);
-      expect(cfg.qLoraRank, 1536);
+      expect(cfg.qLoraRank, isNull); // Lite has no Q compression
+      expect(cfg.qInDim, 2048); // falls back to embedDim
       expect(cfg.kvLoraRank, 512);
       expect(cfg.qkNopeHeadDim, 128);
       expect(cfg.qkRopeHeadDim, 64);
       expect(cfg.vHeadDim, 128);
       expect(cfg.qkHeadDim, 192);
+    });
+
+    test('deepseekV2Config (full 236B) has Q compression at 1536', () {
+      final cfg = MLAConfig.deepseekV2Config();
+      expect(cfg.embedDim, 5120);
+      expect(cfg.numHeads, 128);
+      expect(cfg.qLoraRank, 1536);
+      expect(cfg.qInDim, 1536);
     });
   });
 
@@ -121,7 +130,8 @@ void main() {
       expect(() => mla(_rand([3, 32], seed: 5)), throwsStateError);
     });
 
-    test('parameter list surfaces every learnable tensor', () {
+    test('parameter list surfaces every learnable tensor (with Q compression)',
+        () {
       final mla = MultiHeadLatentAttention(_tinyCfg);
       final params = mla.parameters();
       // Counts:
@@ -136,6 +146,26 @@ void main() {
       //   vUp: numHeads = 4
       //   oProj: 1
       final expected = 1 + 1 + 4 + 4 + 1 + 1 + 1 + 4 + 4 + 1;
+      expect(params.length, expected);
+    });
+
+    test('no-Q-compression (Lite-style) — forward works + param count drops '
+        'by 2', () {
+      const liteTiny = MLAConfig(
+        embedDim: 32,
+        numHeads: 4,
+        qLoraRank: null, // no q compression
+        kvLoraRank: 12,
+        qkNopeHeadDim: 6,
+        qkRopeHeadDim: 4,
+        vHeadDim: 6,
+      );
+      final mla = MultiHeadLatentAttention(liteTiny);
+      final x = _rand([5, 32], seed: 8);
+      expect(mla(x).shape, equals([5, 32]));
+      final params = mla.parameters();
+      // qDown + qLn are gone (drop 2 params).
+      final expected = 4 + 4 + 1 + 1 + 1 + 4 + 4 + 1;
       expect(params.length, expected);
     });
   });
