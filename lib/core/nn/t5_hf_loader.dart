@@ -273,6 +273,7 @@ class T5HFLoader {
           take(biasKey),
           expectShape: [cfg.relativeAttentionNumBuckets, cfg.numHeads],
         );
+        relativeBias.invalidateCache();
       }
 
       // Decoder-only: cross-attention.

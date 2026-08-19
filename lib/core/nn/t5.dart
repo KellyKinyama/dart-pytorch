@@ -113,6 +113,11 @@ class T5RelativeBias extends Module {
   final bool bidirectional;
   final Embedding table;
 
+  /// CPU snapshot of `table.weight` — populated on first bias call,
+  /// invalidated by [invalidateCache]. Amortises the GPU->CPU
+  /// round-trip that would otherwise happen on every attention call.
+  List<double>? _tableCache;
+
   T5RelativeBias({
     required this.numBuckets,
     required this.numHeads,
@@ -121,6 +126,16 @@ class T5RelativeBias extends Module {
     Device device = Device.CPU,
     int seed = 0,
   }) : table = Embedding(numBuckets, numHeads, device: device, seed: seed);
+
+  /// Drop the cached CPU snapshot. Call after the loader updates
+  /// the underlying `table.weight`; otherwise the cache is
+  /// snapshot-once-then-frozen (fine for inference).
+  void invalidateCache() {
+    _tableCache = null;
+  }
+
+  List<double> _tableData() =>
+      _tableCache ??= table.weight.toList();
 
   /// Returns a `[nq, nk]` additive mask if the caller is single-head,
   /// or `[num_heads, nq, nk]` when treated per-head. This impl folds
@@ -134,7 +149,7 @@ class T5RelativeBias extends Module {
         buckets[i * nk + j] = _bucket(rel);
       }
     }
-    final tableData = table.weight.toList();
+    final tableData = _tableData();
     final out = <Tensor>[];
     for (int h = 0; h < numHeads; h++) {
       final vals = List<double>.filled(nq * nk, 0);
@@ -153,7 +168,7 @@ class T5RelativeBias extends Module {
   /// for a single query token at position `qPos` attending to keys
   /// `[0, kLen)`. Used by [T5Decoder.callCached].
   List<Tensor> maskPerHeadSingleQ(int qPos, int kLen) {
-    final tableData = table.weight.toList();
+    final tableData = _tableData();
     final out = <Tensor>[];
     for (int h = 0; h < numHeads; h++) {
       final vals = List<double>.filled(kLen, 0);
