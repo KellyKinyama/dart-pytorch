@@ -77,8 +77,10 @@ Future<void> main(List<String> args) async {
   }
   print('');
   print('module params: ${params.length}');
-  print('scalar count : $totalScalars '
-      '(~${(totalScalars * 4 / 1e6).toStringAsFixed(1)} MB @ fp32)');
+  print(
+    'scalar count : $totalScalars '
+    '(~${(totalScalars * 4 / 1e6).toStringAsFixed(1)} MB @ fp32)',
+  );
 
   if (report.unusedKeys.isNotEmpty) {
     exit(1);

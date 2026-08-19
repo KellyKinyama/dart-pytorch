@@ -261,6 +261,34 @@ void main() {
       expect(cfg.outBias, isFalse);
     });
 
+    test('deepseekR1Qwen1_5BConfig aliases qwen25_1_5BConfig', () {
+      final a = LlamaHFLoader.deepseekR1Qwen1_5BConfig();
+      final b = LlamaHFLoader.qwen25_1_5BConfig();
+      expect(a.vocabSize, equals(b.vocabSize));
+      expect(a.embedDim, equals(b.embedDim));
+      expect(a.numLayers, equals(b.numLayers));
+      expect(a.numHeads, equals(b.numHeads));
+      expect(a.numKvHeads, equals(b.numKvHeads));
+      expect(a.ffnDim, equals(b.ffnDim));
+      expect(a.ropeBase, equals(b.ropeBase));
+      expect(a.tieWeights, equals(b.tieWeights));
+      expect(a.attentionBias, equals(b.attentionBias));
+    });
+
+    test('deepseekCoder1_3BConfig has expected shape parameters', () {
+      final cfg = LlamaHFLoader.deepseekCoder1_3BConfig();
+      expect(cfg.vocabSize, 32256);
+      expect(cfg.embedDim, 2048);
+      expect(cfg.numLayers, 24);
+      expect(cfg.numHeads, 16);
+      expect(cfg.numKvHeads, 16);
+      expect(cfg.ffnDim, 5504);
+      expect(cfg.ropeBase, 10000.0);
+      expect(cfg.rmsNormEps, 1e-6);
+      expect(cfg.tieWeights, isTrue);
+      expect(cfg.attentionBias, isFalse);
+    });
+
     test(
       'roundtrip: dump Qwen-style (attentionBias) model -> load -> match',
       () {

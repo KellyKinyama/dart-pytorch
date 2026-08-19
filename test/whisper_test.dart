@@ -72,8 +72,7 @@ void main() {
       }
     });
 
-    test('large-v3 config: 128 mels + 32 layers builds and matches shapes',
-        () {
+    test('large-v3 config: 128 mels + 32 layers builds and matches shapes', () {
       final enc = WhisperEncoder(
         nMels: 128,
         embedDim: 1280,

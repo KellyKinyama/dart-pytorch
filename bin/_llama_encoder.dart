@@ -87,11 +87,19 @@ LlamaConfig configForLlamaPreset(String preset, Device device) {
     case 'qwen2.5-3b':
     case 'qwen2.5-3b-instruct':
       return LlamaHFLoader.qwen25_3BConfig(device: device);
+    case 'deepseek-r1-distill-qwen-1.5b':
+    case 'deepseek-r1-qwen-1.5b':
+      return LlamaHFLoader.deepseekR1Qwen1_5BConfig(device: device);
+    case 'deepseek-coder-1.3b':
+    case 'deepseek-coder-1.3b-base':
+    case 'deepseek-coder-1.3b-instruct':
+      return LlamaHFLoader.deepseekCoder1_3BConfig(device: device);
     default:
       stderr.writeln(
         'unknown llama preset "$preset"; use '
         'smollm2-135m | llama-3.2-1b | llama-3.2-3b | llama-3.1-8b | '
-        'qwen2.5-0.5b | qwen2.5-1.5b | qwen2.5-3b',
+        'qwen2.5-0.5b | qwen2.5-1.5b | qwen2.5-3b | '
+        'deepseek-r1-distill-qwen-1.5b | deepseek-coder-1.3b',
       );
       exit(64);
   }
@@ -105,6 +113,7 @@ LlamaConfig configForLlamaPreset(String preset, Device device) {
   required String vocabPath,
   required String preset,
   required bool gpu,
+  bool keepFp16 = false,
   void Function(String)? log,
 }) {
   final say = log ?? stdout.writeln;
@@ -117,7 +126,7 @@ LlamaConfig configForLlamaPreset(String preset, Device device) {
   );
   final model = Llama(cfg);
   say('Loading safetensors from $path ...');
-  final report = LlamaHFLoader.loadFile(model, path);
+  final report = LlamaHFLoader.loadFile(model, path, keepFp16: keepFp16);
   say('Loaded. $report');
   say('Loading tokenizer from $vocabPath');
   final tokenizer = HFBpeTokenizer.loadFile(vocabPath);

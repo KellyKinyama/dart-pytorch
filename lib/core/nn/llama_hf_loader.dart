@@ -200,6 +200,42 @@ class LlamaHFLoader {
     seed: seed,
   );
 
+  /// `deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B` — architecturally
+  /// identical to Qwen2.5-1.5B (this is a distillation of R1 into
+  /// the Qwen2 backbone). Same 28-layer, 1536-dim, 12/2 GQA stack;
+  /// same 151 936-token Qwen2 BPE vocab. The distilled model emits
+  /// `<think>...</think>` reasoning traces before its answer.
+  static LlamaConfig deepseekR1Qwen1_5BConfig({
+    Device device = Device.CPU,
+    int seed = 0,
+    int? maxCtx,
+  }) => qwen25_1_5BConfig(device: device, seed: seed, maxCtx: maxCtx);
+
+  /// `deepseek-ai/deepseek-coder-1.3b-base` / `-instruct` — 1.35 B
+  /// dense Llama-family code model. Full attention (no GQA:
+  /// numHeads == numKvHeads == 16). Tied word embeddings, no
+  /// attention biases. 16 k-token BPE vocab (32 256) with code-
+  /// oriented merges. ropeBase=10 000 (classic Llama-1 scale).
+  static LlamaConfig deepseekCoder1_3BConfig({
+    Device device = Device.CPU,
+    int seed = 0,
+    int? maxCtx,
+  }) => LlamaConfig(
+    vocabSize: 32256,
+    maxCtx: maxCtx ?? 16384,
+    embedDim: 2048,
+    numLayers: 24,
+    numHeads: 16,
+    numKvHeads: 16,
+    ffnDim: 5504,
+    ropeBase: 10000.0,
+    rmsNormEps: 1e-6,
+    tieWeights: true,
+    attentionBias: false,
+    device: device,
+    seed: seed,
+  );
+
   /// Load a `.safetensors` checkpoint into [model].
   ///
   /// When [keepFp16] is true, any `F16` tensors in the file are
