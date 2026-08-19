@@ -26,10 +26,13 @@ void main() {
       layer.weight.assign(
         Tensor.fromFloat32List([2], Float32List.fromList([0.0, 0.0])),
       );
-      final x = Tensor.fromList([1, 2, 2, 2], [
-        -1.0, 2.0, -3.0, 4.0, //
-        5.0, -6.0, 7.0, -8.0,
-      ]);
+      final x = Tensor.fromList(
+        [1, 2, 2, 2],
+        [
+          -1.0, 2.0, -3.0, 4.0, //
+          5.0, -6.0, 7.0, -8.0,
+        ],
+      );
       final y = layer(x).toList();
       expect(y, equals([0, 2, 0, 4, 5, 0, 7, 0]));
     });
@@ -127,10 +130,15 @@ void main() {
         File(_onetPath).existsSync() &&
         File(_facePath).existsSync();
     if (!hasAll) {
-      test('assets missing → skipped', () {}, skip: '''
+      test(
+        'assets missing → skipped',
+        () {},
+        skip:
+            '''
 Missing $_pnetPath / $_rnetPath / $_onetPath.
 Run: python3 scripts/convert_mtcnn_pt_to_safetensors.py \\
-    $_pnetPath $_rnetPath $_onetPath''');
+    $_pnetPath $_rnetPath $_onetPath''',
+      );
       return;
     }
 
@@ -141,8 +149,7 @@ Run: python3 scripts/convert_mtcnn_pt_to_safetensors.py \\
       MTCNNLoader.loadRNet(rnet, _rnetPath);
       final onet = ONet();
       MTCNNLoader.loadONet(onet, _onetPath);
-      final det =
-          MTCNN(pnet: pnet, rnet: rnet, onet: onet, minFaceSize: 40);
+      final det = MTCNN(pnet: pnet, rnet: rnet, onet: onet, minFaceSize: 40);
       final image = img.decodeImage(File(_facePath).readAsBytesSync())!;
       final faces = det.detect(image);
       expect(faces.length, equals(1));
@@ -156,11 +163,21 @@ Run: python3 scripts/convert_mtcnn_pt_to_safetensors.py \\
       final nose = faces.first.landmarks[2];
       final ml = faces.first.landmarks[3];
       final mr = faces.first.landmarks[4];
-      expect(le[0], lessThan(re[0]), reason: 'left eye should be left of right');
-      expect(le[1], lessThan(nose[1] + 30),
-          reason: 'left eye should be near or above nose');
-      expect(ml[1], greaterThan(nose[1] - 30),
-          reason: 'mouth should be below nose');
+      expect(
+        le[0],
+        lessThan(re[0]),
+        reason: 'left eye should be left of right',
+      );
+      expect(
+        le[1],
+        lessThan(nose[1] + 30),
+        reason: 'left eye should be near or above nose',
+      );
+      expect(
+        ml[1],
+        greaterThan(nose[1] - 30),
+        reason: 'mouth should be below nose',
+      );
       expect(mr[1], greaterThan(nose[1] - 30));
     });
   });

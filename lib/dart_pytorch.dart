@@ -73,6 +73,8 @@ export 'core/nn/vision/nms.dart';
 export 'core/nn/vision/mtcnn.dart';
 export 'core/nn/vision/mtcnn_loader.dart';
 export 'core/nn/vision/mtcnn_detector.dart';
+export 'core/nn/vision/dinov2.dart';
+export 'core/nn/vision/dinov2_loader.dart';
 export 'core/nn/prelu.dart';
 export 'core/utils/hungarian_algorithm.dart';
 export 'core/nn/modalities/audio_transformer.dart';

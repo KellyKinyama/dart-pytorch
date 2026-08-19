@@ -18,6 +18,7 @@ fix so the CUDA driver stub is found. Drop it on native Linux.
 | 9 | gpt-j-6b (CPU)   | 6.05B | CPU    | ✅ local | [bin/gptj/run_6b_cpu_api.dart](bin/gptj/run_6b_cpu_api.dart) |
 | 10 | smollm2-135m-instruct | 135M | CPU/GPU | ✅ local | [bin/smollm2_demo.dart](bin/smollm2_demo.dart) — Llama-arch tiny LM |
 | E1 | bge-small-en-v1.5 | 33M | CPU/GPU | ✅ local | [bin/bge_demo.dart](bin/bge_demo.dart) — SOTA sentence embeddings (CLS-pool + L2) |
+| V4 | dinov2-small | 22M | CPU/GPU | n/a | [bin/dinov2_demo.dart](bin/dinov2_demo.dart) — self-supervised ViT-S/14 image features |
 | S1 | whisper tiny.en  | 39M   | CPU    | ✅ local | [bin/whisper_demo.dart](bin/whisper_demo.dart) |
 | S2 | whisper tiny.en  | 39M   | GPU    | ✅ local | [bin/whisper_gpu_demo.dart](bin/whisper_gpu_demo.dart) |
 | F1 | facenet-vggface2 | 39M   | CPU    | n/a     | [bin/facenet/demo.dart](bin/facenet/demo.dart) — bit-exact vs. reference |
@@ -283,6 +284,64 @@ the SOTA-vs-legacy story. Same `SentenceEncoder` + `WordPieceTokenizer`
 plumbing as the RAG stack — swap `BertHFLoader.miniLmL6V2Config` for
 `BertHFLoader.bgeSmallEnConfig` and change `pooling` to
 `PoolingMode.cls`.
+
+## V4. dinov2-small (22M, self-supervised ViT-S/14)
+
+`facebook/dinov2-small` — Meta's SOTA self-supervised vision
+transformer. 12 layers, hidden=384, heads=6, patch=14. Adds
+**LayerScale** (per-channel `lambda1` after each attn/MLP,
+initialized at 1.0 for this checkpoint) on top of vanilla ViT.
+Perfect for image retrieval, dense features, clustering — anywhere
+you'd otherwise reach for CLIP-ViT-B/32.
+
+Weights (one-time, ~85 MB):
+
+```sh
+mkdir -p models/dinov2-small
+for f in model.safetensors config.json preprocessor_config.json; do
+  curl -L -o "models/dinov2-small/$f" \
+    "https://huggingface.co/facebook/dinov2-small/resolve/main/$f"
+done
+```
+
+Run:
+
+```sh
+LD_LIBRARY_PATH=/usr/lib/wsl/lib \
+  dart run bin/dinov2_demo.dart --gpu
+```
+
+Default embeds four gallery faces + prints pairwise cosine. Position
+embeddings are bilinearly interpolated from the checkpoint's native
+37×37 patch grid down to the 16×16 grid our demo uses (224×224).
+
+```
+== embed 4 images ==
+  398 ms  faces_gallery/Brad Pitt/sample_0.jpg
+  ...
+== pairwise cosine similarity ==
+  cos=0.4665   Brad Pitt/sample_0.jpg  ↔  Brad Pitt/sample_1.jpg
+  cos=0.1764   Brad Pitt/sample_0.jpg  ↔  Alia Bhatt/sample_0.jpg
+  cos=0.2517   Brad Pitt/sample_0.jpg  ↔  Billie Eilish/sample_0.jpg
+  cos=0.1941   Brad Pitt/sample_1.jpg  ↔  Alia Bhatt/sample_0.jpg
+  cos=0.3724   Brad Pitt/sample_1.jpg  ↔  Billie Eilish/sample_0.jpg
+  cos=0.6901   Alia Bhatt/sample_0.jpg  ↔  Billie Eilish/sample_0.jpg
+```
+
+**Interpretation**: DINOv2 captures *general* visual features
+(composition, pose, lighting) rather than identity — the 0.69 Alia
+↔ Billie score means both photos share a portrait framing, not that
+they're the same person. For face-specific ID use F1–F9 (FaceNet +
+MTCNN). Use DINOv2 for generic image similarity, place recognition,
+object retrieval.
+
+Tests: `dart test test/dinov2_test.dart` — 4 tests, ~15 s
+(structural + loader consumes 222/222 + non-trivial CLS features).
+
+Sources: [bin/dinov2_demo.dart](bin/dinov2_demo.dart),
+[lib/core/nn/vision/dinov2.dart](lib/core/nn/vision/dinov2.dart),
+[lib/core/nn/vision/dinov2_loader.dart](lib/core/nn/vision/dinov2_loader.dart),
+[test/dinov2_test.dart](test/dinov2_test.dart).
 
 ## Common overrides
 

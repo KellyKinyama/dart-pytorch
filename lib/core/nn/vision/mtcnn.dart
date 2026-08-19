@@ -288,8 +288,7 @@ Tensor _permuteWHCFlatten(Tensor x) {
       for (int hi = 0; hi < h; hi++) {
         for (int ci = 0; ci < c; ci++) {
           final srcIdx = ((ni * c + ci) * h + hi) * w + wi;
-          final dstIdx = ni * stride +
-              ((wi * h + hi) * c + ci);
+          final dstIdx = ni * stride + ((wi * h + hi) * c + ci);
           out[dstIdx] = src[srcIdx];
         }
       }

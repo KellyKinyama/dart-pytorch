@@ -232,11 +232,13 @@ class MTCNN {
         final dy1 = regData[1 * ph * pw + y * pw + x];
         final dx2 = regData[2 * ph * pw + y * pw + x];
         final dy2 = regData[3 * ph * pw + y * pw + x];
-        out.add(_ScoredBox(
-          box: [x1, y1, x2, y2],
-          score: score,
-          reg: [dx1, dy1, dx2, dy2],
-        ));
+        out.add(
+          _ScoredBox(
+            box: [x1, y1, x2, y2],
+            score: score,
+            reg: [dx1, dy1, dx2, dy2],
+          ),
+        );
       }
     }
     return out;
@@ -268,16 +270,18 @@ class MTCNN {
       final side = math.max(w, h);
       final cx = b.box[0] + w * 0.5;
       final cy = b.box[1] + h * 0.5;
-      out.add(_ScoredBox(
-        box: [
-          cx - side * 0.5,
-          cy - side * 0.5,
-          cx + side * 0.5,
-          cy + side * 0.5,
-        ],
-        score: b.score,
-        reg: b.reg,
-      ));
+      out.add(
+        _ScoredBox(
+          box: [
+            cx - side * 0.5,
+            cy - side * 0.5,
+            cx + side * 0.5,
+            cy + side * 0.5,
+          ],
+          score: b.score,
+          reg: b.reg,
+        ),
+      );
     }
     return out;
   }
@@ -359,16 +363,18 @@ class MTCNN {
     for (int i = 0; i < boxes.length; i++) {
       final score = probData[i * 2 + 1]; // face prob
       if (score < threshold) continue;
-      kept.add(_ScoredBox(
-        box: List<double>.from(boxes[i].box),
-        score: score,
-        reg: [
-          regData[i * 4],
-          regData[i * 4 + 1],
-          regData[i * 4 + 2],
-          regData[i * 4 + 3],
-        ],
-      ));
+      kept.add(
+        _ScoredBox(
+          box: List<double>.from(boxes[i].box),
+          score: score,
+          reg: [
+            regData[i * 4],
+            regData[i * 4 + 1],
+            regData[i * 4 + 2],
+            regData[i * 4 + 3],
+          ],
+        ),
+      );
     }
     if (kept.isEmpty) return const [];
     final surv = nms(
@@ -413,16 +419,18 @@ class MTCNN {
         pts.add(box[0] + w * landData[i * 10 + p]);
         pts.add(box[1] + h * landData[i * 10 + 5 + p]);
       }
-      kept.add(_ScoredBox(
-        box: List<double>.from(box),
-        score: score,
-        reg: [
-          regData[i * 4],
-          regData[i * 4 + 1],
-          regData[i * 4 + 2],
-          regData[i * 4 + 3],
-        ],
-      ));
+      kept.add(
+        _ScoredBox(
+          box: List<double>.from(box),
+          score: score,
+          reg: [
+            regData[i * 4],
+            regData[i * 4 + 1],
+            regData[i * 4 + 2],
+            regData[i * 4 + 3],
+          ],
+        ),
+      );
       keptLand.add(pts);
     }
     if (kept.isEmpty) return const [];
@@ -443,11 +451,9 @@ class MTCNN {
       for (int p = 0; p < 5; p++) {
         lm.add([ptsFlat[p * 2], ptsFlat[p * 2 + 1]]);
       }
-      results.add(DetectedFace(
-        box: regd[i].box,
-        prob: regd[i].score,
-        landmarks: lm,
-      ));
+      results.add(
+        DetectedFace(box: regd[i].box, prob: regd[i].score, landmarks: lm),
+      );
     }
     return results;
   }

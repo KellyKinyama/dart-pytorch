@@ -67,10 +67,17 @@ Future<void> main(List<String> args) async {
   MTCNNLoader.loadRNet(rnet, rnetPath);
   final onet = ONet();
   MTCNNLoader.loadONet(onet, onetPath);
-  final detector = MTCNN(pnet: pnet, rnet: rnet, onet: onet, minFaceSize: minFace);
+  final detector = MTCNN(
+    pnet: pnet,
+    rnet: rnet,
+    onet: onet,
+    minFaceSize: minFace,
+  );
   swLoad.stop();
-  print('  ${swLoad.elapsedMilliseconds} ms  '
-      '(minFaceSize=$minFace)');
+  print(
+    '  ${swLoad.elapsedMilliseconds} ms  '
+    '(minFaceSize=$minFace)',
+  );
 
   print('');
   print('== read image ==');
@@ -85,8 +92,10 @@ Future<void> main(List<String> args) async {
   print('  ${swD.elapsedMilliseconds} ms  → ${faces.length} face(s)');
   for (int i = 0; i < faces.length; i++) {
     final f = faces[i];
-    print('  #$i  prob=${f.prob.toStringAsFixed(3)}   '
-        'box=[${f.box.map((v) => v.toStringAsFixed(1)).join(", ")}]');
+    print(
+      '  #$i  prob=${f.prob.toStringAsFixed(3)}   '
+      'box=[${f.box.map((v) => v.toStringAsFixed(1)).join(", ")}]',
+    );
     for (int p = 0; p < f.landmarks.length; p++) {
       final lm = f.landmarks[p];
       final name = const [
@@ -96,8 +105,10 @@ Future<void> main(List<String> args) async {
         'mLeft   ',
         'mRight  ',
       ][p];
-      print('        $name  (${lm[0].toStringAsFixed(1)}, '
-          '${lm[1].toStringAsFixed(1)})');
+      print(
+        '        $name  (${lm[0].toStringAsFixed(1)}, '
+        '${lm[1].toStringAsFixed(1)})',
+      );
     }
   }
 

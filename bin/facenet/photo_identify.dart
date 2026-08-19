@@ -95,8 +95,12 @@ Future<void> main(List<String> args) async {
   MTCNNLoader.loadRNet(rnet, rnetPath);
   final onet = ONet();
   MTCNNLoader.loadONet(onet, onetPath);
-  final detector =
-      MTCNN(pnet: pnet, rnet: rnet, onet: onet, minFaceSize: minFace);
+  final detector = MTCNN(
+    pnet: pnet,
+    rnet: rnet,
+    onet: onet,
+    minFaceSize: minFace,
+  );
 
   final facenet = InceptionResnetV1(device: device);
   FaceNetLoader.loadFile(facenet, facenetWeights);
@@ -124,14 +128,16 @@ Future<void> main(List<String> args) async {
       enrolled.add(_Enrolled(id: e.key, embedding: sum));
     }
   } else if (File(dbPath).existsSync()) {
-    final db = jsonDecode(File(dbPath).readAsStringSync())
-        as Map<String, dynamic>;
+    final db =
+        jsonDecode(File(dbPath).readAsStringSync()) as Map<String, dynamic>;
     enrolled = [
       for (final e in (db['entries'] as List))
         _Enrolled(
           id: e['id'] as String,
-          embedding:
-              (e['embedding'] as List).cast<num>().map((v) => v.toDouble()).toList(),
+          embedding: (e['embedding'] as List)
+              .cast<num>()
+              .map((v) => v.toDouble())
+              .toList(),
         ),
     ];
     print('  db:       $dbPath  (${enrolled.length} identities)');
@@ -147,8 +153,10 @@ Future<void> main(List<String> args) async {
   final swD = Stopwatch()..start();
   final faces = detector.detect(image);
   swD.stop();
-  print('  ${swD.elapsedMilliseconds} ms  → ${faces.length} face(s)  '
-      '(${image.width} × ${image.height}, $imagePath)');
+  print(
+    '  ${swD.elapsedMilliseconds} ms  → ${faces.length} face(s)  '
+    '(${image.width} × ${image.height}, $imagePath)',
+  );
   if (faces.isEmpty) {
     print('');
     print('== no faces detected — try --min-face lower ==');
@@ -166,15 +174,16 @@ Future<void> main(List<String> args) async {
     final tensor = _imageToTensor(crop, device);
     final emb = facenet(tensor).toList();
     // Rank against enrolled.
-    final scored = enrolled
-        .map((e) => MapEntry(e.id, _dot(emb, e.embedding)))
-        .toList()
-      ..sort((a, b) => b.value.compareTo(a.value));
+    final scored =
+        enrolled.map((e) => MapEntry(e.id, _dot(emb, e.embedding))).toList()
+          ..sort((a, b) => b.value.compareTo(a.value));
     final winner = scored.first;
     final matched = winner.value >= threshold;
-    print('  face #$i  det=${f.prob.toStringAsFixed(3)}  '
-        'top=${winner.key} cos=${winner.value.toStringAsFixed(3)}  '
-        '${matched ? '→ MATCH' : '→ (below threshold)'}');
+    print(
+      '  face #$i  det=${f.prob.toStringAsFixed(3)}  '
+      'top=${winner.key} cos=${winner.value.toStringAsFixed(3)}  '
+      '${matched ? '→ MATCH' : '→ (below threshold)'}',
+    );
     if (scored.length > 1) {
       final r = scored[1];
       print('           runner-up=${r.key} cos=${r.value.toStringAsFixed(3)}');

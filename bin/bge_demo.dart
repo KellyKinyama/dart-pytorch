@@ -106,8 +106,10 @@ Future<void> main(List<String> args) async {
   print('== top matches ==');
   for (int i = 0; i < scored.length; i++) {
     final marker = i == 0 ? '★' : ' ';
-    print('  $marker  cos=${scored[i].value.toStringAsFixed(4)}   '
-        '${scored[i].key}');
+    print(
+      '  $marker  cos=${scored[i].value.toStringAsFixed(4)}   '
+      '${scored[i].key}',
+    );
   }
 
   swTotal.stop();
@@ -117,10 +119,9 @@ Future<void> main(List<String> args) async {
 
 Tensor _toTensor(WordPieceTokenizer tok, String text, Device device) {
   final ids = tok.encode(text, maxLength: 128);
-  final t = Tensor.fromList(
-    [ids.length],
-    ids.map((i) => i.toDouble()).toList(),
-  );
+  final t = Tensor.fromList([
+    ids.length,
+  ], ids.map((i) => i.toDouble()).toList());
   return device == Device.CPU ? t : t.to(device);
 }
 

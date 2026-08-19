@@ -85,8 +85,10 @@ Future<void> main(List<String> args) async {
   final full = generated.map((v) => v.toInt()).toList();
   final newTokens = full.sublist(ids.length);
   final text = tokenizer.decode(newTokens);
-  print('  ${swG.elapsedMilliseconds} ms  (${newTokens.length} tokens, '
-      '${(newTokens.length * 1000.0 / swG.elapsedMilliseconds).toStringAsFixed(1)} tok/s)');
+  print(
+    '  ${swG.elapsedMilliseconds} ms  (${newTokens.length} tokens, '
+    '${(newTokens.length * 1000.0 / swG.elapsedMilliseconds).toStringAsFixed(1)} tok/s)',
+  );
 
   print('');
   print('== completion ==');
