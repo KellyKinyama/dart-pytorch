@@ -686,6 +686,62 @@ class ClipHFLoader {
       '(checked prefixes: $candidates). Is this a CLIP text safetensors?',
     );
   }
+
+  // -----------------------------------------------------------------
+  // Joint CLIPModel projection heads.
+  // -----------------------------------------------------------------
+
+  /// Load the `visual_projection.weight` `[projDim, visionHidden]` and
+  /// `text_projection.weight` `[projDim, textHidden]` from a joint
+  /// `CLIPModel` safetensors bundle, plus the scalar `logit_scale`.
+  ///
+  /// Returns `null` if the file is a standalone vision- or text-only
+  /// checkpoint (no projections present).
+  static CLIPProjections? loadProjections(String path) {
+    final state = SafeTensors.loadFile(path);
+    return loadProjectionsMap(state);
+  }
+
+  static CLIPProjections? loadProjectionsMap(Map<String, Tensor> state) {
+    final visW = state['visual_projection.weight'];
+    final txtW = state['text_projection.weight'];
+    final scale = state['logit_scale'];
+    if (visW == null || txtW == null) {
+      return null;
+    }
+    return CLIPProjections(
+      visualProjection: visW,
+      textProjection: txtW,
+      logitScale: scale,
+    );
+  }
+}
+
+/// Projection heads + scalar `logit_scale` from a joint `CLIPModel`
+/// checkpoint. Used to map both towers' pooled outputs into a shared
+/// embedding space and scale the cosine-similarity logits at the
+/// contrastive softmax.
+class CLIPProjections {
+  /// `[projDim, visionHidden]` — matches HF `visual_projection.weight`.
+  final Tensor visualProjection;
+
+  /// `[projDim, textHidden]` — matches HF `text_projection.weight`.
+  final Tensor textProjection;
+
+  /// Scalar `log(1 / temperature)`. OpenAI defaults to `log(100) ≈
+  /// 4.6052`. May be null when the file has no `logit_scale` entry —
+  /// callers should default to that value.
+  final Tensor? logitScale;
+
+  const CLIPProjections({
+    required this.visualProjection,
+    required this.textProjection,
+    this.logitScale,
+  });
+
+  int get projDim => visualProjection.shape[0];
+  int get visionHidden => visualProjection.shape[1];
+  int get textHidden => textProjection.shape[1];
 }
 
 class ClipLoadReport {

@@ -333,4 +333,39 @@ void main() {
       }
     });
   });
+
+  group('ClipHFLoader projections', () {
+    test('loadProjectionsMap returns null when both projections absent', () {
+      final s = <String, Tensor>{};
+      expect(ClipHFLoader.loadProjectionsMap(s), isNull);
+    });
+
+    test('loadProjectionsMap parses shapes correctly', () {
+      final s = <String, Tensor>{
+        'visual_projection.weight':
+            Tensor.fromList([512, 768], List<double>.filled(512 * 768, 0.1)),
+        'text_projection.weight':
+            Tensor.fromList([512, 512], List<double>.filled(512 * 512, 0.2)),
+        'logit_scale': Tensor.fromList([1], [4.6052]),
+      };
+      final p = ClipHFLoader.loadProjectionsMap(s)!;
+      expect(p.projDim, 512);
+      expect(p.visionHidden, 768);
+      expect(p.textHidden, 512);
+      expect(p.logitScale, isNotNull);
+      expect(p.logitScale!.toList()[0], closeTo(4.6052, 1e-4));
+    });
+
+    test('loadProjectionsMap accepts missing logit_scale', () {
+      final s = <String, Tensor>{
+        'visual_projection.weight':
+            Tensor.fromList([512, 768], List<double>.filled(512 * 768, 0.1)),
+        'text_projection.weight':
+            Tensor.fromList([512, 512], List<double>.filled(512 * 512, 0.2)),
+      };
+      final p = ClipHFLoader.loadProjectionsMap(s);
+      expect(p, isNotNull);
+      expect(p!.logitScale, isNull);
+    });
+  });
 }
