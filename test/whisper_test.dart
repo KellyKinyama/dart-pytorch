@@ -71,6 +71,27 @@ void main() {
         expect(pe[i], closeTo(1.0, 1e-6), reason: 'cos(0) at i=$i');
       }
     });
+
+    test('large-v3 config: 128 mels + 32 layers builds and matches shapes',
+        () {
+      final enc = WhisperEncoder(
+        nMels: 128,
+        embedDim: 1280,
+        numHeads: 20,
+        numLayers: 32,
+        nCtx: 1500,
+      );
+      // conv1 weight is [outC=1280, inC=128, k=3]; conv2 [1280, 1280, 3].
+      expect(enc.nMels, equals(128));
+      expect(enc.embedDim, equals(1280));
+      expect(enc.blocks.length, equals(32));
+      expect(enc.blocks.first.numHeads, equals(20));
+      expect(enc.blocks.first.headDim, equals(64));
+      // Per block: attn_ln(2) + mlp_ln(2) + q/k/v heads (2+1+2=5 per head)
+      // * 20 heads = 100 + outProj(2) + mlp0(2) + mlp2(2) = 110.
+      // Plus conv1(2) + conv2(2) + ln_post(2) = 6.
+      expect(enc.parameters().length, equals(32 * 110 + 6));
+    });
   });
 
   group('WhisperDecoder (structural)', () {
