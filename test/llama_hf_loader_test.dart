@@ -51,6 +51,28 @@ Map<String, Tensor> _dumpToHFMap(Llama m) {
     );
     state['$p.self_attn.o_proj.weight'] = blk.attn.wo.weight;
 
+    if (cfg.attentionBias) {
+      // Per-head Linear stores bias as [1, headDim]; concatenate into
+      // the [H*headDim] / [Hkv*headDim] flat vector HF ships.
+      List<double> concatBias(List<Linear> parts) {
+        final out = <double>[];
+        for (final l in parts) {
+          out.addAll(l.bias!.toList());
+        }
+        return out;
+      }
+
+      state['$p.self_attn.q_proj.bias'] = Tensor.fromList([
+        h * headDim,
+      ], concatBias(blk.attn.wq));
+      state['$p.self_attn.k_proj.bias'] = Tensor.fromList([
+        kvH * headDim,
+      ], concatBias(blk.attn.wk));
+      state['$p.self_attn.v_proj.bias'] = Tensor.fromList([
+        kvH * headDim,
+      ], concatBias(blk.attn.wv));
+    }
+
     state['$p.mlp.gate_proj.weight'] = blk.ffn.gateProj.weight;
     state['$p.mlp.up_proj.weight'] = blk.ffn.upProj.weight;
     state['$p.mlp.down_proj.weight'] = blk.ffn.downProj.weight;
@@ -224,5 +246,80 @@ void main() {
       expect(cfg.numLayers, 32);
       expect(cfg.ffnDim, 14336);
     });
+
+    test('qwen25_0_5BConfig has QKV bias enabled', () {
+      final cfg = LlamaHFLoader.qwen25_0_5BConfig();
+      expect(cfg.vocabSize, 151936);
+      expect(cfg.embedDim, 896);
+      expect(cfg.numLayers, 24);
+      expect(cfg.numHeads, 14);
+      expect(cfg.numKvHeads, 2);
+      expect(cfg.ffnDim, 4864);
+      expect(cfg.ropeBase, 1000000.0);
+      expect(cfg.tieWeights, isTrue);
+      expect(cfg.attentionBias, isTrue);
+      expect(cfg.outBias, isFalse);
+    });
+
+    test(
+      'roundtrip: dump Qwen-style (attentionBias) model -> load -> match',
+      () {
+        final cfg = LlamaConfig(
+          vocabSize: 32,
+          maxCtx: 8,
+          embedDim: 8,
+          numLayers: 2,
+          numHeads: 4,
+          numKvHeads: 2,
+          ffnDim: 16,
+          attentionBias: true,
+          seed: 321,
+        );
+        final src = Llama(cfg);
+        final state = _dumpToHFMap(src);
+        // Expect the extra 3 bias tensors per layer.
+        expect(
+          state.containsKey('model.layers.0.self_attn.q_proj.bias'),
+          isTrue,
+        );
+        expect(
+          state.containsKey('model.layers.0.self_attn.k_proj.bias'),
+          isTrue,
+        );
+        expect(
+          state.containsKey('model.layers.0.self_attn.v_proj.bias'),
+          isTrue,
+        );
+
+        final dst = Llama(
+          LlamaConfig(
+            vocabSize: cfg.vocabSize,
+            maxCtx: cfg.maxCtx,
+            embedDim: cfg.embedDim,
+            numLayers: cfg.numLayers,
+            numHeads: cfg.numHeads,
+            numKvHeads: cfg.numKvHeads,
+            ffnDim: cfg.ffnDim,
+            attentionBias: true,
+            seed: 111,
+          ),
+        );
+        final report = LlamaHFLoader.loadMap(dst, state);
+        expect(report.unusedKeys, isEmpty);
+        // Base 9 keys/layer + 3 bias keys = 12/layer + embed + norm.
+        expect(report.consumedCount, 1 + cfg.numLayers * 12 + 1);
+
+        final tokens = Tensor.fromList([4], [0.0, 3.0, 1.0, 2.0]);
+        final srcLogits = src(tokens).toList();
+        final dstLogits = dst(tokens).toList();
+        for (int i = 0; i < srcLogits.length; i++) {
+          expect(
+            (srcLogits[i] - dstLogits[i]).abs() < 1e-5,
+            isTrue,
+            reason: 'logit $i: src=${srcLogits[i]} dst=${dstLogits[i]}',
+          );
+        }
+      },
+    );
   });
 }

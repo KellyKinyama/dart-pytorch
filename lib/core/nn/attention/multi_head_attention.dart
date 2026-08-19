@@ -49,6 +49,7 @@ class MultiHeadAttention extends Module {
     this.numHeads, {
     int? numKvHeads,
     bool bias = false,
+    bool? outBias,
     double dropoutP = 0.0,
     Device device = Device.CPU,
     int seed = 0,
@@ -85,10 +86,13 @@ class MultiHeadAttention extends Module {
            seed: seed + 2000 + h,
          ),
        ),
+       // Qwen2 uses Q/K/V bias but no O bias — hence outBias is
+       // decoupled from `bias`. Defaults to `bias` to preserve
+       // existing callers (GPT-2, BERT, Pythia, Llama).
        wo = Linear(
          embedDim,
          embedDim,
-         bias: bias,
+         bias: outBias ?? bias,
          device: device,
          seed: seed + 3000,
        ),

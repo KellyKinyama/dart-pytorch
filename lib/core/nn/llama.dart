@@ -45,6 +45,15 @@ class LlamaConfig {
   final double ropeBase;
   final double rmsNormEps;
   final bool tieWeights;
+
+  /// Whether Q/K/V projections carry a bias term. Llama-1/2/3 and
+  /// Mistral: false. Qwen2 / Qwen2.5: true.
+  final bool attentionBias;
+
+  /// Whether the attention output projection carries a bias term.
+  /// Qwen2.5 has QKV bias but no output bias — so this stays false
+  /// even when [attentionBias] is true.
+  final bool outBias;
   final Device device;
   final int seed;
 
@@ -59,6 +68,8 @@ class LlamaConfig {
     this.ropeBase = 500000.0,
     this.rmsNormEps = 1e-5,
     this.tieWeights = true,
+    this.attentionBias = false,
+    this.outBias = false,
     this.device = Device.CPU,
     this.seed = 0,
   }) : numKvHeads = numKvHeads ?? numHeads {
@@ -90,6 +101,8 @@ class LlamaBlock extends Module {
     required int ffnDim,
     required RopeCache rope,
     double rmsNormEps = 1e-5,
+    bool attentionBias = false,
+    bool outBias = false,
     Device device = Device.CPU,
     int seed = 0,
   }) : attnNorm = RMSNorm(embedDim, eps: rmsNormEps, device: device),
@@ -98,7 +111,8 @@ class LlamaBlock extends Module {
          embedDim,
          numHeads,
          numKvHeads: numKvHeads,
-         bias: false,
+         bias: attentionBias,
+         outBias: outBias,
          device: device,
          seed: seed,
        ),
@@ -174,6 +188,8 @@ class Llama extends Module {
           ffnDim: config.ffnDim,
           rope: rope,
           rmsNormEps: config.rmsNormEps,
+          attentionBias: config.attentionBias,
+          outBias: config.outBias,
           device: config.device,
           seed: config.seed + 100000 + i * 1000,
         ),

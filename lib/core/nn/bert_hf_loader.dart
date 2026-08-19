@@ -93,6 +93,41 @@ class BertHFLoader {
     seed: seed,
   );
 
+  /// thenlper/gte-small: 12 layers, hidden=384, heads=12, ffn=1536.
+  /// Alibaba's GTE — same shape family as BGE / MiniLM-L12, uses mean
+  /// pooling (`PoolingMode.mean`) rather than CLS. LayerNormEps=1e-12.
+  static BertConfig gteSmallConfig({
+    Device device = Device.CPU,
+    int seed = 0,
+  }) => BertConfig(
+    vocabSize: 30522,
+    maxPositionEmbeddings: 512,
+    embedDim: 384,
+    numLayers: 12,
+    numHeads: 12,
+    intermediateSize: 1536,
+    layerNormEps: 1e-12,
+    typeVocabSize: 2,
+    device: device,
+    seed: seed,
+  );
+
+  /// thenlper/gte-base: 12 layers, hidden=768, heads=12, ffn=3072.
+  /// Same shape as `bert-base-uncased`. Mean-pooling encoder.
+  static BertConfig gteBaseConfig({Device device = Device.CPU, int seed = 0}) =>
+      BertConfig(
+        vocabSize: 30522,
+        maxPositionEmbeddings: 512,
+        embedDim: 768,
+        numLayers: 12,
+        numHeads: 12,
+        intermediateSize: 3072,
+        layerNormEps: 1e-12,
+        typeVocabSize: 2,
+        device: device,
+        seed: seed,
+      );
+
   static BertLoadReport loadFile(
     BertModel model,
     String path, {

@@ -29,6 +29,7 @@ class Conv1d extends Module {
   final int kernelSize;
   final int stride;
   final int padding;
+  final int dilation;
   final Device device;
 
   /// Kernel weights, stored as `[Cin*K, Cout]` (already transposed
@@ -46,6 +47,7 @@ class Conv1d extends Module {
     required this.kernelSize,
     this.stride = 1,
     this.padding = 0,
+    this.dilation = 1,
     bool bias = true,
     this.device = Device.CPU,
   }) {
@@ -122,7 +124,8 @@ class Conv1d extends Module {
       );
     }
     final l = input.shape[2];
-    final lOut = (l + 2 * padding - kernelSize) ~/ stride + 1;
+    final effectiveK = dilation * (kernelSize - 1) + 1;
+    final lOut = (l + 2 * padding - effectiveK) ~/ stride + 1;
     if (lOut <= 0) {
       throw ArgumentError(
         'Conv1d: kernel/padding produce non-positive output length',
@@ -149,7 +152,7 @@ class Conv1d extends Module {
         for (int c = 0; c < inChannels; c++) {
           final channelBase = batchBase + c * l;
           for (int k = 0; k < kernelSize; k++) {
-            final idx = start + k;
+            final idx = start + k * dilation;
             cols[write++] = (idx >= 0 && idx < l)
                 ? flat[channelBase + idx]
                 : 0.0;

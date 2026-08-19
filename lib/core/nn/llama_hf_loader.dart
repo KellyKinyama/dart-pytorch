@@ -10,6 +10,13 @@
 ///     24 heads, 8 kv-heads, ffn 8192, ropeBase 500000, **tied** head.
 ///   * `meta-llama/Llama-3.1-8B-Instruct` — 32 layers, 4096 embed,
 ///     32 heads, 8 kv-heads, ffn 14336, ropeBase 500000, **untied**.
+///   * `Qwen/Qwen2.5-0.5B(-Instruct)` — 24 layers, 896 embed, 14
+///     heads, 2 kv-heads, ffn 4864, ropeBase 1e6, **tied**, **Q/K/V
+///     biases** (config.attentionBias = true, config.outBias = false).
+///   * `Qwen/Qwen2.5-1.5B(-Instruct)` — 28 layers, 1536 embed, 12
+///     heads, 2 kv-heads, ffn 8960, ropeBase 1e6, **tied**, QKV bias.
+///   * `Qwen/Qwen2.5-3B(-Instruct)` — 36 layers, 2048 embed, 16
+///     heads, 2 kv-heads, ffn 11008, ropeBase 1e6, **tied**, QKV bias.
 ///
 /// HF key conventions handled here (Llama's namespace has no
 /// leading `gpt_neox.` — top-level `model.` prefix):
@@ -18,8 +25,12 @@
 ///   * `model.layers.{i}.input_layernorm.weight` — `[D]`
 ///   * `model.layers.{i}.self_attn.q_proj.weight` — `[H·hd, D]`
 ///     (H = numHeads, hd = headDim). Row-split into per-head slices.
+///   * `model.layers.{i}.self_attn.q_proj.bias` — `[H·hd]` (Qwen only;
+///     ignored when `config.attentionBias == false`).
 ///   * `model.layers.{i}.self_attn.k_proj.weight` — `[Hkv·hd, D]`
+///   * `model.layers.{i}.self_attn.k_proj.bias` — `[Hkv·hd]` (Qwen)
 ///   * `model.layers.{i}.self_attn.v_proj.weight` — `[Hkv·hd, D]`
+///   * `model.layers.{i}.self_attn.v_proj.bias` — `[Hkv·hd]` (Qwen)
 ///   * `model.layers.{i}.self_attn.o_proj.weight` — `[D, D]`
 ///   * `model.layers.{i}.post_attention_layernorm.weight` — `[D]`
 ///   * `model.layers.{i}.mlp.gate_proj.weight` — `[F, D]`
@@ -32,6 +43,8 @@
 /// Ignored (safe): per-layer `self_attn.rotary_emb.inv_freq` — we
 /// recompute RoPE tables from `config.ropeBase`.
 library;
+
+import 'dart:typed_data';
 
 import '../tensor/tensor.dart';
 import '../tensor/dtype.dart';
@@ -117,6 +130,72 @@ class LlamaHFLoader {
     ropeBase: 500000.0,
     rmsNormEps: 1e-5,
     tieWeights: false,
+    device: device,
+    seed: seed,
+  );
+
+  /// Qwen2.5-0.5B (base or -Instruct) config. Same Llama-family
+  /// architecture (RMSNorm + SwiGLU + RoPE + GQA) but with **Q/K/V
+  /// biases** — Qwen2's one architectural quirk relative to Llama.
+  /// `tieWeights: true` for 0.5B / 1.5B / 3B; false for 7B+.
+  static LlamaConfig qwen25_0_5BConfig({
+    Device device = Device.CPU,
+    int seed = 0,
+    int? maxCtx,
+  }) => LlamaConfig(
+    vocabSize: 151936,
+    maxCtx: maxCtx ?? 32768,
+    embedDim: 896,
+    numLayers: 24,
+    numHeads: 14,
+    numKvHeads: 2,
+    ffnDim: 4864,
+    ropeBase: 1000000.0,
+    rmsNormEps: 1e-6,
+    tieWeights: true,
+    attentionBias: true,
+    device: device,
+    seed: seed,
+  );
+
+  /// Qwen2.5-1.5B config. `tieWeights: true`.
+  static LlamaConfig qwen25_1_5BConfig({
+    Device device = Device.CPU,
+    int seed = 0,
+    int? maxCtx,
+  }) => LlamaConfig(
+    vocabSize: 151936,
+    maxCtx: maxCtx ?? 32768,
+    embedDim: 1536,
+    numLayers: 28,
+    numHeads: 12,
+    numKvHeads: 2,
+    ffnDim: 8960,
+    ropeBase: 1000000.0,
+    rmsNormEps: 1e-6,
+    tieWeights: true,
+    attentionBias: true,
+    device: device,
+    seed: seed,
+  );
+
+  /// Qwen2.5-3B config. `tieWeights: true`.
+  static LlamaConfig qwen25_3BConfig({
+    Device device = Device.CPU,
+    int seed = 0,
+    int? maxCtx,
+  }) => LlamaConfig(
+    vocabSize: 151936,
+    maxCtx: maxCtx ?? 32768,
+    embedDim: 2048,
+    numLayers: 36,
+    numHeads: 16,
+    numKvHeads: 2,
+    ffnDim: 11008,
+    ropeBase: 1000000.0,
+    rmsNormEps: 1e-6,
+    tieWeights: true,
+    attentionBias: true,
     device: device,
     seed: seed,
   );
@@ -242,6 +321,45 @@ class LlamaHFLoader {
         );
       }
 
+      // Qwen2/2.5 additionally ship 1-D bias vectors on Q/K/V. Slice
+      // them per head and reshape into the [1, headDim] layout that
+      // Linear expects.
+      if (cfg.attentionBias) {
+        final qB = _expectShape(take('$p.self_attn.q_proj.bias'), [
+          h * headDim,
+        ], '$p.self_attn.q_proj.bias');
+        for (int hh = 0; hh < h; hh++) {
+          _copy(
+            block.attn.wq[hh].bias!,
+            _reshapeVectorTo1xN(
+              _sliceVector(qB, hh * headDim, (hh + 1) * headDim),
+            ),
+          );
+        }
+        final kB = _expectShape(take('$p.self_attn.k_proj.bias'), [
+          kvH * headDim,
+        ], '$p.self_attn.k_proj.bias');
+        for (int hh = 0; hh < kvH; hh++) {
+          _copy(
+            block.attn.wk[hh].bias!,
+            _reshapeVectorTo1xN(
+              _sliceVector(kB, hh * headDim, (hh + 1) * headDim),
+            ),
+          );
+        }
+        final vB = _expectShape(take('$p.self_attn.v_proj.bias'), [
+          kvH * headDim,
+        ], '$p.self_attn.v_proj.bias');
+        for (int hh = 0; hh < kvH; hh++) {
+          _copy(
+            block.attn.wv[hh].bias!,
+            _reshapeVectorTo1xN(
+              _sliceVector(vB, hh * headDim, (hh + 1) * headDim),
+            ),
+          );
+        }
+      }
+
       // o_proj — [D, D].
       _copy(
         block.attn.wo.weight,
@@ -343,6 +461,25 @@ class LlamaHFLoader {
   // through the per-head Q/K/V split.
   static Tensor _sliceRows(Tensor t, int start, int end) =>
       t.sliceRows(start, end);
+
+  static Tensor _sliceVector(Tensor t, int start, int end) {
+    final src = t.toList();
+    final n = end - start;
+    final out = Float32List(n);
+    for (int i = 0; i < n; i++) {
+      out[i] = src[start + i];
+    }
+    return Tensor.fromList([n], out, device: Device.CPU);
+  }
+
+  static Tensor _reshapeVectorTo1xN(Tensor v) {
+    if (v.shape.length != 1) {
+      throw ArgumentError(
+        '_reshapeVectorTo1xN: expected rank 1, got ${v.shape}',
+      );
+    }
+    return Tensor.fromList([1, v.shape[0]], v.toList(), device: Device.CPU);
+  }
 }
 
 class LlamaLoadReport {

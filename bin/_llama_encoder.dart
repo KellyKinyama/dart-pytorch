@@ -78,10 +78,20 @@ LlamaConfig configForLlamaPreset(String preset, Device device) {
     case 'llama-3.1-8b':
     case 'llama-3.1-8b-instruct':
       return LlamaHFLoader.llama31_8BConfig(device: device);
+    case 'qwen2.5-0.5b':
+    case 'qwen2.5-0.5b-instruct':
+      return LlamaHFLoader.qwen25_0_5BConfig(device: device);
+    case 'qwen2.5-1.5b':
+    case 'qwen2.5-1.5b-instruct':
+      return LlamaHFLoader.qwen25_1_5BConfig(device: device);
+    case 'qwen2.5-3b':
+    case 'qwen2.5-3b-instruct':
+      return LlamaHFLoader.qwen25_3BConfig(device: device);
     default:
       stderr.writeln(
         'unknown llama preset "$preset"; use '
-        'smollm2-135m | llama-3.2-1b | llama-3.2-3b | llama-3.1-8b',
+        'smollm2-135m | llama-3.2-1b | llama-3.2-3b | llama-3.1-8b | '
+        'qwen2.5-0.5b | qwen2.5-1.5b | qwen2.5-3b',
       );
       exit(64);
   }
