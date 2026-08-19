@@ -332,6 +332,11 @@ precompute from the encoder memory — 1.6-1.8× faster than the
 recompute-everything fallback. Pass `useCache: false` in-code to
 disable for A/B numerical checks.
 
+GPU throughput (`--gpu`): **~5 tok/s** on flan-t5-small (1.8× CPU),
+**~0.9 tok/s** on flan-t5-base (1.3× CPU). Output is bit-exact
+across CPU and GPU. Speedup is modest because T5's per-head Linear
+loop launches many small kernels; still worth it on longer decodes.
+
 Verified against `google/flan-t5-base` (~990 MB):
 
 ```sh
