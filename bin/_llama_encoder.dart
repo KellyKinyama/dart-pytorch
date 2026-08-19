@@ -69,6 +69,12 @@ LlamaConfig configForLlamaPreset(String preset, Device device) {
     case 'smollm2-135m':
     case 'smollm2-135m-instruct':
       return LlamaHFLoader.smollm2_135mConfig(device: device);
+    case 'smollm2-360m':
+    case 'smollm2-360m-instruct':
+      return LlamaHFLoader.smollm2_360mConfig(device: device);
+    case 'smollm2-1.7b':
+    case 'smollm2-1.7b-instruct':
+      return LlamaHFLoader.smollm2_1_7BConfig(device: device);
     case 'llama-3.2-1b':
     case 'llama-3.2-1b-instruct':
       return LlamaHFLoader.llama32_1BConfig(device: device);
@@ -94,11 +100,26 @@ LlamaConfig configForLlamaPreset(String preset, Device device) {
     case 'deepseek-coder-1.3b-base':
     case 'deepseek-coder-1.3b-instruct':
       return LlamaHFLoader.deepseekCoder1_3BConfig(device: device);
+    case 'qwen2.5-coder-0.5b':
+    case 'qwen2.5-coder-0.5b-instruct':
+      return LlamaHFLoader.qwen25Coder_0_5BConfig(device: device);
+    case 'qwen2.5-coder-1.5b':
+    case 'qwen2.5-coder-1.5b-instruct':
+      return LlamaHFLoader.qwen25Coder_1_5BConfig(device: device);
+    case 'qwen2.5-coder-3b':
+    case 'qwen2.5-coder-3b-instruct':
+      return LlamaHFLoader.qwen25Coder_3BConfig(device: device);
+    case 'qwen2.5-math-1.5b':
+    case 'qwen2.5-math-1.5b-instruct':
+      return LlamaHFLoader.qwen25Math_1_5BConfig(device: device);
     default:
       stderr.writeln(
         'unknown llama preset "$preset"; use '
-        'smollm2-135m | llama-3.2-1b | llama-3.2-3b | llama-3.1-8b | '
+        'smollm2-135m | smollm2-360m | smollm2-1.7b | '
+        'llama-3.2-1b | llama-3.2-3b | llama-3.1-8b | '
         'qwen2.5-0.5b | qwen2.5-1.5b | qwen2.5-3b | '
+        'qwen2.5-coder-0.5b | qwen2.5-coder-1.5b | qwen2.5-coder-3b | '
+        'qwen2.5-math-1.5b | '
         'deepseek-r1-distill-qwen-1.5b | deepseek-coder-1.3b',
       );
       exit(64);

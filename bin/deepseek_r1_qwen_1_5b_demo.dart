@@ -27,8 +27,7 @@ import '_llama_encoder.dart';
 
 const _weightsDefault =
     'models/deepseek-r1-distill-qwen-1.5b/model.safetensors';
-const _tokenizerDefault =
-    'models/deepseek-r1-distill-qwen-1.5b/tokenizer.json';
+const _tokenizerDefault = 'models/deepseek-r1-distill-qwen-1.5b/tokenizer.json';
 
 Future<void> main(List<String> args) async {
   var weightsPath = _weightsDefault;

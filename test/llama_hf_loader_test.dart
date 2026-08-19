@@ -289,6 +289,59 @@ void main() {
       expect(cfg.attentionBias, isFalse);
     });
 
+    test('smollm2_360mConfig has expected shape parameters', () {
+      final cfg = LlamaHFLoader.smollm2_360mConfig();
+      expect(cfg.vocabSize, 49152);
+      expect(cfg.embedDim, 960);
+      expect(cfg.numLayers, 32);
+      expect(cfg.numHeads, 15);
+      expect(cfg.numKvHeads, 5);
+      expect(cfg.ffnDim, 2560);
+      expect(cfg.tieWeights, isTrue);
+    });
+
+    test('smollm2_1_7BConfig has expected shape parameters', () {
+      final cfg = LlamaHFLoader.smollm2_1_7BConfig();
+      expect(cfg.vocabSize, 49152);
+      expect(cfg.embedDim, 2048);
+      expect(cfg.numLayers, 24);
+      expect(cfg.numHeads, 32);
+      expect(cfg.numKvHeads, 32);
+      expect(cfg.ffnDim, 8192);
+      expect(cfg.tieWeights, isTrue);
+    });
+
+    test('qwen25Coder configs alias base qwen25 configs at each size', () {
+      void expectSameArch(LlamaConfig a, LlamaConfig b) {
+        expect(a.vocabSize, equals(b.vocabSize));
+        expect(a.embedDim, equals(b.embedDim));
+        expect(a.numLayers, equals(b.numLayers));
+        expect(a.numHeads, equals(b.numHeads));
+        expect(a.numKvHeads, equals(b.numKvHeads));
+        expect(a.ffnDim, equals(b.ffnDim));
+        expect(a.ropeBase, equals(b.ropeBase));
+        expect(a.tieWeights, equals(b.tieWeights));
+        expect(a.attentionBias, equals(b.attentionBias));
+      }
+
+      expectSameArch(
+        LlamaHFLoader.qwen25Coder_0_5BConfig(),
+        LlamaHFLoader.qwen25_0_5BConfig(),
+      );
+      expectSameArch(
+        LlamaHFLoader.qwen25Coder_1_5BConfig(),
+        LlamaHFLoader.qwen25_1_5BConfig(),
+      );
+      expectSameArch(
+        LlamaHFLoader.qwen25Coder_3BConfig(),
+        LlamaHFLoader.qwen25_3BConfig(),
+      );
+      expectSameArch(
+        LlamaHFLoader.qwen25Math_1_5BConfig(),
+        LlamaHFLoader.qwen25_1_5BConfig(),
+      );
+    });
+
     test(
       'roundtrip: dump Qwen-style (attentionBias) model -> load -> match',
       () {

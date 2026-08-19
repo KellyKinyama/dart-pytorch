@@ -74,6 +74,48 @@ class LlamaHFLoader {
     seed: seed,
   );
 
+  /// HuggingFaceTB/SmolLM2-360M(-Instruct) config. Same Llama arch,
+  /// 32 layers, 960 dim, 15/5 GQA, ffn=2560. `tieWeights: true`.
+  static LlamaConfig smollm2_360mConfig({
+    Device device = Device.CPU,
+    int seed = 0,
+    int? maxCtx,
+  }) => LlamaConfig(
+    vocabSize: 49152,
+    maxCtx: maxCtx ?? 8192,
+    embedDim: 960,
+    numLayers: 32,
+    numHeads: 15,
+    numKvHeads: 5,
+    ffnDim: 2560,
+    ropeBase: 100000.0,
+    rmsNormEps: 1e-5,
+    tieWeights: true,
+    device: device,
+    seed: seed,
+  );
+
+  /// HuggingFaceTB/SmolLM2-1.7B(-Instruct) config. 24 layers, 2048
+  /// dim, 32 heads (no GQA), ffn=8192. `tieWeights: true`.
+  static LlamaConfig smollm2_1_7BConfig({
+    Device device = Device.CPU,
+    int seed = 0,
+    int? maxCtx,
+  }) => LlamaConfig(
+    vocabSize: 49152,
+    maxCtx: maxCtx ?? 8192,
+    embedDim: 2048,
+    numLayers: 24,
+    numHeads: 32,
+    numKvHeads: 32,
+    ffnDim: 8192,
+    ropeBase: 130000.0,
+    rmsNormEps: 1e-5,
+    tieWeights: true,
+    device: device,
+    seed: seed,
+  );
+
   /// Llama-3.2-1B-Instruct config. `tieWeights: true`.
   static LlamaConfig llama32_1BConfig({
     Device device = Device.CPU,
@@ -235,6 +277,34 @@ class LlamaHFLoader {
     device: device,
     seed: seed,
   );
+
+  /// `Qwen/Qwen2.5-Coder-0.5B(-Instruct)` — same arch as Qwen2.5-0.5B.
+  static LlamaConfig qwen25Coder_0_5BConfig({
+    Device device = Device.CPU,
+    int seed = 0,
+    int? maxCtx,
+  }) => qwen25_0_5BConfig(device: device, seed: seed, maxCtx: maxCtx);
+
+  /// `Qwen/Qwen2.5-Coder-1.5B(-Instruct)` — same arch as Qwen2.5-1.5B.
+  static LlamaConfig qwen25Coder_1_5BConfig({
+    Device device = Device.CPU,
+    int seed = 0,
+    int? maxCtx,
+  }) => qwen25_1_5BConfig(device: device, seed: seed, maxCtx: maxCtx);
+
+  /// `Qwen/Qwen2.5-Coder-3B(-Instruct)` — same arch as Qwen2.5-3B.
+  static LlamaConfig qwen25Coder_3BConfig({
+    Device device = Device.CPU,
+    int seed = 0,
+    int? maxCtx,
+  }) => qwen25_3BConfig(device: device, seed: seed, maxCtx: maxCtx);
+
+  /// `Qwen/Qwen2.5-Math-1.5B(-Instruct)` — same arch as Qwen2.5-1.5B.
+  static LlamaConfig qwen25Math_1_5BConfig({
+    Device device = Device.CPU,
+    int seed = 0,
+    int? maxCtx,
+  }) => qwen25_1_5BConfig(device: device, seed: seed, maxCtx: maxCtx);
 
   /// Load a `.safetensors` checkpoint into [model].
   ///
