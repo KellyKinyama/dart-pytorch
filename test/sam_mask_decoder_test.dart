@@ -41,15 +41,13 @@ void main() {
     });
 
     test('downsampleRate=2 halves internal dim', () {
-      final a = SamAttention(
-          embedDim: 32, numHeads: 4, downsampleRate: 2);
+      final a = SamAttention(embedDim: 32, numHeads: 4, downsampleRate: 2);
       expect(a.internalDim, 16);
       expect(a.headDim, 4);
     });
 
     test('forward returns [N_q, embedDim]', () {
-      final a = SamAttention(
-          embedDim: 32, numHeads: 4, downsampleRate: 2);
+      final a = SamAttention(embedDim: 32, numHeads: 4, downsampleRate: 2);
       final q = _fake([5, 32], seed: 1);
       final k = _fake([7, 32], seed: 2);
       final v = _fake([7, 32], seed: 3);

@@ -71,16 +71,36 @@ class SamAttention extends Module {
     int downsampleRate = 1,
     Device device = Device.CPU,
     int seed = 0,
-  })  : internalDim = embedDim ~/ downsampleRate,
-        headDim = (embedDim ~/ downsampleRate) ~/ numHeads,
-        qProj = Linear(embedDim, embedDim ~/ downsampleRate,
-            bias: true, device: device, seed: seed),
-        kProj = Linear(embedDim, embedDim ~/ downsampleRate,
-            bias: true, device: device, seed: seed + 1000),
-        vProj = Linear(embedDim, embedDim ~/ downsampleRate,
-            bias: true, device: device, seed: seed + 2000),
-        outProj = Linear(embedDim ~/ downsampleRate, embedDim,
-            bias: true, device: device, seed: seed + 3000);
+  }) : internalDim = embedDim ~/ downsampleRate,
+       headDim = (embedDim ~/ downsampleRate) ~/ numHeads,
+       qProj = Linear(
+         embedDim,
+         embedDim ~/ downsampleRate,
+         bias: true,
+         device: device,
+         seed: seed,
+       ),
+       kProj = Linear(
+         embedDim,
+         embedDim ~/ downsampleRate,
+         bias: true,
+         device: device,
+         seed: seed + 1000,
+       ),
+       vProj = Linear(
+         embedDim,
+         embedDim ~/ downsampleRate,
+         bias: true,
+         device: device,
+         seed: seed + 2000,
+       ),
+       outProj = Linear(
+         embedDim ~/ downsampleRate,
+         embedDim,
+         bias: true,
+         device: device,
+         seed: seed + 3000,
+       );
 
   /// `q, k, v: [N, embedDim]` — single-batch convention. Returns
   /// `[N_q, embedDim]`.
@@ -121,7 +141,8 @@ class SamAttention extends Module {
         for (int j = 0; j < nk; j++) {
           double dot = 0;
           for (int d = 0; d < headDim; d++) {
-            dot += qData[i * internalDim + headStart + d] *
+            dot +=
+                qData[i * internalDim + headStart + d] *
                 kData[j * internalDim + headStart + d];
           }
           scores[i * nk + j] = dot * scale;
@@ -164,11 +185,11 @@ class SamAttention extends Module {
 
   @override
   List<Tensor> parameters() => [
-        ...qProj.parameters(),
-        ...kProj.parameters(),
-        ...vProj.parameters(),
-        ...outProj.parameters(),
-      ];
+    ...qProj.parameters(),
+    ...kProj.parameters(),
+    ...vProj.parameters(),
+    ...outProj.parameters(),
+  ];
 
   @override
   List<Module> submodules() => [qProj, kProj, vProj, outProj];
@@ -187,10 +208,14 @@ class SamMlpBlock extends Module {
     required int mlpDim,
     Device device = Device.CPU,
     int seed = 0,
-  })  : fc1 = Linear(embedDim, mlpDim,
-            bias: true, device: device, seed: seed),
-        fc2 = Linear(mlpDim, embedDim,
-            bias: true, device: device, seed: seed + 1);
+  }) : fc1 = Linear(embedDim, mlpDim, bias: true, device: device, seed: seed),
+       fc2 = Linear(
+         mlpDim,
+         embedDim,
+         bias: true,
+         device: device,
+         seed: seed + 1,
+       );
 
   Tensor call(Tensor x) => fc2(_gelu(fc1(x)));
 
@@ -214,10 +239,9 @@ class SamMlpBlock extends Module {
     const a5 = 1.061405429;
     const p = 0.3275911;
     final t = 1.0 / (1.0 + p * x);
-    final y = 1.0 -
-        (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) *
-            t *
-            math.exp(-x * x);
+    final y =
+        1.0 -
+        (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * math.exp(-x * x);
     return sign * y;
   }
 
@@ -250,8 +274,9 @@ class SamMlp extends Module {
     for (int i = 0; i < numLayers; i++) {
       final inD = i == 0 ? inputDim : hiddenDim;
       final outD = i == numLayers - 1 ? outputDim : hiddenDim;
-      layers.add(Linear(inD, outD,
-          bias: true, device: device, seed: seed + i * 1000));
+      layers.add(
+        Linear(inD, outD, bias: true, device: device, seed: seed + i * 1000),
+      );
     }
   }
 
@@ -266,8 +291,7 @@ class SamMlp extends Module {
   }
 
   @override
-  List<Tensor> parameters() =>
-      [for (final l in layers) ...l.parameters()];
+  List<Tensor> parameters() => [for (final l in layers) ...l.parameters()];
 
   @override
   List<Module> submodules() => [...layers];
@@ -307,36 +331,36 @@ class SamTwoWayAttentionBlock extends Module {
     this.skipFirstLayerPe = false,
     Device device = Device.CPU,
     int seed = 0,
-  })  : selfAttn = SamAttention(
-          embedDim: embedDim,
-          numHeads: numHeads,
-          device: device,
-          seed: seed,
-        ),
-        norm1 = LayerNorm(embedDim, eps: 1e-6, device: device),
-        crossAttnTokenToImage = SamAttention(
-          embedDim: embedDim,
-          numHeads: numHeads,
-          downsampleRate: attentionDownsampleRate,
-          device: device,
-          seed: seed + 10_000,
-        ),
-        norm2 = LayerNorm(embedDim, eps: 1e-6, device: device),
-        mlp = SamMlpBlock(
-          embedDim: embedDim,
-          mlpDim: mlpDim,
-          device: device,
-          seed: seed + 20_000,
-        ),
-        norm3 = LayerNorm(embedDim, eps: 1e-6, device: device),
-        crossAttnImageToToken = SamAttention(
-          embedDim: embedDim,
-          numHeads: numHeads,
-          downsampleRate: attentionDownsampleRate,
-          device: device,
-          seed: seed + 30_000,
-        ),
-        norm4 = LayerNorm(embedDim, eps: 1e-6, device: device);
+  }) : selfAttn = SamAttention(
+         embedDim: embedDim,
+         numHeads: numHeads,
+         device: device,
+         seed: seed,
+       ),
+       norm1 = LayerNorm(embedDim, eps: 1e-6, device: device),
+       crossAttnTokenToImage = SamAttention(
+         embedDim: embedDim,
+         numHeads: numHeads,
+         downsampleRate: attentionDownsampleRate,
+         device: device,
+         seed: seed + 10_000,
+       ),
+       norm2 = LayerNorm(embedDim, eps: 1e-6, device: device),
+       mlp = SamMlpBlock(
+         embedDim: embedDim,
+         mlpDim: mlpDim,
+         device: device,
+         seed: seed + 20_000,
+       ),
+       norm3 = LayerNorm(embedDim, eps: 1e-6, device: device),
+       crossAttnImageToToken = SamAttention(
+         embedDim: embedDim,
+         numHeads: numHeads,
+         downsampleRate: attentionDownsampleRate,
+         device: device,
+         seed: seed + 30_000,
+       ),
+       norm4 = LayerNorm(embedDim, eps: 1e-6, device: device);
 
   /// Returns updated `(queries, keys)`. All tensors are 2-D `[N, D]`.
   ({Tensor queries, Tensor keys}) call({
@@ -380,27 +404,27 @@ class SamTwoWayAttentionBlock extends Module {
 
   @override
   List<Tensor> parameters() => [
-        ...selfAttn.parameters(),
-        ...norm1.parameters(),
-        ...crossAttnTokenToImage.parameters(),
-        ...norm2.parameters(),
-        ...mlp.parameters(),
-        ...norm3.parameters(),
-        ...crossAttnImageToToken.parameters(),
-        ...norm4.parameters(),
-      ];
+    ...selfAttn.parameters(),
+    ...norm1.parameters(),
+    ...crossAttnTokenToImage.parameters(),
+    ...norm2.parameters(),
+    ...mlp.parameters(),
+    ...norm3.parameters(),
+    ...crossAttnImageToToken.parameters(),
+    ...norm4.parameters(),
+  ];
 
   @override
   List<Module> submodules() => [
-        selfAttn,
-        norm1,
-        crossAttnTokenToImage,
-        norm2,
-        mlp,
-        norm3,
-        crossAttnImageToToken,
-        norm4,
-      ];
+    selfAttn,
+    norm1,
+    crossAttnTokenToImage,
+    norm2,
+    mlp,
+    norm3,
+    crossAttnImageToToken,
+    norm4,
+  ];
 }
 
 // ---------------------------------------------------------------------------
@@ -426,25 +450,27 @@ class SamTwoWayTransformer extends Module {
     this.attentionDownsampleRate = 2,
     Device device = Device.CPU,
     int seed = 0,
-  })  : blocks = <SamTwoWayAttentionBlock>[],
-        finalAttnTokenToImage = SamAttention(
+  }) : blocks = <SamTwoWayAttentionBlock>[],
+       finalAttnTokenToImage = SamAttention(
+         embedDim: embedDim,
+         numHeads: numHeads,
+         downsampleRate: attentionDownsampleRate,
+         device: device,
+         seed: seed + 900_000,
+       ),
+       normFinal = LayerNorm(embedDim, eps: 1e-6, device: device) {
+    for (int i = 0; i < depth; i++) {
+      blocks.add(
+        SamTwoWayAttentionBlock(
           embedDim: embedDim,
           numHeads: numHeads,
-          downsampleRate: attentionDownsampleRate,
+          mlpDim: mlpDim,
+          attentionDownsampleRate: attentionDownsampleRate,
+          skipFirstLayerPe: i == 0,
           device: device,
-          seed: seed + 900_000,
+          seed: seed + i * 100_000,
         ),
-        normFinal = LayerNorm(embedDim, eps: 1e-6, device: device) {
-    for (int i = 0; i < depth; i++) {
-      blocks.add(SamTwoWayAttentionBlock(
-        embedDim: embedDim,
-        numHeads: numHeads,
-        mlpDim: mlpDim,
-        attentionDownsampleRate: attentionDownsampleRate,
-        skipFirstLayerPe: i == 0,
-        device: device,
-        seed: seed + i * 100_000,
-      ));
+      );
     }
   }
 
@@ -543,14 +569,13 @@ class SamTwoWayTransformer extends Module {
 
   @override
   List<Tensor> parameters() => [
-        for (final b in blocks) ...b.parameters(),
-        ...finalAttnTokenToImage.parameters(),
-        ...normFinal.parameters(),
-      ];
+    for (final b in blocks) ...b.parameters(),
+    ...finalAttnTokenToImage.parameters(),
+    ...normFinal.parameters(),
+  ];
 
   @override
-  List<Module> submodules() =>
-      [...blocks, finalAttnTokenToImage, normFinal];
+  List<Module> submodules() => [...blocks, finalAttnTokenToImage, normFinal];
 }
 
 // ---------------------------------------------------------------------------
@@ -633,9 +658,7 @@ class MaskDecoderOutput {
   /// by [select] since [Tensor.sliceRows] is 2-D only.
   static Tensor _sliceFirstAxis(Tensor t, int start, int end) {
     if (t.shape.length != 3) {
-      throw ArgumentError(
-        '_sliceFirstAxis: expected rank 3, got ${t.shape}',
-      );
+      throw ArgumentError('_sliceFirstAxis: expected rank 3, got ${t.shape}');
     }
     final n = t.shape[0];
     final h = t.shape[1];
@@ -667,9 +690,9 @@ class SamMaskDecoder extends Module {
   final SamTwoWayTransformer transformer;
 
   // Output upscaling: ConvTranspose2d -> LN2d -> GELU -> ConvTranspose2d -> GELU
-  final ConvTranspose2d outputUpscaling1;
-  final LayerNorm2d outputUpscalingLn;
-  final ConvTranspose2d outputUpscaling2;
+  final ConvTranspose2d output_upscaling_1;
+  final LayerNorm2d output_upscaling_ln;
+  final ConvTranspose2d output_upscaling_2;
 
   /// Per-mask hypernetwork MLPs — one per mask token. Each maps a
   /// mask token `[embedDim]` to `[upscaledChannels]` where
@@ -681,61 +704,63 @@ class SamMaskDecoder extends Module {
   final SamMlp iouPredictionHead;
 
   SamMaskDecoder(this.config)
-      : tokenEmbeddings = _initTokens(
-          config.numOutputTokens,
-          config.embedDim,
-          config.seed,
-          config.device,
-        ),
-        transformer = SamTwoWayTransformer(
-          depth: config.transformerDepth,
-          embedDim: config.embedDim,
-          numHeads: config.numHeads,
-          mlpDim: config.mlpDim,
-          device: config.device,
-          seed: config.seed + 1_000,
-        ),
-        outputUpscaling1 = ConvTranspose2d(
-          config.embedDim,
-          config.embedDim ~/ 4,
-          kernel: 2,
-          stride: 2,
-          padding: 0,
-          bias: true,
-          device: config.device,
-          seed: config.seed + 700_000,
-        ),
-        outputUpscalingLn =
-            LayerNorm2d(config.embedDim ~/ 4, device: config.device),
-        outputUpscaling2 = ConvTranspose2d(
-          config.embedDim ~/ 4,
-          config.embedDim ~/ 8,
-          kernel: 2,
-          stride: 2,
-          padding: 0,
-          bias: true,
-          device: config.device,
-          seed: config.seed + 800_000,
-        ),
-        outputHypernetworksMlps = List<SamMlp>.generate(
-          config.numMaskTokens,
-          (i) => SamMlp(
-            inputDim: config.embedDim,
-            hiddenDim: config.embedDim,
-            outputDim: config.embedDim ~/ 8,
-            numLayers: 3,
-            device: config.device,
-            seed: config.seed + 500_000 + i * 1_000,
-          ),
-        ),
-        iouPredictionHead = SamMlp(
+    : tokenEmbeddings = _initTokens(
+        config.numOutputTokens,
+        config.embedDim,
+        config.seed,
+        config.device,
+      ),
+      transformer = SamTwoWayTransformer(
+        depth: config.transformerDepth,
+        embedDim: config.embedDim,
+        numHeads: config.numHeads,
+        mlpDim: config.mlpDim,
+        device: config.device,
+        seed: config.seed + 1_000,
+      ),
+      output_upscaling_1 = ConvTranspose2d(
+        config.embedDim,
+        config.embedDim ~/ 4,
+        kernel: 2,
+        stride: 2,
+        padding: 0,
+        bias: true,
+        device: config.device,
+        seed: config.seed + 700_000,
+      ),
+      output_upscaling_ln = LayerNorm2d(
+        config.embedDim ~/ 4,
+        device: config.device,
+      ),
+      output_upscaling_2 = ConvTranspose2d(
+        config.embedDim ~/ 4,
+        config.embedDim ~/ 8,
+        kernel: 2,
+        stride: 2,
+        padding: 0,
+        bias: true,
+        device: config.device,
+        seed: config.seed + 800_000,
+      ),
+      outputHypernetworksMlps = List<SamMlp>.generate(
+        config.numMaskTokens,
+        (i) => SamMlp(
           inputDim: config.embedDim,
-          hiddenDim: config.iouHeadHiddenDim,
-          outputDim: config.numMaskTokens,
-          numLayers: config.iouHeadDepth,
+          hiddenDim: config.embedDim,
+          outputDim: config.embedDim ~/ 8,
+          numLayers: 3,
           device: config.device,
-          seed: config.seed + 600_000,
-        );
+          seed: config.seed + 500_000 + i * 1_000,
+        ),
+      ),
+      iouPredictionHead = SamMlp(
+        inputDim: config.embedDim,
+        hiddenDim: config.iouHeadHiddenDim,
+        outputDim: config.numMaskTokens,
+        numLayers: config.iouHeadDepth,
+        device: config.device,
+        seed: config.seed + 600_000,
+      );
 
   static Tensor _initTokens(int n, int d, int seed, Device device) {
     final rng = math.Random(seed);
@@ -745,8 +770,7 @@ class SamMaskDecoder extends Module {
       final z = math.sqrt(-2.0 * math.log(u1)) * math.cos(2 * math.pi * u2);
       return z * 0.02;
     });
-    return Tensor.fromList([n, d], vals,
-        requiresGrad: true, device: device);
+    return Tensor.fromList([n, d], vals, requiresGrad: true, device: device);
   }
 
   /// Forward pass.
@@ -789,12 +813,17 @@ class SamMaskDecoder extends Module {
     // 1..numMaskTokens excludes the IoU and includes all mask tokens.
 
     // Upscale the image features.
-    final srcNchwOut = _tokensToNchw(srcTokens, srcNCHW.shape[2],
-        srcNCHW.shape[3], config.embedDim, srcNCHW.device);
-    var up = outputUpscaling1(srcNchwOut);
-    up = outputUpscalingLn(up);
+    final srcNchwOut = _tokensToNchw(
+      srcTokens,
+      srcNCHW.shape[2],
+      srcNCHW.shape[3],
+      config.embedDim,
+      srcNCHW.device,
+    );
+    var up = output_upscaling_1(srcNchwOut);
+    up = output_upscaling_ln(up);
     up = _gelu(up);
-    up = outputUpscaling2(up);
+    up = output_upscaling_2(up);
     up = _gelu(up);
     // up: [1, embedDim//8, H·4, W·4]
 
@@ -813,14 +842,14 @@ class SamMaskDecoder extends Module {
     final wOut = up.shape[3];
     final upData = up.toFloat32List();
     final hyperData = hyper.toList();
-    final maskData =
-        Float32List(config.numMaskTokens * hOut * wOut);
+    final maskData = Float32List(config.numMaskTokens * hOut * wOut);
     for (int i = 0; i < config.numMaskTokens; i++) {
       for (int y = 0; y < hOut; y++) {
         for (int x = 0; x < wOut; x++) {
           double acc = 0;
           for (int c = 0; c < upChannels; c++) {
-            acc += hyperData[i * upChannels + c] *
+            acc +=
+                hyperData[i * upChannels + c] *
                 upData[(c * hOut + y) * wOut + x];
           }
           maskData[(i * hOut + y) * wOut + x] = acc;
@@ -872,11 +901,7 @@ class SamMaskDecoder extends Module {
     for (int i = 0; i < iData.length; i++) {
       out[i] = iData[i] + dData[i];
     }
-    return Tensor.fromFloat32List(
-      [1, c, h, w],
-      out,
-      device: image.device,
-    );
+    return Tensor.fromFloat32List([1, c, h, w], out, device: image.device);
   }
 
   static Tensor _tokensToNchw(
@@ -918,31 +943,30 @@ class SamMaskDecoder extends Module {
     const a5 = 1.061405429;
     const p = 0.3275911;
     final t = 1.0 / (1.0 + p * x);
-    final y = 1.0 -
-        (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) *
-            t *
-            math.exp(-x * x);
+    final y =
+        1.0 -
+        (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * math.exp(-x * x);
     return sign * y;
   }
 
   @override
   List<Tensor> parameters() => [
-        tokenEmbeddings,
-        ...transformer.parameters(),
-        ...outputUpscaling1.parameters(),
-        ...outputUpscalingLn.parameters(),
-        ...outputUpscaling2.parameters(),
-        for (final m in outputHypernetworksMlps) ...m.parameters(),
-        ...iouPredictionHead.parameters(),
-      ];
+    tokenEmbeddings,
+    ...transformer.parameters(),
+    ...output_upscaling_1.parameters(),
+    ...output_upscaling_ln.parameters(),
+    ...output_upscaling_2.parameters(),
+    for (final m in outputHypernetworksMlps) ...m.parameters(),
+    ...iouPredictionHead.parameters(),
+  ];
 
   @override
   List<Module> submodules() => [
-        transformer,
-        outputUpscaling1,
-        outputUpscalingLn,
-        outputUpscaling2,
-        ...outputHypernetworksMlps,
-        iouPredictionHead,
-      ];
+    transformer,
+    output_upscaling_1,
+    output_upscaling_ln,
+    output_upscaling_2,
+    ...outputHypernetworksMlps,
+    iouPredictionHead,
+  ];
 }

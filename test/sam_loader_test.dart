@@ -58,11 +58,21 @@ Map<String, Tensor> _synthState({int seed = 0}) {
   final headDim = imgD ~/ numHeads;
 
   // Image encoder.
-  state['image_encoder.patch_embed.proj.weight'] =
-      _rand([imgD, 3, _imgCfg.patchSize, _imgCfg.patchSize], seed: nextSeed());
-  state['image_encoder.patch_embed.proj.bias'] = _rand([imgD], seed: nextSeed());
-  state['image_encoder.pos_embed'] =
-      _rand([1, grid, grid, imgD], seed: nextSeed());
+  state['image_encoder.patch_embed.proj.weight'] = _rand([
+    imgD,
+    3,
+    _imgCfg.patchSize,
+    _imgCfg.patchSize,
+  ], seed: nextSeed());
+  state['image_encoder.patch_embed.proj.bias'] = _rand([
+    imgD,
+  ], seed: nextSeed());
+  state['image_encoder.pos_embed'] = _rand([
+    1,
+    grid,
+    grid,
+    imgD,
+  ], seed: nextSeed());
 
   for (int i = 0; i < _imgCfg.numLayers; i++) {
     final p = 'image_encoder.blocks.$i';
@@ -76,69 +86,111 @@ Map<String, Tensor> _synthState({int seed = 0}) {
     state['$p.attn.proj.bias'] = _rand([imgD], seed: nextSeed());
     final isGlobal = _imgCfg.globalAttnIndices.contains(i);
     final ws = isGlobal ? grid : _imgCfg.windowSize;
-    state['$p.attn.rel_pos_h'] =
-        _rand([2 * ws - 1, headDim], seed: nextSeed());
-    state['$p.attn.rel_pos_w'] =
-        _rand([2 * ws - 1, headDim], seed: nextSeed());
-    state['$p.mlp.lin1.weight'] = _rand([_imgCfg.mlpDim, imgD], seed: nextSeed());
+    state['$p.attn.rel_pos_h'] = _rand([2 * ws - 1, headDim], seed: nextSeed());
+    state['$p.attn.rel_pos_w'] = _rand([2 * ws - 1, headDim], seed: nextSeed());
+    state['$p.mlp.lin1.weight'] = _rand([
+      _imgCfg.mlpDim,
+      imgD,
+    ], seed: nextSeed());
     state['$p.mlp.lin1.bias'] = _rand([_imgCfg.mlpDim], seed: nextSeed());
-    state['$p.mlp.lin2.weight'] = _rand([imgD, _imgCfg.mlpDim], seed: nextSeed());
+    state['$p.mlp.lin2.weight'] = _rand([
+      imgD,
+      _imgCfg.mlpDim,
+    ], seed: nextSeed());
     state['$p.mlp.lin2.bias'] = _rand([imgD], seed: nextSeed());
   }
 
-  state['image_encoder.neck.0.weight'] =
-      _rand([_imgCfg.outChannels, imgD, 1, 1], seed: nextSeed());
-  state['image_encoder.neck.1.weight'] =
-      _rand([_imgCfg.outChannels], seed: nextSeed());
-  state['image_encoder.neck.1.bias'] =
-      _rand([_imgCfg.outChannels], seed: nextSeed());
-  state['image_encoder.neck.2.weight'] = _rand(
-      [_imgCfg.outChannels, _imgCfg.outChannels, 3, 3],
-      seed: nextSeed());
-  state['image_encoder.neck.3.weight'] =
-      _rand([_imgCfg.outChannels], seed: nextSeed());
-  state['image_encoder.neck.3.bias'] =
-      _rand([_imgCfg.outChannels], seed: nextSeed());
+  state['image_encoder.neck.0.weight'] = _rand([
+    _imgCfg.outChannels,
+    imgD,
+    1,
+    1,
+  ], seed: nextSeed());
+  state['image_encoder.neck.1.weight'] = _rand([
+    _imgCfg.outChannels,
+  ], seed: nextSeed());
+  state['image_encoder.neck.1.bias'] = _rand([
+    _imgCfg.outChannels,
+  ], seed: nextSeed());
+  state['image_encoder.neck.2.weight'] = _rand([
+    _imgCfg.outChannels,
+    _imgCfg.outChannels,
+    3,
+    3,
+  ], seed: nextSeed());
+  state['image_encoder.neck.3.weight'] = _rand([
+    _imgCfg.outChannels,
+  ], seed: nextSeed());
+  state['image_encoder.neck.3.bias'] = _rand([
+    _imgCfg.outChannels,
+  ], seed: nextSeed());
 
   // Prompt encoder.
   const promptD = 16;
   const numPosFeats = promptD ~/ 2;
-  state['prompt_encoder.pe_layer.positional_encoding_gaussian_matrix'] =
-      _rand([2, numPosFeats], seed: nextSeed());
+  state['prompt_encoder.pe_layer.positional_encoding_gaussian_matrix'] = _rand([
+    2,
+    numPosFeats,
+  ], seed: nextSeed());
   for (int i = 0; i < 4; i++) {
-    state['prompt_encoder.point_embeddings.$i.weight'] =
-        _rand([1, promptD], seed: nextSeed());
+    state['prompt_encoder.point_embeddings.$i.weight'] = _rand([
+      1,
+      promptD,
+    ], seed: nextSeed());
   }
-  state['prompt_encoder.no_mask_embed.weight'] =
-      _rand([1, promptD], seed: nextSeed());
+  state['prompt_encoder.no_mask_embed.weight'] = _rand([
+    1,
+    promptD,
+  ], seed: nextSeed());
   // mask_downscaling: use maskInputChannels=16
   const maskInCh = 16;
-  state['prompt_encoder.mask_downscaling.0.weight'] =
-      _rand([maskInCh ~/ 4, 1, 2, 2], seed: nextSeed());
-  state['prompt_encoder.mask_downscaling.0.bias'] =
-      _rand([maskInCh ~/ 4], seed: nextSeed());
-  state['prompt_encoder.mask_downscaling.1.weight'] =
-      _rand([maskInCh ~/ 4], seed: nextSeed());
-  state['prompt_encoder.mask_downscaling.1.bias'] =
-      _rand([maskInCh ~/ 4], seed: nextSeed());
-  state['prompt_encoder.mask_downscaling.3.weight'] =
-      _rand([maskInCh, maskInCh ~/ 4, 2, 2], seed: nextSeed());
-  state['prompt_encoder.mask_downscaling.3.bias'] =
-      _rand([maskInCh], seed: nextSeed());
-  state['prompt_encoder.mask_downscaling.4.weight'] =
-      _rand([maskInCh], seed: nextSeed());
-  state['prompt_encoder.mask_downscaling.4.bias'] =
-      _rand([maskInCh], seed: nextSeed());
-  state['prompt_encoder.mask_downscaling.6.weight'] =
-      _rand([promptD, maskInCh, 1, 1], seed: nextSeed());
-  state['prompt_encoder.mask_downscaling.6.bias'] =
-      _rand([promptD], seed: nextSeed());
+  state['prompt_encoder.mask_downscaling.0.weight'] = _rand([
+    maskInCh ~/ 4,
+    1,
+    2,
+    2,
+  ], seed: nextSeed());
+  state['prompt_encoder.mask_downscaling.0.bias'] = _rand([
+    maskInCh ~/ 4,
+  ], seed: nextSeed());
+  state['prompt_encoder.mask_downscaling.1.weight'] = _rand([
+    maskInCh ~/ 4,
+  ], seed: nextSeed());
+  state['prompt_encoder.mask_downscaling.1.bias'] = _rand([
+    maskInCh ~/ 4,
+  ], seed: nextSeed());
+  state['prompt_encoder.mask_downscaling.3.weight'] = _rand([
+    maskInCh,
+    maskInCh ~/ 4,
+    2,
+    2,
+  ], seed: nextSeed());
+  state['prompt_encoder.mask_downscaling.3.bias'] = _rand([
+    maskInCh,
+  ], seed: nextSeed());
+  state['prompt_encoder.mask_downscaling.4.weight'] = _rand([
+    maskInCh,
+  ], seed: nextSeed());
+  state['prompt_encoder.mask_downscaling.4.bias'] = _rand([
+    maskInCh,
+  ], seed: nextSeed());
+  state['prompt_encoder.mask_downscaling.6.weight'] = _rand([
+    promptD,
+    maskInCh,
+    1,
+    1,
+  ], seed: nextSeed());
+  state['prompt_encoder.mask_downscaling.6.bias'] = _rand([
+    promptD,
+  ], seed: nextSeed());
 
   // Mask decoder.
   final decD = _decCfg.embedDim;
   state['mask_decoder.iou_token.weight'] = _rand([1, decD], seed: nextSeed());
-  state['mask_decoder.mask_tokens.weight'] =
-      _rand([_decCfg.numMaskTokens, decD], seed: nextSeed());
+  state['mask_decoder.mask_tokens.weight'] = _rand([
+    _decCfg.numMaskTokens,
+    decD,
+  ], seed: nextSeed());
 
   final internal = decD; // downsample_rate=1 for self-attn
   final internalDown = decD ~/ 2; // downsample_rate=2 for cross-attn
@@ -146,12 +198,16 @@ Map<String, Tensor> _synthState({int seed = 0}) {
     final p = 'mask_decoder.transformer.layers.$i';
     // self_attn: no downsample
     for (final proj in ['q_proj', 'k_proj', 'v_proj']) {
-      state['$p.self_attn.$proj.weight'] =
-          _rand([internal, decD], seed: nextSeed());
+      state['$p.self_attn.$proj.weight'] = _rand([
+        internal,
+        decD,
+      ], seed: nextSeed());
       state['$p.self_attn.$proj.bias'] = _rand([internal], seed: nextSeed());
     }
-    state['$p.self_attn.out_proj.weight'] =
-        _rand([decD, internal], seed: nextSeed());
+    state['$p.self_attn.out_proj.weight'] = _rand([
+      decD,
+      internal,
+    ], seed: nextSeed());
     state['$p.self_attn.out_proj.bias'] = _rand([decD], seed: nextSeed());
 
     state['$p.norm1.weight'] = _rand([decD], seed: nextSeed());
@@ -159,37 +215,55 @@ Map<String, Tensor> _synthState({int seed = 0}) {
 
     // cross_attn_token_to_image: downsample_rate=2
     for (final proj in ['q_proj', 'k_proj', 'v_proj']) {
-      state['$p.cross_attn_token_to_image.$proj.weight'] =
-          _rand([internalDown, decD], seed: nextSeed());
-      state['$p.cross_attn_token_to_image.$proj.bias'] =
-          _rand([internalDown], seed: nextSeed());
+      state['$p.cross_attn_token_to_image.$proj.weight'] = _rand([
+        internalDown,
+        decD,
+      ], seed: nextSeed());
+      state['$p.cross_attn_token_to_image.$proj.bias'] = _rand([
+        internalDown,
+      ], seed: nextSeed());
     }
-    state['$p.cross_attn_token_to_image.out_proj.weight'] =
-        _rand([decD, internalDown], seed: nextSeed());
-    state['$p.cross_attn_token_to_image.out_proj.bias'] =
-        _rand([decD], seed: nextSeed());
+    state['$p.cross_attn_token_to_image.out_proj.weight'] = _rand([
+      decD,
+      internalDown,
+    ], seed: nextSeed());
+    state['$p.cross_attn_token_to_image.out_proj.bias'] = _rand([
+      decD,
+    ], seed: nextSeed());
     state['$p.norm2.weight'] = _rand([decD], seed: nextSeed());
     state['$p.norm2.bias'] = _rand([decD], seed: nextSeed());
 
     // mlp
-    state['$p.mlp.lin1.weight'] = _rand([_decCfg.mlpDim, decD], seed: nextSeed());
+    state['$p.mlp.lin1.weight'] = _rand([
+      _decCfg.mlpDim,
+      decD,
+    ], seed: nextSeed());
     state['$p.mlp.lin1.bias'] = _rand([_decCfg.mlpDim], seed: nextSeed());
-    state['$p.mlp.lin2.weight'] = _rand([decD, _decCfg.mlpDim], seed: nextSeed());
+    state['$p.mlp.lin2.weight'] = _rand([
+      decD,
+      _decCfg.mlpDim,
+    ], seed: nextSeed());
     state['$p.mlp.lin2.bias'] = _rand([decD], seed: nextSeed());
     state['$p.norm3.weight'] = _rand([decD], seed: nextSeed());
     state['$p.norm3.bias'] = _rand([decD], seed: nextSeed());
 
     // cross_attn_image_to_token
     for (final proj in ['q_proj', 'k_proj', 'v_proj']) {
-      state['$p.cross_attn_image_to_token.$proj.weight'] =
-          _rand([internalDown, decD], seed: nextSeed());
-      state['$p.cross_attn_image_to_token.$proj.bias'] =
-          _rand([internalDown], seed: nextSeed());
+      state['$p.cross_attn_image_to_token.$proj.weight'] = _rand([
+        internalDown,
+        decD,
+      ], seed: nextSeed());
+      state['$p.cross_attn_image_to_token.$proj.bias'] = _rand([
+        internalDown,
+      ], seed: nextSeed());
     }
-    state['$p.cross_attn_image_to_token.out_proj.weight'] =
-        _rand([decD, internalDown], seed: nextSeed());
-    state['$p.cross_attn_image_to_token.out_proj.bias'] =
-        _rand([decD], seed: nextSeed());
+    state['$p.cross_attn_image_to_token.out_proj.weight'] = _rand([
+      decD,
+      internalDown,
+    ], seed: nextSeed());
+    state['$p.cross_attn_image_to_token.out_proj.bias'] = _rand([
+      decD,
+    ], seed: nextSeed());
     state['$p.norm4.weight'] = _rand([decD], seed: nextSeed());
     state['$p.norm4.bias'] = _rand([decD], seed: nextSeed());
   }
@@ -205,24 +279,38 @@ Map<String, Tensor> _synthState({int seed = 0}) {
       _rand([decD, internalDown], seed: nextSeed());
   state['mask_decoder.transformer.final_attn_token_to_image.out_proj.bias'] =
       _rand([decD], seed: nextSeed());
-  state['mask_decoder.transformer.norm_final_attn.weight'] =
-      _rand([decD], seed: nextSeed());
-  state['mask_decoder.transformer.norm_final_attn.bias'] =
-      _rand([decD], seed: nextSeed());
+  state['mask_decoder.transformer.norm_final_attn.weight'] = _rand([
+    decD,
+  ], seed: nextSeed());
+  state['mask_decoder.transformer.norm_final_attn.bias'] = _rand([
+    decD,
+  ], seed: nextSeed());
 
   // Output upscaling: ConvTranspose2d layers.
-  state['mask_decoder.output_upscaling.0.weight'] =
-      _rand([decD, decD ~/ 4, 2, 2], seed: nextSeed());
-  state['mask_decoder.output_upscaling.0.bias'] =
-      _rand([decD ~/ 4], seed: nextSeed());
-  state['mask_decoder.output_upscaling.1.weight'] =
-      _rand([decD ~/ 4], seed: nextSeed());
-  state['mask_decoder.output_upscaling.1.bias'] =
-      _rand([decD ~/ 4], seed: nextSeed());
-  state['mask_decoder.output_upscaling.3.weight'] =
-      _rand([decD ~/ 4, decD ~/ 8, 2, 2], seed: nextSeed());
-  state['mask_decoder.output_upscaling.3.bias'] =
-      _rand([decD ~/ 8], seed: nextSeed());
+  state['mask_decoder.output_upscaling.0.weight'] = _rand([
+    decD,
+    decD ~/ 4,
+    2,
+    2,
+  ], seed: nextSeed());
+  state['mask_decoder.output_upscaling.0.bias'] = _rand([
+    decD ~/ 4,
+  ], seed: nextSeed());
+  state['mask_decoder.output_upscaling.1.weight'] = _rand([
+    decD ~/ 4,
+  ], seed: nextSeed());
+  state['mask_decoder.output_upscaling.1.bias'] = _rand([
+    decD ~/ 4,
+  ], seed: nextSeed());
+  state['mask_decoder.output_upscaling.3.weight'] = _rand([
+    decD ~/ 4,
+    decD ~/ 8,
+    2,
+    2,
+  ], seed: nextSeed());
+  state['mask_decoder.output_upscaling.3.bias'] = _rand([
+    decD ~/ 8,
+  ], seed: nextSeed());
 
   // Per-mask hypernet MLPs (3 layers each).
   for (int i = 0; i < _decCfg.numMaskTokens; i++) {
@@ -231,8 +319,10 @@ Map<String, Tensor> _synthState({int seed = 0}) {
       final outD = j == 2 ? decD ~/ 8 : decD;
       state['mask_decoder.output_hypernetworks_mlps.$i.layers.$j.weight'] =
           _rand([outD, inD], seed: nextSeed());
-      state['mask_decoder.output_hypernetworks_mlps.$i.layers.$j.bias'] =
-          _rand([outD], seed: nextSeed());
+      state['mask_decoder.output_hypernetworks_mlps.$i.layers.$j.bias'] = _rand(
+        [outD],
+        seed: nextSeed(),
+      );
     }
   }
   // IoU prediction head.
@@ -241,10 +331,13 @@ Map<String, Tensor> _synthState({int seed = 0}) {
     final outD = j == _decCfg.iouHeadDepth - 1
         ? _decCfg.numMaskTokens
         : _decCfg.iouHeadHiddenDim;
-    state['mask_decoder.iou_prediction_head.layers.$j.weight'] =
-        _rand([outD, inD], seed: nextSeed());
-    state['mask_decoder.iou_prediction_head.layers.$j.bias'] =
-        _rand([outD], seed: nextSeed());
+    state['mask_decoder.iou_prediction_head.layers.$j.weight'] = _rand([
+      outD,
+      inD,
+    ], seed: nextSeed());
+    state['mask_decoder.iou_prediction_head.layers.$j.bias'] = _rand([
+      outD,
+    ], seed: nextSeed());
   }
 
   return state;
@@ -270,8 +363,11 @@ void main() {
         maskDecoder: maskDec,
         state: state,
       );
-      expect(report.unusedKeys, isEmpty,
-          reason: 'unused keys: ${report.unusedKeys.take(5).toList()}');
+      expect(
+        report.unusedKeys,
+        isEmpty,
+        reason: 'unused keys: ${report.unusedKeys.take(5).toList()}',
+      );
     });
 
     test('rejects a missing tensor', () {

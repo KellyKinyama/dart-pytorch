@@ -297,46 +297,40 @@ void main() {
 
   group('DepthwiseConv1d', () {
     test('preserves shape when padding = (k-1)/2', () {
-      final dw = DepthwiseConv1d(
-        channels: 4,
-        kernelSize: 7,
-        padding: 3,
-      );
+      final dw = DepthwiseConv1d(channels: 4, kernelSize: 7, padding: 3);
       final x = _fake([2, 4, 16], seed: 100);
       expect(dw(x).shape, equals([2, 4, 16]));
     });
 
-    test('channel independence — perturbing one channel does not affect others',
-        () {
-      final dw = DepthwiseConv1d(
-        channels: 3,
-        kernelSize: 3,
-        padding: 1,
-      );
-      final base = _fake([1, 3, 8], seed: 200);
-      final vals = base.toList();
-      // Perturb only channel 0.
-      for (int i = 0; i < 8; i++) {
-        vals[i] += 5.0;
-      }
-      final perturbed = Tensor.fromList([1, 3, 8], vals);
-      final outBase = dw(base).toList();
-      final outPert = dw(perturbed).toList();
-      // Channel 0 (indices 0..7) differs; channels 1 and 2 (indices
-      // 8..15 and 16..23) are unchanged.
-      double maxCh0 = 0;
-      for (int i = 0; i < 8; i++) {
-        final d = (outBase[i] - outPert[i]).abs();
-        if (d > maxCh0) maxCh0 = d;
-      }
-      double maxOthers = 0;
-      for (int i = 8; i < 24; i++) {
-        final d = (outBase[i] - outPert[i]).abs();
-        if (d > maxOthers) maxOthers = d;
-      }
-      expect(maxCh0 > 0.1, isTrue);
-      expect(maxOthers < 1e-5, isTrue);
-    });
+    test(
+      'channel independence — perturbing one channel does not affect others',
+      () {
+        final dw = DepthwiseConv1d(channels: 3, kernelSize: 3, padding: 1);
+        final base = _fake([1, 3, 8], seed: 200);
+        final vals = base.toList();
+        // Perturb only channel 0.
+        for (int i = 0; i < 8; i++) {
+          vals[i] += 5.0;
+        }
+        final perturbed = Tensor.fromList([1, 3, 8], vals);
+        final outBase = dw(base).toList();
+        final outPert = dw(perturbed).toList();
+        // Channel 0 (indices 0..7) differs; channels 1 and 2 (indices
+        // 8..15 and 16..23) are unchanged.
+        double maxCh0 = 0;
+        for (int i = 0; i < 8; i++) {
+          final d = (outBase[i] - outPert[i]).abs();
+          if (d > maxCh0) maxCh0 = d;
+        }
+        double maxOthers = 0;
+        for (int i = 8; i < 24; i++) {
+          final d = (outBase[i] - outPert[i]).abs();
+          if (d > maxOthers) maxOthers = d;
+        }
+        expect(maxCh0 > 0.1, isTrue);
+        expect(maxOthers < 1e-5, isTrue);
+      },
+    );
 
     test('rejects wrong-shape input', () {
       final dw = DepthwiseConv1d(channels: 4, kernelSize: 3);
@@ -363,8 +357,11 @@ void main() {
         final d = (xVals[i] - outVals[i]).abs();
         if (d > maxDiff) maxDiff = d;
       }
-      expect(maxDiff < 1e-5, isTrue,
-          reason: 'GRN identity at init; max diff = $maxDiff');
+      expect(
+        maxDiff < 1e-5,
+        isTrue,
+        reason: 'GRN identity at init; max diff = $maxDiff',
+      );
     });
   });
 
@@ -389,8 +386,9 @@ void main() {
         intermediateDim: 64,
         numLayers: 2,
       );
-      final tokens = Tensor.fromList([12], List<double>.generate(12,
-          (i) => (i * 7 % 100).toDouble()));
+      final tokens = Tensor.fromList([
+        12,
+      ], List<double>.generate(12, (i) => (i * 7 % 100).toDouble()));
       expect(enc(tokens).shape, equals([12, 32]));
     });
 
@@ -401,8 +399,10 @@ void main() {
         intermediateDim: 64,
         numLayers: 1,
       );
-      expect(() => enc(Tensor.fromList([2, 3], [1, 2, 3, 4, 5, 6])),
-          throwsArgumentError);
+      expect(
+        () => enc(Tensor.fromList([2, 3], [1, 2, 3, 4, 5, 6])),
+        throwsArgumentError,
+      );
     });
   });
 

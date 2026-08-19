@@ -500,10 +500,10 @@ class DepthwiseConv1d extends Module {
     bool bias = true,
     Device device = Device.CPU,
     int seed = 0,
-  })  : weight = _initWeight(channels, kernelSize, seed, device),
-        bias = bias
-            ? Tensor.fill([channels], 0.0, requiresGrad: true, device: device)
-            : null;
+  }) : weight = _initWeight(channels, kernelSize, seed, device),
+       bias = bias
+           ? Tensor.fill([channels], 0.0, requiresGrad: true, device: device)
+           : null;
 
   static Tensor _initWeight(int c, int k, int seed, Device device) {
     final rng = math.Random(seed);
@@ -512,8 +512,7 @@ class DepthwiseConv1d extends Module {
       c * k,
       (_) => (rng.nextDouble() * 2 - 1) * bound,
     );
-    return Tensor.fromList([c, k], vals,
-        requiresGrad: true, device: device);
+    return Tensor.fromList([c, k], vals, requiresGrad: true, device: device);
   }
 
   Tensor call(Tensor x) {
@@ -582,10 +581,8 @@ class GlobalResponseNormalization extends Module {
     required this.channels,
     this.eps = 1e-6,
     Device device = Device.CPU,
-  })  : gamma = Tensor.fill([channels], 0.0,
-            requiresGrad: true, device: device),
-        beta = Tensor.fill([channels], 0.0,
-            requiresGrad: true, device: device);
+  }) : gamma = Tensor.fill([channels], 0.0, requiresGrad: true, device: device),
+       beta = Tensor.fill([channels], 0.0, requiresGrad: true, device: device);
 
   Tensor call(Tensor x) {
     if (x.shape.length != 3 || x.shape[2] != channels) {
@@ -629,9 +626,8 @@ class GlobalResponseNormalization extends Module {
       for (int ti = 0; ti < t; ti++) {
         for (int c = 0; c < channels; c++) {
           final i = (ni * t + ti) * channels + c;
-          out[i] = gData[c] * (data[i] * nx[ni * channels + c]) +
-              bData[c] +
-              data[i];
+          out[i] =
+              gData[c] * (data[i] * nx[ni * channels + c]) + bData[c] + data[i];
         }
       }
     }
@@ -671,23 +667,33 @@ class ConvNeXtV2Block extends Module {
     int kernelSize = 7,
     Device device = Device.CPU,
     int seed = 0,
-  })  : dwconv = DepthwiseConv1d(
-          channels: dim,
-          kernelSize: kernelSize,
-          padding: (kernelSize - 1) ~/ 2,
-          bias: true,
-          device: device,
-          seed: seed,
-        ),
-        norm = LayerNorm(dim, eps: 1e-6, device: device),
-        pwconv1 = Linear(dim, intermediateDim,
-            bias: true, device: device, seed: seed + 1_000),
-        grn = GlobalResponseNormalization(
-          channels: intermediateDim,
-          device: device,
-        ),
-        pwconv2 = Linear(intermediateDim, dim,
-            bias: true, device: device, seed: seed + 2_000);
+  }) : dwconv = DepthwiseConv1d(
+         channels: dim,
+         kernelSize: kernelSize,
+         padding: (kernelSize - 1) ~/ 2,
+         bias: true,
+         device: device,
+         seed: seed,
+       ),
+       norm = LayerNorm(dim, eps: 1e-6, device: device),
+       pwconv1 = Linear(
+         dim,
+         intermediateDim,
+         bias: true,
+         device: device,
+         seed: seed + 1_000,
+       ),
+       grn = GlobalResponseNormalization(
+         channels: intermediateDim,
+         device: device,
+       ),
+       pwconv2 = Linear(
+         intermediateDim,
+         dim,
+         bias: true,
+         device: device,
+         seed: seed + 2_000,
+       );
 
   /// `x: [N, T, dim]`.
   Tensor call(Tensor x) {
@@ -755,21 +761,20 @@ class ConvNeXtV2Block extends Module {
     const a5 = 1.061405429;
     const p = 0.3275911;
     final t = 1.0 / (1.0 + p * x);
-    final y = 1.0 -
-        (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) *
-            t *
-            math.exp(-x * x);
+    final y =
+        1.0 -
+        (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * math.exp(-x * x);
     return sign * y;
   }
 
   @override
   List<Tensor> parameters() => [
-        ...dwconv.parameters(),
-        ...norm.parameters(),
-        ...pwconv1.parameters(),
-        ...grn.parameters(),
-        ...pwconv2.parameters(),
-      ];
+    ...dwconv.parameters(),
+    ...norm.parameters(),
+    ...pwconv1.parameters(),
+    ...grn.parameters(),
+    ...pwconv2.parameters(),
+  ];
 
   @override
   List<Module> submodules() => [dwconv, norm, pwconv1, grn, pwconv2];
@@ -800,18 +805,19 @@ class F5TextEncoder extends Module {
     int convKernelSize = 7,
     Device device = Device.CPU,
     int seed = 0,
-  })  : tokenEmbedding = Embedding(vocabSize, dim,
-            device: device, seed: seed),
-        blocks = <ConvNeXtV2Block>[],
-        finalNorm = LayerNorm(dim, eps: 1e-6, device: device) {
+  }) : tokenEmbedding = Embedding(vocabSize, dim, device: device, seed: seed),
+       blocks = <ConvNeXtV2Block>[],
+       finalNorm = LayerNorm(dim, eps: 1e-6, device: device) {
     for (int i = 0; i < numLayers; i++) {
-      blocks.add(ConvNeXtV2Block(
-        dim: dim,
-        intermediateDim: intermediateDim,
-        kernelSize: convKernelSize,
-        device: device,
-        seed: seed + 10_000 * (i + 1),
-      ));
+      blocks.add(
+        ConvNeXtV2Block(
+          dim: dim,
+          intermediateDim: intermediateDim,
+          kernelSize: convKernelSize,
+          device: device,
+          seed: seed + 10_000 * (i + 1),
+        ),
+      );
     }
   }
 
@@ -837,10 +843,10 @@ class F5TextEncoder extends Module {
 
   @override
   List<Tensor> parameters() => [
-        ...tokenEmbedding.parameters(),
-        for (final b in blocks) ...b.parameters(),
-        ...finalNorm.parameters(),
-      ];
+    ...tokenEmbedding.parameters(),
+    for (final b in blocks) ...b.parameters(),
+    ...finalNorm.parameters(),
+  ];
 
   @override
   List<Module> submodules() => [tokenEmbedding, ...blocks, finalNorm];
@@ -895,26 +901,38 @@ class F5DiT extends Module {
     this.freqDim = 256,
     Device device = Device.CPU,
     int seed = 0,
-  })  : inputProj = Linear(melDim + textDim, embedDim,
-            bias: true, device: device, seed: seed),
-        timeEmbed = SinusoidalTimestepEmbedding(
-          freqDim: freqDim,
-          embedDim: embedDim,
-          device: device,
-          seed: seed + 1000,
-        ),
-        blocks = <F5DiTBlock>[],
-        finalNorm = LayerNorm(embedDim, eps: 1e-6, device: device),
-        outputProj = Linear(embedDim, melDim,
-            bias: true, device: device, seed: seed + 2000) {
+  }) : inputProj = Linear(
+         melDim + textDim,
+         embedDim,
+         bias: true,
+         device: device,
+         seed: seed,
+       ),
+       timeEmbed = SinusoidalTimestepEmbedding(
+         freqDim: freqDim,
+         embedDim: embedDim,
+         device: device,
+         seed: seed + 1000,
+       ),
+       blocks = <F5DiTBlock>[],
+       finalNorm = LayerNorm(embedDim, eps: 1e-6, device: device),
+       outputProj = Linear(
+         embedDim,
+         melDim,
+         bias: true,
+         device: device,
+         seed: seed + 2000,
+       ) {
     for (int i = 0; i < numLayers; i++) {
-      blocks.add(F5DiTBlock(
-        embedDim: embedDim,
-        numHeads: numHeads,
-        mlpDim: mlpDim,
-        device: device,
-        seed: seed + 100_000 * (i + 1),
-      ));
+      blocks.add(
+        F5DiTBlock(
+          embedDim: embedDim,
+          numHeads: numHeads,
+          mlpDim: mlpDim,
+          device: device,
+          seed: seed + 100_000 * (i + 1),
+        ),
+      );
     }
   }
 
@@ -927,9 +945,7 @@ class F5DiT extends Module {
   /// Returns `[T, melDim]` mel velocity.
   Tensor call(Tensor mel, Tensor text, Tensor t) {
     if (mel.shape.length != 2 || mel.shape[1] != melDim) {
-      throw ArgumentError(
-        'F5DiT: expected mel=[T, $melDim]; got ${mel.shape}',
-      );
+      throw ArgumentError('F5DiT: expected mel=[T, $melDim]; got ${mel.shape}');
     }
     if (text.shape.length != 2 ||
         text.shape[0] != mel.shape[0] ||
@@ -952,19 +968,19 @@ class F5DiT extends Module {
 
   @override
   List<Tensor> parameters() => [
-        ...inputProj.parameters(),
-        ...timeEmbed.parameters(),
-        for (final b in blocks) ...b.parameters(),
-        ...finalNorm.parameters(),
-        ...outputProj.parameters(),
-      ];
+    ...inputProj.parameters(),
+    ...timeEmbed.parameters(),
+    for (final b in blocks) ...b.parameters(),
+    ...finalNorm.parameters(),
+    ...outputProj.parameters(),
+  ];
 
   @override
   List<Module> submodules() => [
-        inputProj,
-        timeEmbed,
-        ...blocks,
-        finalNorm,
-        outputProj,
-      ];
+    inputProj,
+    timeEmbed,
+    ...blocks,
+    finalNorm,
+    outputProj,
+  ];
 }
