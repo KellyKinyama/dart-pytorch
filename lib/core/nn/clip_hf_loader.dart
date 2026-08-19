@@ -50,6 +50,7 @@ import '../tensor/tensor.dart';
 import '../tensor/dtype.dart';
 import 'safetensors.dart';
 import 'vision/clip_vision_model.dart';
+import 'vision/clip_text_model.dart';
 
 class ClipHFLoader {
   /// `openai/clip-vit-base-patch32` config.
@@ -95,6 +96,40 @@ class ClipHFLoader {
     numLayers: 24,
     numHeads: 16,
     ffnDim: 4096,
+    layerNormEps: 1e-5,
+    device: device,
+    seed: seed,
+  );
+
+  /// Text-side config for `openai/clip-vit-base-patch{16,32}` — 12
+  /// layers, hidden=512, heads=8, ffn=2048. Same for both patch sizes.
+  static CLIPTextConfig baseTextConfig({
+    Device device = Device.CPU,
+    int seed = 0,
+  }) => CLIPTextConfig(
+    vocabSize: 49408,
+    maxCtx: 77,
+    embedDim: 512,
+    numLayers: 12,
+    numHeads: 8,
+    ffnDim: 2048,
+    layerNormEps: 1e-5,
+    device: device,
+    seed: seed,
+  );
+
+  /// Text-side config for `openai/clip-vit-large-patch14` — 12 layers,
+  /// hidden=768, heads=12, ffn=3072.
+  static CLIPTextConfig largeTextConfig({
+    Device device = Device.CPU,
+    int seed = 0,
+  }) => CLIPTextConfig(
+    vocabSize: 49408,
+    maxCtx: 77,
+    embedDim: 768,
+    numLayers: 12,
+    numHeads: 12,
+    ffnDim: 3072,
     layerNormEps: 1e-5,
     device: device,
     seed: seed,
@@ -451,6 +486,195 @@ class ClipHFLoader {
       }
     }
     return Tensor.fromList([outDim, H * W * C], out, device: Device.CPU);
+  }
+
+  // -----------------------------------------------------------------
+  // Text-tower loader.
+  // -----------------------------------------------------------------
+
+  /// Load a text-side CLIP checkpoint into [model]. Accepts either a
+  /// standalone `CLIPTextModel` safetensors (no prefix) or a joint
+  /// `CLIPModel` bundle (`text_model.` prefix).
+  static ClipLoadReport loadTextFile(
+    CLIPTextModel model,
+    String path, {
+    bool keepFp16 = false,
+  }) {
+    final state = SafeTensors.loadFile(path, keepFp16: keepFp16);
+    return loadTextMap(model, state);
+  }
+
+  static ClipLoadReport loadTextMap(
+    CLIPTextModel model,
+    Map<String, Tensor> state,
+  ) {
+    final prefix = _detectTextPrefix(state);
+    final consumed = <String>{};
+
+    Tensor take(String name) {
+      final key = '$prefix$name';
+      final t = state[key];
+      if (t == null) {
+        throw ArgumentError('clip text loader: missing tensor "$key"');
+      }
+      consumed.add(key);
+      return t;
+    }
+
+    final cfg = model.config;
+    final d = cfg.embedDim;
+    final h = cfg.numHeads;
+    final headDim = d ~/ h;
+    final ffn = cfg.ffnDim;
+
+    // ---------- embeddings ----------
+    _copy(
+      model.tokenEmbedding.weight,
+      _expectShape(
+        take('embeddings.token_embedding.weight'),
+        [cfg.vocabSize, d],
+        'embeddings.token_embedding.weight',
+      ),
+    );
+    _copy(
+      model.positionEmbedding,
+      _expectShape(
+        take('embeddings.position_embedding.weight'),
+        [cfg.maxCtx, d],
+        'embeddings.position_embedding.weight',
+      ),
+    );
+
+    // ---------- per-layer encoder blocks ----------
+    for (int i = 0; i < cfg.numLayers; i++) {
+      final block = model.encoder.blocks[i];
+      final p = 'encoder.layers.$i';
+
+      _copy(
+        block.ln1.gamma,
+        _expectShape(take('$p.layer_norm1.weight'), [d],
+            '$p.layer_norm1.weight'),
+      );
+      _copy(
+        block.ln1.beta,
+        _expectShape(take('$p.layer_norm1.bias'), [d],
+            '$p.layer_norm1.bias'),
+      );
+      _copy(
+        block.ln2.gamma,
+        _expectShape(take('$p.layer_norm2.weight'), [d],
+            '$p.layer_norm2.weight'),
+      );
+      _copy(
+        block.ln2.beta,
+        _expectShape(take('$p.layer_norm2.bias'), [d],
+            '$p.layer_norm2.bias'),
+      );
+
+      // Q / K / V per-head slice with biases.
+      final qW = _expectShape(take('$p.self_attn.q_proj.weight'), [d, d],
+          '$p.self_attn.q_proj.weight');
+      final qB = _expectShape(take('$p.self_attn.q_proj.bias'), [d],
+          '$p.self_attn.q_proj.bias');
+      final kW = _expectShape(take('$p.self_attn.k_proj.weight'), [d, d],
+          '$p.self_attn.k_proj.weight');
+      final kB = _expectShape(take('$p.self_attn.k_proj.bias'), [d],
+          '$p.self_attn.k_proj.bias');
+      final vW = _expectShape(take('$p.self_attn.v_proj.weight'), [d, d],
+          '$p.self_attn.v_proj.weight');
+      final vB = _expectShape(take('$p.self_attn.v_proj.bias'), [d],
+          '$p.self_attn.v_proj.bias');
+      for (int hh = 0; hh < h; hh++) {
+        _copy(
+          block.mha.wq[hh].weight,
+          _sliceRows(qW, hh * headDim, (hh + 1) * headDim),
+        );
+        _copy(
+          block.mha.wq[hh].bias!,
+          _slice1D(qB, hh * headDim, (hh + 1) * headDim),
+        );
+        _copy(
+          block.mha.wk[hh].weight,
+          _sliceRows(kW, hh * headDim, (hh + 1) * headDim),
+        );
+        _copy(
+          block.mha.wk[hh].bias!,
+          _slice1D(kB, hh * headDim, (hh + 1) * headDim),
+        );
+        _copy(
+          block.mha.wv[hh].weight,
+          _sliceRows(vW, hh * headDim, (hh + 1) * headDim),
+        );
+        _copy(
+          block.mha.wv[hh].bias!,
+          _slice1D(vB, hh * headDim, (hh + 1) * headDim),
+        );
+      }
+
+      _copy(
+        block.mha.wo.weight,
+        _expectShape(take('$p.self_attn.out_proj.weight'), [d, d],
+            '$p.self_attn.out_proj.weight'),
+      );
+      _copy(
+        block.mha.wo.bias!,
+        _expectShape(take('$p.self_attn.out_proj.bias'), [d],
+            '$p.self_attn.out_proj.bias'),
+      );
+
+      _copy(
+        block.ffn1.weight,
+        _expectShape(take('$p.mlp.fc1.weight'), [ffn, d],
+            '$p.mlp.fc1.weight'),
+      );
+      _copy(
+        block.ffn1.bias!,
+        _expectShape(take('$p.mlp.fc1.bias'), [ffn], '$p.mlp.fc1.bias'),
+      );
+      _copy(
+        block.ffn2.weight,
+        _expectShape(take('$p.mlp.fc2.weight'), [d, ffn],
+            '$p.mlp.fc2.weight'),
+      );
+      _copy(
+        block.ffn2.bias!,
+        _expectShape(take('$p.mlp.fc2.bias'), [d], '$p.mlp.fc2.bias'),
+      );
+    }
+
+    // ---------- final_layer_norm ----------
+    _copy(
+      model.finalLayerNorm.gamma,
+      _expectShape(take('final_layer_norm.weight'), [d],
+          'final_layer_norm.weight'),
+    );
+    _copy(
+      model.finalLayerNorm.beta,
+      _expectShape(take('final_layer_norm.bias'), [d],
+          'final_layer_norm.bias'),
+    );
+
+    final unused = state.keys.where((k) => !consumed.contains(k)).toList()
+      ..sort();
+    return ClipLoadReport(
+      prefix: prefix,
+      consumedCount: consumed.length,
+      unusedKeys: unused,
+    );
+  }
+
+  static String _detectTextPrefix(Map<String, Tensor> state) {
+    const candidates = ['text_model.', ''];
+    for (final p in candidates) {
+      if (state.containsKey('${p}embeddings.token_embedding.weight')) {
+        return p;
+      }
+    }
+    throw ArgumentError(
+      'clip text loader: cannot find '
+      '"embeddings.token_embedding.weight" in state dict '
+      '(checked prefixes: $candidates). Is this a CLIP text safetensors?',
+    );
   }
 }
 

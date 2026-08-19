@@ -66,6 +66,7 @@ export 'core/nn/clip_hf_loader.dart';
 export 'core/nn/vision/vision_encoder.dart';
 export 'core/nn/vision/vit_backbone.dart';
 export 'core/nn/vision/clip_vision_model.dart';
+export 'core/nn/vision/clip_text_model.dart';
 export 'core/nn/vision/vit_classifier.dart';
 export 'core/nn/vision/vit_face_embedding.dart';
 export 'core/nn/vision/vit_object_detector.dart';
