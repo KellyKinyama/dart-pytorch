@@ -342,10 +342,14 @@ void main() {
 
     test('loadProjectionsMap parses shapes correctly', () {
       final s = <String, Tensor>{
-        'visual_projection.weight':
-            Tensor.fromList([512, 768], List<double>.filled(512 * 768, 0.1)),
-        'text_projection.weight':
-            Tensor.fromList([512, 512], List<double>.filled(512 * 512, 0.2)),
+        'visual_projection.weight': Tensor.fromList([
+          512,
+          768,
+        ], List<double>.filled(512 * 768, 0.1)),
+        'text_projection.weight': Tensor.fromList([
+          512,
+          512,
+        ], List<double>.filled(512 * 512, 0.2)),
         'logit_scale': Tensor.fromList([1], [4.6052]),
       };
       final p = ClipHFLoader.loadProjectionsMap(s)!;
@@ -358,10 +362,14 @@ void main() {
 
     test('loadProjectionsMap accepts missing logit_scale', () {
       final s = <String, Tensor>{
-        'visual_projection.weight':
-            Tensor.fromList([512, 768], List<double>.filled(512 * 768, 0.1)),
-        'text_projection.weight':
-            Tensor.fromList([512, 512], List<double>.filled(512 * 512, 0.2)),
+        'visual_projection.weight': Tensor.fromList([
+          512,
+          768,
+        ], List<double>.filled(512 * 768, 0.1)),
+        'text_projection.weight': Tensor.fromList([
+          512,
+          512,
+        ], List<double>.filled(512 * 512, 0.2)),
       };
       final p = ClipHFLoader.loadProjectionsMap(s);
       expect(p, isNotNull);

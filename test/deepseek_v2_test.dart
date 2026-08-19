@@ -98,8 +98,9 @@ void main() {
       );
       final b = DeepSeekV2Block(layerIndex: 0, config: _tinyCfg, rope: rope);
       final rng = math.Random(1);
-      final vals =
-          Float32List.fromList(List.generate(5 * 32, (_) => rng.nextDouble()));
+      final vals = Float32List.fromList(
+        List.generate(5 * 32, (_) => rng.nextDouble()),
+      );
       final x = Tensor.fromFloat32List([5, 32], vals);
       expect(b(x).shape, equals([5, 32]));
     });
@@ -111,8 +112,9 @@ void main() {
       );
       final b = DeepSeekV2Block(layerIndex: 1, config: _tinyCfg, rope: rope);
       final rng = math.Random(2);
-      final vals =
-          Float32List.fromList(List.generate(4 * 32, (_) => rng.nextDouble()));
+      final vals = Float32List.fromList(
+        List.generate(4 * 32, (_) => rng.nextDouble()),
+      );
       final x = Tensor.fromFloat32List([4, 32], vals);
       expect(b(x).shape, equals([4, 32]));
     });
@@ -161,10 +163,9 @@ void main() {
     test('rejects empty and too-long sequences', () {
       final m = DeepSeekV2Model(_tinyCfg);
       expect(() => m(Tensor.fromList([0], [])), throwsArgumentError);
-      final tooLong = Tensor.fromList(
-        [_tinyCfg.maxCtx + 1],
-        List<double>.filled(_tinyCfg.maxCtx + 1, 1.0),
-      );
+      final tooLong = Tensor.fromList([
+        _tinyCfg.maxCtx + 1,
+      ], List<double>.filled(_tinyCfg.maxCtx + 1, 1.0));
       expect(() => m(tooLong), throwsArgumentError);
     });
 
@@ -173,8 +174,7 @@ void main() {
       final tokens = Tensor.fromList([4], [1.0, 5.0, 9.0, 13.0]);
       final logits = m(tokens).toList();
       for (int i = 0; i < logits.length; i++) {
-        expect(logits[i].isFinite, isTrue,
-            reason: 'logit $i is ${logits[i]}');
+        expect(logits[i].isFinite, isTrue, reason: 'logit $i is ${logits[i]}');
       }
     });
   });
@@ -182,8 +182,11 @@ void main() {
   group('DeepSeekV2 on GPU', () {
     final gpuOk = _gpuAvailable();
     if (!gpuOk) {
-      test('GPU unavailable → skipped', () {},
-          skip: 'CUDA / native/lib/libmat_mul.so not usable in this env');
+      test(
+        'GPU unavailable → skipped',
+        () {},
+        skip: 'CUDA / native/lib/libmat_mul.so not usable in this env',
+      );
       return;
     }
     test('single dense block CPU vs GPU parity', () {
@@ -215,11 +218,7 @@ void main() {
         mlaConfig: _tinyCfg.mlaConfig,
         device: Device.GPU,
       );
-      final gpu = DeepSeekV2Block(
-        layerIndex: 0,
-        config: gpuCfg,
-        rope: ropeGpu,
-      );
+      final gpu = DeepSeekV2Block(layerIndex: 0, config: gpuCfg, rope: ropeGpu);
       final cpuP = cpu.parameters();
       final gpuP = gpu.parameters();
       expect(cpuP.length, gpuP.length);
@@ -228,8 +227,7 @@ void main() {
           Tensor.fromList(cpuP[i].shape, cpuP[i].toList(), device: Device.GPU),
         );
       }
-      final xVals =
-          List<double>.generate(5 * 32, (i) => math.sin(i * 0.11));
+      final xVals = List<double>.generate(5 * 32, (i) => math.sin(i * 0.11));
       final xCpu = Tensor.fromList([5, 32], xVals);
       final xGpu = Tensor.fromList([5, 32], xVals, device: Device.GPU);
       final maskCpu = causalMask(5);

@@ -148,46 +148,46 @@ class DeepSeekV2Block extends Module {
     required this.layerIndex,
     required DeepSeekV2Config config,
     required RopeCache rope,
-  })  : isMoE = layerIndex >= config.firstKDenseReplace,
-        attnLn = RMSNorm(
-          config.embedDim,
-          eps: config.rmsNormEps,
-          device: config.device,
-        ),
-        attn = MultiHeadLatentAttention(
-          config.mlaConfig,
-          device: config.device,
-          seed: config.seed + layerIndex * 1_000_000,
-        ),
-        ffnLn = RMSNorm(
-          config.embedDim,
-          eps: config.rmsNormEps,
-          device: config.device,
-        ),
-        denseFfn = layerIndex >= config.firstKDenseReplace
-            ? null
-            : SwiGluFfn(
-                config.embedDim,
-                config.denseFfnDim,
-                device: config.device,
-                seed: config.seed + layerIndex * 1_000_000 + 900_000,
-              ),
-        moeFfn = layerIndex >= config.firstKDenseReplace
-            ? MoEFeedForward(
-                embedDim: config.embedDim,
-                numRoutedExperts: config.numRoutedExperts,
-                numSharedExperts: config.numSharedExperts,
-                topK: config.numExpertsPerTok,
-                expertHiddenDim: config.moeExpertHiddenDim,
-                numExpertGroups: config.numExpertGroups,
-                topKGroups: config.topKGroups,
-                activation: ExpertActivation.silu,
-                expertVariant: ExpertVariant.swiGlu,
-                gateFunction: GateFunction.softmax,
-                device: config.device,
-                seed: config.seed + layerIndex * 1_000_000 + 950_000,
-              )
-            : null {
+  }) : isMoE = layerIndex >= config.firstKDenseReplace,
+       attnLn = RMSNorm(
+         config.embedDim,
+         eps: config.rmsNormEps,
+         device: config.device,
+       ),
+       attn = MultiHeadLatentAttention(
+         config.mlaConfig,
+         device: config.device,
+         seed: config.seed + layerIndex * 1_000_000,
+       ),
+       ffnLn = RMSNorm(
+         config.embedDim,
+         eps: config.rmsNormEps,
+         device: config.device,
+       ),
+       denseFfn = layerIndex >= config.firstKDenseReplace
+           ? null
+           : SwiGluFfn(
+               config.embedDim,
+               config.denseFfnDim,
+               device: config.device,
+               seed: config.seed + layerIndex * 1_000_000 + 900_000,
+             ),
+       moeFfn = layerIndex >= config.firstKDenseReplace
+           ? MoEFeedForward(
+               embedDim: config.embedDim,
+               numRoutedExperts: config.numRoutedExperts,
+               numSharedExperts: config.numSharedExperts,
+               topK: config.numExpertsPerTok,
+               expertHiddenDim: config.moeExpertHiddenDim,
+               numExpertGroups: config.numExpertGroups,
+               topKGroups: config.topKGroups,
+               activation: ExpertActivation.silu,
+               expertVariant: ExpertVariant.swiGlu,
+               gateFunction: GateFunction.softmax,
+               device: config.device,
+               seed: config.seed + layerIndex * 1_000_000 + 950_000,
+             )
+           : null {
     attn.rope = rope;
   }
 
@@ -200,21 +200,21 @@ class DeepSeekV2Block extends Module {
 
   @override
   List<Tensor> parameters() => [
-        ...attnLn.parameters(),
-        ...attn.parameters(),
-        ...ffnLn.parameters(),
-        if (denseFfn != null) ...denseFfn!.parameters(),
-        if (moeFfn != null) ...moeFfn!.parameters(),
-      ];
+    ...attnLn.parameters(),
+    ...attn.parameters(),
+    ...ffnLn.parameters(),
+    if (denseFfn != null) ...denseFfn!.parameters(),
+    if (moeFfn != null) ...moeFfn!.parameters(),
+  ];
 
   @override
   List<Module> submodules() => [
-        attnLn,
-        attn,
-        ffnLn,
-        if (denseFfn != null) denseFfn!,
-        if (moeFfn != null) moeFfn!,
-      ];
+    attnLn,
+    attn,
+    ffnLn,
+    if (denseFfn != null) denseFfn!,
+    if (moeFfn != null) moeFfn!,
+  ];
 }
 
 class DeepSeekV2Model extends Module {
@@ -230,39 +230,35 @@ class DeepSeekV2Model extends Module {
   final Linear? untiedHead;
 
   DeepSeekV2Model(this.config)
-      : embedIn = Embedding(
-          config.vocabSize,
-          config.embedDim,
-          device: config.device,
-          seed: config.seed,
-        ),
-        finalNorm = RMSNorm(
-          config.embedDim,
-          eps: config.rmsNormEps,
-          device: config.device,
-        ),
-        rope = RopeCache(
-          maxCtx: config.maxCtx,
-          headDim: config.mlaConfig.qkRopeHeadDim,
-          base: config.ropeBase,
-          device: config.device,
-        ),
-        untiedHead = config.tieWordEmbeddings
-            ? null
-            : Linear(
-                config.embedDim,
-                config.vocabSize,
-                bias: false,
-                device: config.device,
-                seed: config.seed + 900_000_000,
-              ),
-        blocks = <DeepSeekV2Block>[] {
+    : embedIn = Embedding(
+        config.vocabSize,
+        config.embedDim,
+        device: config.device,
+        seed: config.seed,
+      ),
+      finalNorm = RMSNorm(
+        config.embedDim,
+        eps: config.rmsNormEps,
+        device: config.device,
+      ),
+      rope = RopeCache(
+        maxCtx: config.maxCtx,
+        headDim: config.mlaConfig.qkRopeHeadDim,
+        base: config.ropeBase,
+        device: config.device,
+      ),
+      untiedHead = config.tieWordEmbeddings
+          ? null
+          : Linear(
+              config.embedDim,
+              config.vocabSize,
+              bias: false,
+              device: config.device,
+              seed: config.seed + 900_000_000,
+            ),
+      blocks = <DeepSeekV2Block>[] {
     for (int i = 0; i < config.numLayers; i++) {
-      blocks.add(DeepSeekV2Block(
-        layerIndex: i,
-        config: config,
-        rope: rope,
-      ));
+      blocks.add(DeepSeekV2Block(layerIndex: i, config: config, rope: rope));
     }
   }
 
@@ -298,17 +294,17 @@ class DeepSeekV2Model extends Module {
 
   @override
   List<Tensor> parameters() => [
-        ...embedIn.parameters(),
-        for (final b in blocks) ...b.parameters(),
-        ...finalNorm.parameters(),
-        if (untiedHead != null) ...untiedHead!.parameters(),
-      ];
+    ...embedIn.parameters(),
+    for (final b in blocks) ...b.parameters(),
+    ...finalNorm.parameters(),
+    if (untiedHead != null) ...untiedHead!.parameters(),
+  ];
 
   @override
   List<Module> submodules() => [
-        embedIn,
-        ...blocks,
-        finalNorm,
-        if (untiedHead != null) untiedHead!,
-      ];
+    embedIn,
+    ...blocks,
+    finalNorm,
+    if (untiedHead != null) untiedHead!,
+  ];
 }

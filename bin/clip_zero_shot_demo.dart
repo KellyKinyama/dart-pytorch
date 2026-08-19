@@ -68,8 +68,10 @@ Future<void> main(List<String> args) async {
     }
   }
   if (imagePath == null) {
-    stderr.writeln('usage: dart run bin/clip_zero_shot_demo.dart '
-        '--image PATH [--labels LABEL1,LABEL2,...] [--topk N]');
+    stderr.writeln(
+      'usage: dart run bin/clip_zero_shot_demo.dart '
+      '--image PATH [--labels LABEL1,LABEL2,...] [--topk N]',
+    );
     exit(64);
   }
   for (final p in [imagePath, weightsPath, tokenizerPath]) {
@@ -84,8 +86,10 @@ Future<void> main(List<String> args) async {
   // ---------- Build models ----------
   final visionCfg = ClipHFLoader.base32Config();
   final textCfg = ClipHFLoader.baseTextConfig();
-  print('Building CLIP-ViT-B/32 (vision hidden=${visionCfg.embedDim}, '
-      'text hidden=${textCfg.embedDim})');
+  print(
+    'Building CLIP-ViT-B/32 (vision hidden=${visionCfg.embedDim}, '
+    'text hidden=${textCfg.embedDim})',
+  );
   final visionModel = CLIPVisionModel(visionCfg);
   final textModel = CLIPTextModel(textCfg);
 
@@ -104,8 +108,10 @@ Future<void> main(List<String> args) async {
     );
     exit(3);
   }
-  print('  projections: projDim=${proj.projDim} '
-      'visionHidden=${proj.visionHidden} textHidden=${proj.textHidden}');
+  print(
+    '  projections: projDim=${proj.projDim} '
+    'visionHidden=${proj.visionHidden} textHidden=${proj.textHidden}',
+  );
 
   final tokenizer = HFBpeTokenizer.loadFile(tokenizerPath);
 
@@ -132,13 +138,14 @@ Future<void> main(List<String> args) async {
     final bpeIds = tokenizer.encode(prompt);
     final wrapped = <int>[_bos, ...bpeIds, _eos];
     if (wrapped.length > maxCtx) {
-      throw StateError('label "$label" tokenises to ${wrapped.length} '
-          'ids (> maxCtx=$maxCtx)');
+      throw StateError(
+        'label "$label" tokenises to ${wrapped.length} '
+        'ids (> maxCtx=$maxCtx)',
+      );
     }
-    final tokens = Tensor.fromList(
-      [wrapped.length],
-      wrapped.map((i) => i.toDouble()).toList(),
-    );
+    final tokens = Tensor.fromList([
+      wrapped.length,
+    ], wrapped.map((i) => i.toDouble()).toList());
     final pooled = textModel.pooledEmbedding(tokens); // argmax token
     final projected = _project(pooled.toList(), proj.textProjection);
     labelEmbeds.add(_l2Normalize(projected));
@@ -176,9 +183,11 @@ Future<void> main(List<String> args) async {
   print('  ${'label'.padRight(20)}  ${'prob'.padLeft(8)}  ${'cos'.padLeft(8)}');
   for (int i = 0; i < topK; i++) {
     final (label, prob, cos) = ranked[i];
-    print('  ${label.padRight(20)}  '
-        '${(prob * 100).toStringAsFixed(2).padLeft(7)}%  '
-        '${cos.toStringAsFixed(4).padLeft(8)}');
+    print(
+      '  ${label.padRight(20)}  '
+      '${(prob * 100).toStringAsFixed(2).padLeft(7)}%  '
+      '${cos.toStringAsFixed(4).padLeft(8)}',
+    );
   }
 }
 

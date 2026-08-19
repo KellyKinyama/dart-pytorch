@@ -130,24 +130,26 @@ void main() {
       expect(() => mla(_rand([3, 32], seed: 5)), throwsStateError);
     });
 
-    test('parameter list surfaces every learnable tensor (with Q compression)',
-        () {
-      final mla = MultiHeadLatentAttention(_tinyCfg);
-      final params = mla.parameters();
-      // Counts:
-      //   qDown: 1
-      //   qLn (RMSNorm): 1 (gamma only)
-      //   qUpNope: numHeads = 4
-      //   qUpRope: numHeads = 4
-      //   kvDown: 1
-      //   kvLn: 1
-      //   kRope: 1
-      //   kUpNope: numHeads = 4
-      //   vUp: numHeads = 4
-      //   oProj: 1
-      final expected = 1 + 1 + 4 + 4 + 1 + 1 + 1 + 4 + 4 + 1;
-      expect(params.length, expected);
-    });
+    test(
+      'parameter list surfaces every learnable tensor (with Q compression)',
+      () {
+        final mla = MultiHeadLatentAttention(_tinyCfg);
+        final params = mla.parameters();
+        // Counts:
+        //   qDown: 1
+        //   qLn (RMSNorm): 1 (gamma only)
+        //   qUpNope: numHeads = 4
+        //   qUpRope: numHeads = 4
+        //   kvDown: 1
+        //   kvLn: 1
+        //   kRope: 1
+        //   kUpNope: numHeads = 4
+        //   vUp: numHeads = 4
+        //   oProj: 1
+        final expected = 1 + 1 + 4 + 4 + 1 + 1 + 1 + 4 + 4 + 1;
+        expect(params.length, expected);
+      },
+    );
 
     test('no-Q-compression (Lite-style) — forward works + param count drops '
         'by 2', () {

@@ -38,6 +38,7 @@ import '../rotary.dart';
 class MLAConfig {
   final int embedDim;
   final int numHeads;
+
   /// When non-null, Q is passed through a `Linear(embedDim, qLoraRank)`
   /// + `RMSNorm(qLoraRank)` bottleneck before the per-head Q up-
   /// projections. When null (DeepSeek-V2-Lite), Q goes directly from
@@ -131,88 +132,84 @@ class MultiHeadLatentAttention extends Module {
     this.config, {
     Device device = Device.CPU,
     int seed = 0,
-  })  : qDown = config.qLoraRank == null
-            ? null
-            : Linear(
-                config.embedDim,
-                config.qLoraRank!,
-                bias: false,
-                device: device,
-                seed: seed,
-              ),
-        qLn = config.qLoraRank == null
-            ? null
-            : RMSNorm(
-                config.qLoraRank!,
-                eps: config.rmsNormEps,
-                device: device,
-              ),
-        qUpNope = List<Linear>.generate(
-          config.numHeads,
-          (h) => Linear(
-            config.qLoraRank ?? config.embedDim,
-            config.qkNopeHeadDim,
-            bias: false,
-            device: device,
-            seed: seed + 100_000 + h,
-          ),
-        ),
-        qUpRope = List<Linear>.generate(
-          config.numHeads,
-          (h) => Linear(
-            config.qLoraRank ?? config.embedDim,
-            config.qkRopeHeadDim,
-            bias: false,
-            device: device,
-            seed: seed + 200_000 + h,
-          ),
-        ),
-        kvDown = Linear(
-          config.embedDim,
-          config.kvLoraRank,
-          bias: false,
-          device: device,
-          seed: seed + 300_000,
-        ),
-        kvLn = RMSNorm(
-          config.kvLoraRank,
-          eps: config.rmsNormEps,
-          device: device,
-        ),
-        kRope = Linear(
-          config.embedDim,
-          config.qkRopeHeadDim,
-          bias: false,
-          device: device,
-          seed: seed + 400_000,
-        ),
-        kUpNope = List<Linear>.generate(
-          config.numHeads,
-          (h) => Linear(
-            config.kvLoraRank,
-            config.qkNopeHeadDim,
-            bias: false,
-            device: device,
-            seed: seed + 500_000 + h,
-          ),
-        ),
-        vUp = List<Linear>.generate(
-          config.numHeads,
-          (h) => Linear(
-            config.kvLoraRank,
-            config.vHeadDim,
-            bias: false,
-            device: device,
-            seed: seed + 600_000 + h,
-          ),
-        ),
-        oProj = Linear(
-          config.numHeads * config.vHeadDim,
-          config.embedDim,
-          bias: false,
-          device: device,
-          seed: seed + 700_000,
-        );
+  }) : qDown = config.qLoraRank == null
+           ? null
+           : Linear(
+               config.embedDim,
+               config.qLoraRank!,
+               bias: false,
+               device: device,
+               seed: seed,
+             ),
+       qLn = config.qLoraRank == null
+           ? null
+           : RMSNorm(config.qLoraRank!, eps: config.rmsNormEps, device: device),
+       qUpNope = List<Linear>.generate(
+         config.numHeads,
+         (h) => Linear(
+           config.qLoraRank ?? config.embedDim,
+           config.qkNopeHeadDim,
+           bias: false,
+           device: device,
+           seed: seed + 100_000 + h,
+         ),
+       ),
+       qUpRope = List<Linear>.generate(
+         config.numHeads,
+         (h) => Linear(
+           config.qLoraRank ?? config.embedDim,
+           config.qkRopeHeadDim,
+           bias: false,
+           device: device,
+           seed: seed + 200_000 + h,
+         ),
+       ),
+       kvDown = Linear(
+         config.embedDim,
+         config.kvLoraRank,
+         bias: false,
+         device: device,
+         seed: seed + 300_000,
+       ),
+       kvLn = RMSNorm(
+         config.kvLoraRank,
+         eps: config.rmsNormEps,
+         device: device,
+       ),
+       kRope = Linear(
+         config.embedDim,
+         config.qkRopeHeadDim,
+         bias: false,
+         device: device,
+         seed: seed + 400_000,
+       ),
+       kUpNope = List<Linear>.generate(
+         config.numHeads,
+         (h) => Linear(
+           config.kvLoraRank,
+           config.qkNopeHeadDim,
+           bias: false,
+           device: device,
+           seed: seed + 500_000 + h,
+         ),
+       ),
+       vUp = List<Linear>.generate(
+         config.numHeads,
+         (h) => Linear(
+           config.kvLoraRank,
+           config.vHeadDim,
+           bias: false,
+           device: device,
+           seed: seed + 600_000 + h,
+         ),
+       ),
+       oProj = Linear(
+         config.numHeads * config.vHeadDim,
+         config.embedDim,
+         bias: false,
+         device: device,
+         seed: seed + 700_000,
+       );
 
   /// Forward pass. `x` is `[N, embedDim]`. Optional additive attention
   /// `mask` is broadcast to `[N, N]` (typical causal mask).
