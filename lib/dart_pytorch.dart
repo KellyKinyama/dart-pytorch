@@ -41,6 +41,7 @@ export 'core/nn/attention/aft_attention.dart';
 export 'core/nn/attention/mla.dart';
 export 'core/nn/deepseek_v2.dart';
 export 'core/nn/deepseek_v2_hf_loader.dart';
+export 'core/nn/f5_tts.dart';
 export 'core/nn/transformer.dart';
 export 'core/nn/positional.dart';
 export 'core/nn/masks.dart';
