@@ -465,4 +465,276 @@ void main() {
       );
     });
   });
+
+  group('F5DurationPredictor', () {
+    test('output shape [T]', () {
+      final dp = F5DurationPredictor(
+        textDim: 32,
+        intermediateDim: 64,
+        numLayers: 2,
+      );
+      final text = _fake([12, 32], seed: 1100);
+      expect(dp(text).shape, equals([12]));
+    });
+
+    test('all durations are non-negative (softplus output)', () {
+      final dp = F5DurationPredictor(
+        textDim: 32,
+        intermediateDim: 64,
+        numLayers: 1,
+      );
+      final text = _fake([8, 32], seed: 1200);
+      for (final v in dp(text).toList()) {
+        expect(v >= 0, isTrue);
+      }
+    });
+
+    test('expandTextToFrames broadcasts by rounded durations', () {
+      final text = Tensor.fromList([3, 2], [
+        1.0, 1.1, //
+        2.0, 2.2, //
+        3.0, 3.3, //
+      ]);
+      final dur = Tensor.fromList([3], [1.0, 2.0, 0.0]);
+      final expanded = F5DurationPredictor.expandTextToFrames(text, dur);
+      // 1 frame of row 0, 2 frames of row 1, 0 frames of row 2.
+      expect(expanded.shape, equals([3, 2]));
+      final vals = expanded.toList();
+      final want = [1.0, 1.1, 2.0, 2.2, 2.0, 2.2];
+      for (int i = 0; i < want.length; i++) {
+        expect((vals[i] - want[i]).abs() < 1e-4, isTrue,
+            reason: 'i=$i vals=${vals[i]} want=${want[i]}');
+      }
+    });
+
+    test('expandTextToFrames zero-duration char dropped', () {
+      final text = Tensor.fromList([2, 3], [1, 2, 3, 4, 5, 6]);
+      final dur = Tensor.fromList([2], [0.0, 3.0]);
+      final expanded = F5DurationPredictor.expandTextToFrames(text, dur);
+      expect(expanded.shape, equals([3, 3]));
+      final vals = expanded.toList();
+      expect(vals, equals([4, 5, 6, 4, 5, 6, 4, 5, 6]));
+    });
+  });
+
+  group('F5TtsHFLoader roundtrip', () {
+    Map<String, Tensor> _dumpBundle(F5TextEncoder te, F5DiT dit,
+        F5DurationPredictor? dp) {
+      final s = <String, Tensor>{};
+      // Text encoder.
+      s['text_embed.embedding.weight'] = te.tokenEmbedding.weight;
+      for (int i = 0; i < te.blocks.length; i++) {
+        _dumpConvBlock(te.blocks[i], s, 'text_embed.blocks.$i');
+      }
+      s['text_embed.norm.weight'] = te.finalNorm.gamma;
+      s['text_embed.norm.bias'] = te.finalNorm.beta;
+      // DiT.
+      s['input_proj.weight'] = dit.inputProj.weight;
+      s['input_proj.bias'] =
+          Tensor.fromList([dit.embedDim], dit.inputProj.bias!.toList());
+      s['time_embed.freq_proj.weight'] = dit.timeEmbed.proj1.weight;
+      s['time_embed.freq_proj.bias'] = Tensor.fromList(
+          [dit.embedDim], dit.timeEmbed.proj1.bias!.toList());
+      s['time_embed.out_proj.weight'] = dit.timeEmbed.proj2.weight;
+      s['time_embed.out_proj.bias'] = Tensor.fromList(
+          [dit.embedDim], dit.timeEmbed.proj2.bias!.toList());
+      final nh = dit.numHeads;
+      final hd = dit.embedDim ~/ nh;
+      for (int i = 0; i < dit.blocks.length; i++) {
+        final b = dit.blocks[i];
+        final p = 'blocks.$i';
+        s['$p.norm1.weight'] = b.norm1.gamma;
+        s['$p.norm1.bias'] = b.norm1.beta;
+        // Rebuild fused QKV.
+        for (final (proj, list) in [
+          ('q_proj', b.attn.wq),
+          ('k_proj', b.attn.wk),
+          ('v_proj', b.attn.wv),
+        ]) {
+          final wRows = <double>[];
+          final bRows = <double>[];
+          for (int h = 0; h < nh; h++) {
+            wRows.addAll(list[h].weight.toList());
+            bRows.addAll(list[h].bias!.toList());
+          }
+          s['$p.attn.$proj.weight'] =
+              Tensor.fromList([dit.embedDim, dit.embedDim], wRows);
+          s['$p.attn.$proj.bias'] =
+              Tensor.fromList([dit.embedDim], bRows);
+          // silence hd unused
+          (hd);
+        }
+        s['$p.attn.o_proj.weight'] = b.attn.wo.weight;
+        s['$p.attn.o_proj.bias'] =
+            Tensor.fromList([dit.embedDim], b.attn.wo.bias!.toList());
+        s['$p.norm2.weight'] = b.norm2.gamma;
+        s['$p.norm2.bias'] = b.norm2.beta;
+        s['$p.fc1.weight'] = b.fc1.weight;
+        s['$p.fc1.bias'] =
+            Tensor.fromList([dit.mlpDim], b.fc1.bias!.toList());
+        s['$p.fc2.weight'] = b.fc2.weight;
+        s['$p.fc2.bias'] =
+            Tensor.fromList([dit.embedDim], b.fc2.bias!.toList());
+        s['$p.adaLN.modulation.weight'] = b.adaLn.modulation.weight;
+        s['$p.adaLN.modulation.bias'] = Tensor.fromList(
+            [6 * dit.embedDim], b.adaLn.modulation.bias!.toList());
+      }
+      s['norm_out.weight'] = dit.finalNorm.gamma;
+      s['norm_out.bias'] = dit.finalNorm.beta;
+      s['output_proj.weight'] = dit.outputProj.weight;
+      s['output_proj.bias'] =
+          Tensor.fromList([dit.melDim], dit.outputProj.bias!.toList());
+
+      if (dp != null) {
+        for (int i = 0; i < dp.blocks.length; i++) {
+          _dumpConvBlock(dp.blocks[i], s, 'duration.blocks.$i');
+        }
+        s['duration.norm.weight'] = dp.finalNorm.gamma;
+        s['duration.norm.bias'] = dp.finalNorm.beta;
+        s['duration.head.weight'] = dp.head.weight;
+        s['duration.head.bias'] =
+            Tensor.fromList([1], dp.head.bias!.toList());
+      }
+      return s;
+    }
+
+    test('text-encoder + DiT + duration roundtrip consumes all keys', () {
+      final te = F5TextEncoder(
+        vocabSize: 100,
+        dim: 32,
+        intermediateDim: 64,
+        numLayers: 2,
+      );
+      final dit = F5DiT(
+        melDim: 8,
+        textDim: 16,
+        embedDim: 32,
+        numLayers: 2,
+        numHeads: 4,
+        mlpDim: 64,
+        freqDim: 16,
+      );
+      final dp = F5DurationPredictor(
+        textDim: 32,
+        intermediateDim: 64,
+        numLayers: 1,
+      );
+      final state = _dumpBundle(te, dit, dp);
+
+      final teDst = F5TextEncoder(
+        vocabSize: 100,
+        dim: 32,
+        intermediateDim: 64,
+        numLayers: 2,
+        seed: 999,
+      );
+      final ditDst = F5DiT(
+        melDim: 8,
+        textDim: 16,
+        embedDim: 32,
+        numLayers: 2,
+        numHeads: 4,
+        mlpDim: 64,
+        freqDim: 16,
+        seed: 999,
+      );
+      final dpDst = F5DurationPredictor(
+        textDim: 32,
+        intermediateDim: 64,
+        numLayers: 1,
+        seed: 999,
+      );
+      final report = F5TtsHFLoader.loadMap(
+        textEncoder: teDst,
+        dit: ditDst,
+        durationPredictor: dpDst,
+        state: state,
+      );
+      expect(report.unusedKeys, isEmpty,
+          reason: 'unused: ${report.unusedKeys.take(5).toList()}');
+    });
+
+    test('without durationPredictor, duration keys go to unusedKeys', () {
+      final te = F5TextEncoder(
+        vocabSize: 100,
+        dim: 32,
+        intermediateDim: 64,
+        numLayers: 1,
+      );
+      final dit = F5DiT(
+        melDim: 8,
+        textDim: 16,
+        embedDim: 32,
+        numLayers: 1,
+        numHeads: 4,
+        mlpDim: 32,
+        freqDim: 16,
+      );
+      final dp = F5DurationPredictor(
+        textDim: 32,
+        intermediateDim: 64,
+        numLayers: 1,
+      );
+      final state = _dumpBundle(te, dit, dp);
+      final report = F5TtsHFLoader.loadMap(
+        textEncoder: te,
+        dit: dit,
+        durationPredictor: null,
+        state: state,
+      );
+      expect(report.unusedKeys, isNotEmpty);
+      for (final k in report.unusedKeys) {
+        expect(k.startsWith('duration.'), isTrue,
+            reason: 'unexpected unused key: $k');
+      }
+    });
+
+    test('rejects missing key', () {
+      final te = F5TextEncoder(
+        vocabSize: 50,
+        dim: 16,
+        intermediateDim: 32,
+        numLayers: 1,
+      );
+      final dit = F5DiT(
+        melDim: 4,
+        textDim: 8,
+        embedDim: 16,
+        numLayers: 1,
+        numHeads: 2,
+        mlpDim: 16,
+        freqDim: 8,
+      );
+      final state = _dumpBundle(te, dit, null);
+      state.remove('norm_out.weight');
+      expect(
+        () => F5TtsHFLoader.loadMap(
+          textEncoder: te,
+          dit: dit,
+          state: state,
+        ),
+        throwsArgumentError,
+      );
+    });
+  });
+}
+
+void _dumpConvBlock(
+  ConvNeXtV2Block b,
+  Map<String, Tensor> s,
+  String prefix,
+) {
+  s['$prefix.dwconv.weight'] = b.dwconv.weight;
+  s['$prefix.dwconv.bias'] =
+      Tensor.fromList([b.dim], b.dwconv.bias!.toList());
+  s['$prefix.norm.weight'] = b.norm.gamma;
+  s['$prefix.norm.bias'] = b.norm.beta;
+  s['$prefix.pwconv1.weight'] = b.pwconv1.weight;
+  s['$prefix.pwconv1.bias'] =
+      Tensor.fromList([b.intermediateDim], b.pwconv1.bias!.toList());
+  s['$prefix.grn.gamma'] = b.grn.gamma;
+  s['$prefix.grn.beta'] = b.grn.beta;
+  s['$prefix.pwconv2.weight'] = b.pwconv2.weight;
+  s['$prefix.pwconv2.bias'] =
+      Tensor.fromList([b.dim], b.pwconv2.bias!.toList());
 }

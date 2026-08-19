@@ -577,15 +577,15 @@ class SamHFLoader {
     //      output_upscaling.3 = ConvTranspose2d(embed/4, embed/8, k=2, s=2)
     //      output_upscaling.4 = GELU
     _copy(
-      m.outputUpscaling1.weight,
+      m.output_upscaling_1.weight,
       _expectShape(
         take('mask_decoder.output_upscaling.0.weight'),
-        m.outputUpscaling1.weight.shape,
+        m.output_upscaling_1.weight.shape,
         'mask_decoder.output_upscaling.0.weight',
       ),
     );
     _copy(
-      m.outputUpscaling1.bias!,
+      m.output_upscaling_1.bias!,
       _reshapeVectorTo1xN(
         _expectShape(
           take('mask_decoder.output_upscaling.0.bias'),
@@ -595,7 +595,7 @@ class SamHFLoader {
       ),
     );
     _copy(
-      m.outputUpscalingLn.gamma,
+      m.output_upscaling_ln.gamma,
       _expectShape(
         take('mask_decoder.output_upscaling.1.weight'),
         [cfg.embedDim ~/ 4],
@@ -603,7 +603,7 @@ class SamHFLoader {
       ),
     );
     _copy(
-      m.outputUpscalingLn.beta,
+      m.output_upscaling_ln.beta,
       _expectShape(
         take('mask_decoder.output_upscaling.1.bias'),
         [cfg.embedDim ~/ 4],
@@ -611,15 +611,15 @@ class SamHFLoader {
       ),
     );
     _copy(
-      m.outputUpscaling2.weight,
+      m.output_upscaling_2.weight,
       _expectShape(
         take('mask_decoder.output_upscaling.3.weight'),
-        m.outputUpscaling2.weight.shape,
+        m.output_upscaling_2.weight.shape,
         'mask_decoder.output_upscaling.3.weight',
       ),
     );
     _copy(
-      m.outputUpscaling2.bias!,
+      m.output_upscaling_2.bias!,
       _reshapeVectorTo1xN(
         _expectShape(
           take('mask_decoder.output_upscaling.3.bias'),

@@ -984,3 +984,556 @@ class F5DiT extends Module {
     outputProj,
   ];
 }
+
+// ---------------------------------------------------------------------------
+// F5DurationPredictor — per-character mel-frame duration regression.
+// ---------------------------------------------------------------------------
+
+/// Small regression head that predicts, for each character token, how
+/// many mel frames it should span. Given text-encoder features
+/// `[T_chars, textDim]` it produces `[T_chars]` frame counts.
+///
+/// Real F5-TTS uses a MAS-aligned duration model with a two-layer
+/// convolution + Linear head trained with an alignment loss. This
+/// implementation is the same shape (two [ConvNeXtV2Block]s + Linear
+/// to `1`) so the loader path is exactly what a real checkpoint
+/// expects; the alignment training loop is a follow-up.
+///
+/// The result is a **soft** prediction; call [expandTextToFrames] to
+/// broadcast per-character features into per-frame features (repeat +
+/// round the predicted durations).
+class F5DurationPredictor extends Module {
+  final int textDim;
+  final int intermediateDim;
+  final List<ConvNeXtV2Block> blocks;
+  final LayerNorm finalNorm;
+  final Linear head;
+
+  F5DurationPredictor({
+    required this.textDim,
+    this.intermediateDim = 512,
+    int numLayers = 2,
+    int convKernelSize = 3,
+    Device device = Device.CPU,
+    int seed = 0,
+  }) : blocks = <ConvNeXtV2Block>[],
+       finalNorm = LayerNorm(textDim, eps: 1e-6, device: device),
+       head = Linear(textDim, 1, bias: true, device: device, seed: seed + 100) {
+    for (int i = 0; i < numLayers; i++) {
+      blocks.add(
+        ConvNeXtV2Block(
+          dim: textDim,
+          intermediateDim: intermediateDim,
+          kernelSize: convKernelSize,
+          device: device,
+          seed: seed + 10_000 * (i + 1),
+        ),
+      );
+    }
+  }
+
+  /// `textFeatures: [T_chars, textDim]` → `[T_chars]` predicted
+  /// mel-frame durations (softplus-squashed non-negative values).
+  Tensor call(Tensor textFeatures) {
+    if (textFeatures.shape.length != 2 || textFeatures.shape[1] != textDim) {
+      throw ArgumentError(
+        'F5DurationPredictor: expected [T, $textDim]; got '
+        '${textFeatures.shape}',
+      );
+    }
+    final t = textFeatures.shape[0];
+    var h = textFeatures.reshape([1, t, textDim]);
+    for (final b in blocks) {
+      h = b(h);
+    }
+    final flat = h.reshape([t, textDim]);
+    final normed = finalNorm(flat);
+    final raw = head(normed).reshape([t]);
+    // Softplus for non-negative durations: log(1 + exp(x)).
+    final rawData = raw.toList();
+    final out = List<double>.filled(t, 0);
+    for (int i = 0; i < t; i++) {
+      final v = rawData[i];
+      // Numerically stable softplus.
+      out[i] = v > 20 ? v : math.log(1.0 + math.exp(v));
+    }
+    return Tensor.fromList([t], out, device: textFeatures.device);
+  }
+
+  /// Given per-character features `[T_chars, D]` and per-character
+  /// duration integers `[T_chars]`, broadcast into per-frame features
+  /// `[sum(durations), D]`. Frame count is rounded to nearest integer;
+  /// zero-duration characters are dropped.
+  static Tensor expandTextToFrames(Tensor textFeatures, Tensor durations) {
+    if (textFeatures.shape.length != 2 ||
+        durations.shape.length != 1 ||
+        durations.shape[0] != textFeatures.shape[0]) {
+      throw ArgumentError(
+        'expandTextToFrames: expected textFeatures=[T, D] and '
+        'durations=[T]; got ${textFeatures.shape} and ${durations.shape}',
+      );
+    }
+    final t = textFeatures.shape[0];
+    final d = textFeatures.shape[1];
+    final tData = textFeatures.toList();
+    final dData = durations.toList();
+    var totalFrames = 0;
+    final rounded = List<int>.filled(t, 0);
+    for (int i = 0; i < t; i++) {
+      final r = dData[i].round();
+      rounded[i] = r < 0 ? 0 : r;
+      totalFrames += rounded[i];
+    }
+    final out = List<double>.filled(totalFrames * d, 0);
+    var frameOff = 0;
+    for (int i = 0; i < t; i++) {
+      for (int f = 0; f < rounded[i]; f++) {
+        for (int c = 0; c < d; c++) {
+          out[frameOff * d + c] = tData[i * d + c];
+        }
+        frameOff++;
+      }
+    }
+    return Tensor.fromList([totalFrames, d], out, device: textFeatures.device);
+  }
+
+  @override
+  List<Tensor> parameters() => [
+    for (final b in blocks) ...b.parameters(),
+    ...finalNorm.parameters(),
+    ...head.parameters(),
+  ];
+
+  @override
+  List<Module> submodules() => [...blocks, finalNorm, head];
+}
+
+// ---------------------------------------------------------------------------
+// F5TtsHFLoader — safetensors bindings for text encoder + DiT + duration.
+// ---------------------------------------------------------------------------
+
+/// Loader for F5-TTS safetensors. F5-TTS's checkpoint layout is
+/// custom; this loader targets the reference `SWivet/f5-tts` state
+/// dict format (as of 2024-06). Key mapping:
+///
+///   text_embed.embedding.weight          — [F5TextEncoder.tokenEmbedding.weight]
+///   text_embed.blocks.{i}.dwconv.weight  — [ConvNeXtV2Block.dwconv.weight]
+///   text_embed.blocks.{i}.dwconv.bias    — [ConvNeXtV2Block.dwconv.bias]
+///   text_embed.blocks.{i}.norm.{weight,bias}
+///   text_embed.blocks.{i}.pwconv1.{weight,bias}
+///   text_embed.blocks.{i}.grn.{gamma,beta}
+///   text_embed.blocks.{i}.pwconv2.{weight,bias}
+///   text_embed.norm.{weight,bias}
+///   input_proj.{weight,bias}             — [F5DiT.inputProj]
+///   time_embed.freq_proj.{weight,bias}   — [SinusoidalTimestepEmbedding.proj1]
+///   time_embed.out_proj.{weight,bias}    — [SinusoidalTimestepEmbedding.proj2]
+///   blocks.{i}.norm1.{weight,bias}
+///   blocks.{i}.attn.{q,k,v,o}_proj.{weight,bias}   per-head split
+///   blocks.{i}.norm2.{weight,bias}
+///   blocks.{i}.fc1.{weight,bias}
+///   blocks.{i}.fc2.{weight,bias}
+///   blocks.{i}.adaLN.modulation.{weight,bias}
+///   norm_out.{weight,bias}                — [F5DiT.finalNorm]
+///   output_proj.{weight,bias}
+///
+/// Duration predictor keys optional (prefixed by `duration.`).
+class F5TtsHFLoader {
+  /// Load into a text encoder + DiT bundle. Pass `null` for
+  /// [durationPredictor] to skip duration keys.
+  static F5TtsLoadReport loadMap({
+    required F5TextEncoder textEncoder,
+    required F5DiT dit,
+    F5DurationPredictor? durationPredictor,
+    required Map<String, Tensor> state,
+  }) {
+    final consumed = <String>{};
+    Tensor take(String name) {
+      final t = state[name];
+      if (t == null) {
+        throw ArgumentError('f5-tts loader: missing tensor "$name"');
+      }
+      consumed.add(name);
+      return t;
+    }
+
+    _loadTextEncoder(textEncoder, take, 'text_embed');
+    _loadDit(dit, take);
+    if (durationPredictor != null) {
+      _loadDuration(durationPredictor, take, 'duration');
+    }
+
+    final unused = state.keys.where((k) => !consumed.contains(k)).toList()
+      ..sort();
+    return F5TtsLoadReport(consumedCount: consumed.length, unusedKeys: unused);
+  }
+
+  static void _loadTextEncoder(
+    F5TextEncoder m,
+    Tensor Function(String) take,
+    String prefix,
+  ) {
+    _copy(
+      m.tokenEmbedding.weight,
+      _expectShape(take('$prefix.embedding.weight'), [
+        m.vocabSize,
+        m.dim,
+      ], '$prefix.embedding.weight'),
+    );
+    for (int i = 0; i < m.blocks.length; i++) {
+      _loadConvNeXtV2Block(m.blocks[i], take, '$prefix.blocks.$i');
+    }
+    _copy(
+      m.finalNorm.gamma,
+      _expectShape(take('$prefix.norm.weight'), [m.dim], '$prefix.norm.weight'),
+    );
+    _copy(
+      m.finalNorm.beta,
+      _expectShape(take('$prefix.norm.bias'), [m.dim], '$prefix.norm.bias'),
+    );
+  }
+
+  static void _loadDit(F5DiT m, Tensor Function(String) take) {
+    _copy(
+      m.inputProj.weight,
+      _expectShape(take('input_proj.weight'), [
+        m.embedDim,
+        m.melDim + m.textDim,
+      ], 'input_proj.weight'),
+    );
+    _copy(
+      m.inputProj.bias!,
+      _reshapeVectorTo1xN(
+        _expectShape(take('input_proj.bias'), [m.embedDim], 'input_proj.bias'),
+      ),
+    );
+    // Time embedding = SinusoidalTimestepEmbedding (two Linears).
+    _copy(
+      m.timeEmbed.proj1.weight,
+      _expectShape(take('time_embed.freq_proj.weight'), [
+        m.embedDim,
+        m.freqDim,
+      ], 'time_embed.freq_proj.weight'),
+    );
+    _copy(
+      m.timeEmbed.proj1.bias!,
+      _reshapeVectorTo1xN(
+        _expectShape(take('time_embed.freq_proj.bias'), [
+          m.embedDim,
+        ], 'time_embed.freq_proj.bias'),
+      ),
+    );
+    _copy(
+      m.timeEmbed.proj2.weight,
+      _expectShape(take('time_embed.out_proj.weight'), [
+        m.embedDim,
+        m.embedDim,
+      ], 'time_embed.out_proj.weight'),
+    );
+    _copy(
+      m.timeEmbed.proj2.bias!,
+      _reshapeVectorTo1xN(
+        _expectShape(take('time_embed.out_proj.bias'), [
+          m.embedDim,
+        ], 'time_embed.out_proj.bias'),
+      ),
+    );
+    // Blocks.
+    final numHeads = m.numHeads;
+    final headDim = m.embedDim ~/ numHeads;
+    for (int i = 0; i < m.blocks.length; i++) {
+      final b = m.blocks[i];
+      final p = 'blocks.$i';
+      _copy(
+        b.norm1.gamma,
+        _expectShape(take('$p.norm1.weight'), [m.embedDim], '$p.norm1.weight'),
+      );
+      _copy(
+        b.norm1.beta,
+        _expectShape(take('$p.norm1.bias'), [m.embedDim], '$p.norm1.bias'),
+      );
+
+      // Fused QKV: HF stores as separate q_proj/k_proj/v_proj [D, D]
+      // + biases [D]. Per-head split.
+      for (final proj in const [
+        ('q_proj', 'wq'),
+        ('k_proj', 'wk'),
+        ('v_proj', 'wv'),
+      ]) {
+        final w = _expectShape(take('$p.attn.${proj.$1}.weight'), [
+          m.embedDim,
+          m.embedDim,
+        ], '$p.attn.${proj.$1}.weight');
+        final bs = _expectShape(take('$p.attn.${proj.$1}.bias'), [
+          m.embedDim,
+        ], '$p.attn.${proj.$1}.bias');
+        for (int h = 0; h < numHeads; h++) {
+          final row = h * headDim;
+          final headLinears = proj.$2 == 'wq'
+              ? b.attn.wq
+              : proj.$2 == 'wk'
+              ? b.attn.wk
+              : b.attn.wv;
+          _copy(headLinears[h].weight, w.sliceRows(row, row + headDim));
+          _copy(
+            headLinears[h].bias!,
+            _reshapeVectorTo1xN(_slice1DVector(bs, row, row + headDim)),
+          );
+        }
+      }
+      _copy(
+        b.attn.wo.weight,
+        _expectShape(take('$p.attn.o_proj.weight'), [
+          m.embedDim,
+          m.embedDim,
+        ], '$p.attn.o_proj.weight'),
+      );
+      _copy(
+        b.attn.wo.bias!,
+        _reshapeVectorTo1xN(
+          _expectShape(take('$p.attn.o_proj.bias'), [
+            m.embedDim,
+          ], '$p.attn.o_proj.bias'),
+        ),
+      );
+
+      _copy(
+        b.norm2.gamma,
+        _expectShape(take('$p.norm2.weight'), [m.embedDim], '$p.norm2.weight'),
+      );
+      _copy(
+        b.norm2.beta,
+        _expectShape(take('$p.norm2.bias'), [m.embedDim], '$p.norm2.bias'),
+      );
+      _copy(
+        b.fc1.weight,
+        _expectShape(take('$p.fc1.weight'), [
+          m.mlpDim,
+          m.embedDim,
+        ], '$p.fc1.weight'),
+      );
+      _copy(
+        b.fc1.bias!,
+        _reshapeVectorTo1xN(
+          _expectShape(take('$p.fc1.bias'), [m.mlpDim], '$p.fc1.bias'),
+        ),
+      );
+      _copy(
+        b.fc2.weight,
+        _expectShape(take('$p.fc2.weight'), [
+          m.embedDim,
+          m.mlpDim,
+        ], '$p.fc2.weight'),
+      );
+      _copy(
+        b.fc2.bias!,
+        _reshapeVectorTo1xN(
+          _expectShape(take('$p.fc2.bias'), [m.embedDim], '$p.fc2.bias'),
+        ),
+      );
+
+      _copy(
+        b.adaLn.modulation.weight,
+        _expectShape(take('$p.adaLN.modulation.weight'), [
+          6 * m.embedDim,
+          m.embedDim,
+        ], '$p.adaLN.modulation.weight'),
+      );
+      _copy(
+        b.adaLn.modulation.bias!,
+        _reshapeVectorTo1xN(
+          _expectShape(take('$p.adaLN.modulation.bias'), [
+            6 * m.embedDim,
+          ], '$p.adaLN.modulation.bias'),
+        ),
+      );
+    }
+    _copy(
+      m.finalNorm.gamma,
+      _expectShape(take('norm_out.weight'), [m.embedDim], 'norm_out.weight'),
+    );
+    _copy(
+      m.finalNorm.beta,
+      _expectShape(take('norm_out.bias'), [m.embedDim], 'norm_out.bias'),
+    );
+    _copy(
+      m.outputProj.weight,
+      _expectShape(take('output_proj.weight'), [
+        m.melDim,
+        m.embedDim,
+      ], 'output_proj.weight'),
+    );
+    _copy(
+      m.outputProj.bias!,
+      _reshapeVectorTo1xN(
+        _expectShape(take('output_proj.bias'), [m.melDim], 'output_proj.bias'),
+      ),
+    );
+  }
+
+  static void _loadDuration(
+    F5DurationPredictor m,
+    Tensor Function(String) take,
+    String prefix,
+  ) {
+    for (int i = 0; i < m.blocks.length; i++) {
+      _loadConvNeXtV2Block(m.blocks[i], take, '$prefix.blocks.$i');
+    }
+    _copy(
+      m.finalNorm.gamma,
+      _expectShape(take('$prefix.norm.weight'), [
+        m.textDim,
+      ], '$prefix.norm.weight'),
+    );
+    _copy(
+      m.finalNorm.beta,
+      _expectShape(take('$prefix.norm.bias'), [m.textDim], '$prefix.norm.bias'),
+    );
+    _copy(
+      m.head.weight,
+      _expectShape(take('$prefix.head.weight'), [
+        1,
+        m.textDim,
+      ], '$prefix.head.weight'),
+    );
+    _copy(
+      m.head.bias!,
+      _reshapeVectorTo1xN(
+        _expectShape(take('$prefix.head.bias'), [1], '$prefix.head.bias'),
+      ),
+    );
+  }
+
+  static void _loadConvNeXtV2Block(
+    ConvNeXtV2Block b,
+    Tensor Function(String) take,
+    String prefix,
+  ) {
+    _copy(
+      b.dwconv.weight,
+      _expectShape(take('$prefix.dwconv.weight'), [
+        b.dim,
+        b.dwconv.kernelSize,
+      ], '$prefix.dwconv.weight'),
+    );
+    _copy(
+      b.dwconv.bias!,
+      _reshapeVectorTo1xN(
+        _expectShape(take('$prefix.dwconv.bias'), [
+          b.dim,
+        ], '$prefix.dwconv.bias'),
+      ),
+    );
+    _copy(
+      b.norm.gamma,
+      _expectShape(take('$prefix.norm.weight'), [b.dim], '$prefix.norm.weight'),
+    );
+    _copy(
+      b.norm.beta,
+      _expectShape(take('$prefix.norm.bias'), [b.dim], '$prefix.norm.bias'),
+    );
+    _copy(
+      b.pwconv1.weight,
+      _expectShape(take('$prefix.pwconv1.weight'), [
+        b.intermediateDim,
+        b.dim,
+      ], '$prefix.pwconv1.weight'),
+    );
+    _copy(
+      b.pwconv1.bias!,
+      _reshapeVectorTo1xN(
+        _expectShape(take('$prefix.pwconv1.bias'), [
+          b.intermediateDim,
+        ], '$prefix.pwconv1.bias'),
+      ),
+    );
+    _copy(
+      b.grn.gamma,
+      _expectShape(take('$prefix.grn.gamma'), [
+        b.intermediateDim,
+      ], '$prefix.grn.gamma'),
+    );
+    _copy(
+      b.grn.beta,
+      _expectShape(take('$prefix.grn.beta'), [
+        b.intermediateDim,
+      ], '$prefix.grn.beta'),
+    );
+    _copy(
+      b.pwconv2.weight,
+      _expectShape(take('$prefix.pwconv2.weight'), [
+        b.dim,
+        b.intermediateDim,
+      ], '$prefix.pwconv2.weight'),
+    );
+    _copy(
+      b.pwconv2.bias!,
+      _reshapeVectorTo1xN(
+        _expectShape(take('$prefix.pwconv2.bias'), [
+          b.dim,
+        ], '$prefix.pwconv2.bias'),
+      ),
+    );
+  }
+
+  // -------------------- helpers --------------------
+
+  static Tensor _expectShape(Tensor t, List<int> expected, String name) {
+    if (t.shape.length != expected.length) {
+      throw ArgumentError(
+        'f5-tts loader: "$name" expected shape $expected, got ${t.shape}',
+      );
+    }
+    for (int i = 0; i < expected.length; i++) {
+      if (t.shape[i] != expected[i]) {
+        throw ArgumentError(
+          'f5-tts loader: "$name" expected shape $expected, got ${t.shape}',
+        );
+      }
+    }
+    return t;
+  }
+
+  static void _copy(Tensor dst, Tensor src) {
+    if (dst.length != src.length) {
+      throw ArgumentError(
+        'f5-tts loader: copy length mismatch — dst=${dst.shape} '
+        '(${dst.length}), src=${src.shape} (${src.length})',
+      );
+    }
+    final vals = src.toList();
+    final matched = Tensor.fromList(dst.shape, vals, device: dst.device);
+    dst.assign(matched);
+  }
+
+  static Tensor _slice1DVector(Tensor t, int start, int end) {
+    final data = t.toList();
+    final n = end - start;
+    final out = Float32List(n);
+    for (int i = 0; i < n; i++) {
+      out[i] = data[start + i];
+    }
+    return Tensor.fromList([n], out, device: Device.CPU);
+  }
+
+  static Tensor _reshapeVectorTo1xN(Tensor v) {
+    if (v.shape.length != 1) {
+      throw ArgumentError(
+        'f5-tts loader: expected rank 1 for bias vector, got ${v.shape}',
+      );
+    }
+    return Tensor.fromList([1, v.shape[0]], v.toList(), device: Device.CPU);
+  }
+}
+
+class F5TtsLoadReport {
+  final int consumedCount;
+  final List<String> unusedKeys;
+  const F5TtsLoadReport({
+    required this.consumedCount,
+    required this.unusedKeys,
+  });
+
+  @override
+  String toString() =>
+      'F5TtsLoadReport(consumed=$consumedCount, unused=${unusedKeys.length})';
+}

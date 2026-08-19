@@ -64,8 +64,10 @@ Future<void> main(List<String> args) async {
     }
   }
   if (imagePath == null) {
-    stderr.writeln('usage: dart run bin/sam_demo.dart --image PATH '
-        '--point X,Y [--multimask] [--out mask.png]');
+    stderr.writeln(
+      'usage: dart run bin/sam_demo.dart --image PATH '
+      '--point X,Y [--multimask] [--out mask.png]',
+    );
     exit(64);
   }
   if (!File(imagePath).existsSync()) {
@@ -120,8 +122,10 @@ Future<void> main(List<String> args) async {
     }
   }
   swPre.stop();
-  print('preprocess: ${swPre.elapsedMilliseconds} ms  (resized to '
-      '$resizedW x $resizedH, letterbox to $targetSize x $targetSize)');
+  print(
+    'preprocess: ${swPre.elapsedMilliseconds} ms  (resized to '
+    '$resizedW x $resizedH, letterbox to $targetSize x $targetSize)',
+  );
 
   // Point coordinates in the letterboxed 1024×1024 space.
   final letterX = rawPx * scale;
@@ -159,18 +163,22 @@ Future<void> main(List<String> args) async {
   print('');
   print('Encoding image ...');
   final swE = Stopwatch()..start();
-  final image = Tensor.fromFloat32List(
-    [1, 3, targetSize, targetSize],
-    imageInput,
-  );
+  final image = Tensor.fromFloat32List([
+    1,
+    3,
+    targetSize,
+    targetSize,
+  ], imageInput);
   final imageEmb = imgEnc(image);
   swE.stop();
   print('  ${swE.elapsedMilliseconds} ms  → ${imageEmb.shape}');
 
   print('');
-  print('Encoding prompt (single positive point at raw ($rawPx, $rawPy) '
-      '= letterboxed (${letterX.toStringAsFixed(1)}, '
-      '${letterY.toStringAsFixed(1)}))');
+  print(
+    'Encoding prompt (single positive point at raw ($rawPx, $rawPy) '
+    '= letterboxed (${letterX.toStringAsFixed(1)}, '
+    '${letterY.toStringAsFixed(1)}))',
+  );
   final swP = Stopwatch()..start();
   final ptTensor = Tensor.fromList([1, 2], [letterX, letterY]);
   final sparse = promptEnc.encodeSparse(
@@ -180,8 +188,10 @@ Future<void> main(List<String> args) async {
   final dense = promptEnc.encodeDense(); // no mask prompt
   final imagePe = promptEnc.imagePositionEmbedding();
   swP.stop();
-  print('  ${swP.elapsedMilliseconds} ms  → sparse ${sparse.shape}, '
-      'dense ${dense.shape}');
+  print(
+    '  ${swP.elapsedMilliseconds} ms  → sparse ${sparse.shape}, '
+    'dense ${dense.shape}',
+  );
 
   print('');
   print('Decoding masks ...');
@@ -193,8 +203,10 @@ Future<void> main(List<String> args) async {
     densePrompts: dense,
   );
   swD.stop();
-  print('  ${swD.elapsedMilliseconds} ms  → masks ${decOut.masks.shape}, '
-      'IoU ${decOut.iouPredictions.shape}');
+  print(
+    '  ${swD.elapsedMilliseconds} ms  → masks ${decOut.masks.shape}, '
+    'IoU ${decOut.iouPredictions.shape}',
+  );
 
   final selected = decOut.select(multimask: multimask);
   final chosen = _pickBestByIou(selected.masks, selected.iouPredictions);
