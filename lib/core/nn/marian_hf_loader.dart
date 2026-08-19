@@ -85,16 +85,23 @@ class MarianHFLoader {
     final cfg = model.config;
 
     // Shared token embedding.
-    _assign(model.sharedEmbedding.weight, take('model.shared.weight'),
-        expectShape: [cfg.vocabSize, cfg.dModel]);
+    _assign(
+      model.sharedEmbedding.weight,
+      take('model.shared.weight'),
+      expectShape: [cfg.vocabSize, cfg.dModel],
+    );
 
     // Positional embeddings (loaded verbatim from the file).
-    _assign(model.encoder.positionEmbeddings,
-        take('model.encoder.embed_positions.weight'),
-        expectShape: [cfg.maxPositionEmbeddings, cfg.dModel]);
-    _assign(model.decoder.positionEmbeddings,
-        take('model.decoder.embed_positions.weight'),
-        expectShape: [cfg.maxPositionEmbeddings, cfg.dModel]);
+    _assign(
+      model.encoder.positionEmbeddings,
+      take('model.encoder.embed_positions.weight'),
+      expectShape: [cfg.maxPositionEmbeddings, cfg.dModel],
+    );
+    _assign(
+      model.decoder.positionEmbeddings,
+      take('model.decoder.embed_positions.weight'),
+      expectShape: [cfg.maxPositionEmbeddings, cfg.dModel],
+    );
 
     // Encoder blocks.
     for (int i = 0; i < cfg.numLayers; i++) {
@@ -105,14 +112,19 @@ class MarianHFLoader {
         base: 'model.encoder.layers.$i.self_attn',
         cfg: cfg,
       );
-      _loadLayerNorm(b.selfAttnLn, take,
-          base: 'model.encoder.layers.$i.self_attn_layer_norm',
-          dim: cfg.dModel);
-      _loadFfn(b.ffn, take,
-          base: 'model.encoder.layers.$i', cfg: cfg);
-      _loadLayerNorm(b.finalLn, take,
-          base: 'model.encoder.layers.$i.final_layer_norm',
-          dim: cfg.dModel);
+      _loadLayerNorm(
+        b.selfAttnLn,
+        take,
+        base: 'model.encoder.layers.$i.self_attn_layer_norm',
+        dim: cfg.dModel,
+      );
+      _loadFfn(b.ffn, take, base: 'model.encoder.layers.$i', cfg: cfg);
+      _loadLayerNorm(
+        b.finalLn,
+        take,
+        base: 'model.encoder.layers.$i.final_layer_norm',
+        dim: cfg.dModel,
+      );
     }
 
     // Decoder blocks.
@@ -124,35 +136,43 @@ class MarianHFLoader {
         base: 'model.decoder.layers.$i.self_attn',
         cfg: cfg,
       );
-      _loadLayerNorm(b.selfAttnLn, take,
-          base: 'model.decoder.layers.$i.self_attn_layer_norm',
-          dim: cfg.dModel);
+      _loadLayerNorm(
+        b.selfAttnLn,
+        take,
+        base: 'model.decoder.layers.$i.self_attn_layer_norm',
+        dim: cfg.dModel,
+      );
       _loadAttention(
         b.crossAttn,
         take,
         base: 'model.decoder.layers.$i.encoder_attn',
         cfg: cfg,
       );
-      _loadLayerNorm(b.crossAttnLn, take,
-          base: 'model.decoder.layers.$i.encoder_attn_layer_norm',
-          dim: cfg.dModel);
-      _loadFfn(b.ffn, take,
-          base: 'model.decoder.layers.$i', cfg: cfg);
-      _loadLayerNorm(b.finalLn, take,
-          base: 'model.decoder.layers.$i.final_layer_norm',
-          dim: cfg.dModel);
+      _loadLayerNorm(
+        b.crossAttnLn,
+        take,
+        base: 'model.decoder.layers.$i.encoder_attn_layer_norm',
+        dim: cfg.dModel,
+      );
+      _loadFfn(b.ffn, take, base: 'model.decoder.layers.$i', cfg: cfg);
+      _loadLayerNorm(
+        b.finalLn,
+        take,
+        base: 'model.decoder.layers.$i.final_layer_norm',
+        dim: cfg.dModel,
+      );
     }
 
     // final_logits_bias.
-    _assign(model.finalLogitsBias, take('final_logits_bias'),
-        expectShape: [1, cfg.vocabSize]);
+    _assign(
+      model.finalLogitsBias,
+      take('final_logits_bias'),
+      expectShape: [1, cfg.vocabSize],
+    );
 
     final unused = state.keys.where((k) => !consumed.contains(k)).toList()
       ..sort();
-    return MarianLoadReport(
-      consumedCount: consumed.length,
-      unusedKeys: unused,
-    );
+    return MarianLoadReport(consumedCount: consumed.length, unusedKeys: unused);
   }
 
   static void _loadAttention(
@@ -168,13 +188,40 @@ class MarianHFLoader {
     final kb = take('$base.k_proj.bias');
     final vw = take('$base.v_proj.weight');
     final vb = take('$base.v_proj.bias');
-    _sliceHeadWeightsInto(qw, qb, attn.wq, cfg.numHeads, cfg.headDim, cfg.dModel);
-    _sliceHeadWeightsInto(kw, kb, attn.wk, cfg.numHeads, cfg.headDim, cfg.dModel);
-    _sliceHeadWeightsInto(vw, vb, attn.wv, cfg.numHeads, cfg.headDim, cfg.dModel);
-    _assign(attn.wo.weight, take('$base.out_proj.weight'),
-        expectShape: [cfg.dModel, cfg.dModel]);
-    _assign(attn.wo.bias!, _reshape1xN(take('$base.out_proj.bias'), cfg.dModel),
-        expectShape: [1, cfg.dModel]);
+    _sliceHeadWeightsInto(
+      qw,
+      qb,
+      attn.wq,
+      cfg.numHeads,
+      cfg.headDim,
+      cfg.dModel,
+    );
+    _sliceHeadWeightsInto(
+      kw,
+      kb,
+      attn.wk,
+      cfg.numHeads,
+      cfg.headDim,
+      cfg.dModel,
+    );
+    _sliceHeadWeightsInto(
+      vw,
+      vb,
+      attn.wv,
+      cfg.numHeads,
+      cfg.headDim,
+      cfg.dModel,
+    );
+    _assign(
+      attn.wo.weight,
+      take('$base.out_proj.weight'),
+      expectShape: [cfg.dModel, cfg.dModel],
+    );
+    _assign(
+      attn.wo.bias!,
+      _reshape1xN(take('$base.out_proj.bias'), cfg.dModel),
+      expectShape: [1, cfg.dModel],
+    );
   }
 
   static void _loadFfn(
@@ -183,14 +230,26 @@ class MarianHFLoader {
     required String base,
     required MarianConfig cfg,
   }) {
-    _assign(ffn.fc1.weight, take('$base.fc1.weight'),
-        expectShape: [cfg.ffnDim, cfg.dModel]);
-    _assign(ffn.fc1.bias!, _reshape1xN(take('$base.fc1.bias'), cfg.ffnDim),
-        expectShape: [1, cfg.ffnDim]);
-    _assign(ffn.fc2.weight, take('$base.fc2.weight'),
-        expectShape: [cfg.dModel, cfg.ffnDim]);
-    _assign(ffn.fc2.bias!, _reshape1xN(take('$base.fc2.bias'), cfg.dModel),
-        expectShape: [1, cfg.dModel]);
+    _assign(
+      ffn.fc1.weight,
+      take('$base.fc1.weight'),
+      expectShape: [cfg.ffnDim, cfg.dModel],
+    );
+    _assign(
+      ffn.fc1.bias!,
+      _reshape1xN(take('$base.fc1.bias'), cfg.ffnDim),
+      expectShape: [1, cfg.ffnDim],
+    );
+    _assign(
+      ffn.fc2.weight,
+      take('$base.fc2.weight'),
+      expectShape: [cfg.dModel, cfg.ffnDim],
+    );
+    _assign(
+      ffn.fc2.bias!,
+      _reshape1xN(take('$base.fc2.bias'), cfg.dModel),
+      expectShape: [1, cfg.dModel],
+    );
   }
 
   static void _loadLayerNorm(
@@ -230,12 +289,16 @@ class MarianHFLoader {
         bVals[i] = bData[h * headDim + i];
       }
       final head = heads[h];
-      _assign(head.weight,
-          Tensor.fromList([headDim, dModel], wVals, device: fullW.device),
-          expectShape: [headDim, dModel]);
-      _assign(head.bias!,
-          Tensor.fromList([1, headDim], bVals, device: fullB.device),
-          expectShape: [1, headDim]);
+      _assign(
+        head.weight,
+        Tensor.fromList([headDim, dModel], wVals, device: fullW.device),
+        expectShape: [headDim, dModel],
+      );
+      _assign(
+        head.bias!,
+        Tensor.fromList([1, headDim], bVals, device: fullB.device),
+        expectShape: [1, headDim],
+      );
     }
   }
 
@@ -245,9 +308,7 @@ class MarianHFLoader {
     if (t.shape.length == 1 && t.shape[0] == n) {
       return Tensor.fromList([1, n], t.toList(), device: t.device);
     }
-    throw ArgumentError(
-      'marian loader: cannot reshape ${t.shape} to [1, $n]',
-    );
+    throw ArgumentError('marian loader: cannot reshape ${t.shape} to [1, $n]');
   }
 
   static void _assign(Tensor dst, Tensor src, {List<int>? expectShape}) {

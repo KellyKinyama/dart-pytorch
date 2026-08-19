@@ -61,6 +61,20 @@ class MHACache {
     v[kvHead] = next;
     return next;
   }
+
+  /// Shallow clone: fresh `k`/`v` list slots pointing at the same
+  /// Tensor objects. Because [appendK]/[appendV] replace slots
+  /// rather than mutating tensors in place, this is enough to fork
+  /// two independent cache timelines from a shared history — used
+  /// by beam-search generation.
+  MHACache clone() {
+    final out = MHACache.empty(numKvHeads);
+    for (int i = 0; i < numKvHeads; i++) {
+      out.k[i] = k[i];
+      out.v[i] = v[i];
+    }
+    return out;
+  }
 }
 
 class EncoderCache {

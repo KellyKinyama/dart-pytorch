@@ -39,8 +39,8 @@ class MarianVocabTokenizer {
 
   /// Load an HF Marian `vocab.json`.
   factory MarianVocabTokenizer.loadFile(String path) {
-    final raw = jsonDecode(File(path).readAsStringSync())
-        as Map<String, dynamic>;
+    final raw =
+        jsonDecode(File(path).readAsStringSync()) as Map<String, dynamic>;
     var maxId = 0;
     raw.forEach((_, v) {
       final id = (v as num).toInt();

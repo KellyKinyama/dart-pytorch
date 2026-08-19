@@ -420,9 +420,23 @@ CLI:
 --text STR              English source sentence
 --max-new N             cap decoder steps (default 60)
 --gpu                   run on GPU
---no-cache              disable KV cache (A/B numerical check)
+--no-cache              disable KV cache (A/B numerical check, greedy only)
+--beams N               beam-search width (default 1 = greedy)
+--length-penalty α      score = sum_log_prob / len^α (default 0.6)
 --weights PATH          override model.safetensors
 --vocab PATH            override vocab.json
+```
+
+**Beam search vs greedy**: greedy is fast but occasionally
+degenerates into repetition on idiomatic input. Beam search
+maintains N parallel hypotheses with their own KV caches
+(cloned when children share a parent) and picks the top
+length-normalized sum-log-prob at the end. Example:
+
+```
+Input:                          "It's raining cats and dogs."
+--beams 1 (greedy):             "Es regnet, es regnet, es regnet."   [repetition]
+--beams 4:                      "Es regnet Katzen und Hunde."        [correct]
 ```
 
 **Tokenizer note**: Marian ships a SentencePiece BPE model in

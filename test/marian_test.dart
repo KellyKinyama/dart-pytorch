@@ -20,10 +20,8 @@ MarianConfig _tinyCfg() => MarianConfig(
   seed: 7,
 );
 
-Tensor _ids(List<int> ids) => Tensor.fromList(
-  [ids.length],
-  ids.map((i) => i.toDouble()).toList(),
-);
+Tensor _ids(List<int> ids) =>
+    Tensor.fromList([ids.length], ids.map((i) => i.toDouble()).toList());
 
 void main() {
   group('MarianConfig', () {
@@ -73,12 +71,30 @@ void main() {
     test('cached and non-cached generate produce identical outputs', () {
       final m = MarianModel(_tinyCfg());
       final cached = m.generate([1, 2, 3, 4], maxNewTokens: 8);
-      final recomp = m.generate(
-        [1, 2, 3, 4],
-        maxNewTokens: 8,
-        useCache: false,
-      );
+      final recomp = m.generate([1, 2, 3, 4], maxNewTokens: 8, useCache: false);
       expect(cached, equals(recomp));
+    });
+
+    test('beam=1 matches greedy', () {
+      final m = MarianModel(_tinyCfg());
+      final greedy = m.generate([1, 2, 3, 4], maxNewTokens: 8);
+      final beam1 = m.generateBeam(
+        [1, 2, 3, 4],
+        numBeams: 1,
+        maxNewTokens: 8,
+      );
+      expect(beam1, equals(greedy));
+    });
+
+    test('beam=4 returns non-empty sequence starting with decoder_start', () {
+      final m = MarianModel(_tinyCfg());
+      final out = m.generateBeam(
+        [1, 2, 3, 4],
+        numBeams: 4,
+        maxNewTokens: 8,
+      );
+      expect(out.length, greaterThan(1));
+      expect(out.first, equals(30));
     });
   });
 

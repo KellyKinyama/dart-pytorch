@@ -208,6 +208,12 @@ class MarianDecoderBlockCache {
   final MHACache selfAttn;
   MarianCrossAttnCache? crossAttn;
   MarianDecoderBlockCache(int numHeads) : selfAttn = MHACache.empty(numHeads);
+  MarianDecoderBlockCache._from(this.selfAttn, this.crossAttn);
+
+  /// Shallow clone. Cross-attn K/V (encoder-derived, immutable
+  /// across decode steps) are shared by reference.
+  MarianDecoderBlockCache clone() =>
+      MarianDecoderBlockCache._from(selfAttn.clone(), crossAttn);
 }
 
 class MarianDecoderCache {
@@ -220,6 +226,12 @@ class MarianDecoderCache {
         growable: false,
       ),
       seqLen = 0;
+  MarianDecoderCache._from(this.blocks, this.seqLen);
+
+  MarianDecoderCache clone() => MarianDecoderCache._from(
+    [for (final b in blocks) b.clone()],
+    seqLen,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -292,7 +304,11 @@ class MarianEncoderBlock extends Module {
         device: cfg.device,
         seed: seed,
       ),
-      selfAttnLn = LayerNorm(cfg.dModel, eps: cfg.layerNormEps, device: cfg.device),
+      selfAttnLn = LayerNorm(
+        cfg.dModel,
+        eps: cfg.layerNormEps,
+        device: cfg.device,
+      ),
       ffn = MarianFfn(
         dModel: cfg.dModel,
         ffnDim: cfg.ffnDim,
@@ -300,7 +316,11 @@ class MarianEncoderBlock extends Module {
         device: cfg.device,
         seed: seed + 10000,
       ),
-      finalLn = LayerNorm(cfg.dModel, eps: cfg.layerNormEps, device: cfg.device);
+      finalLn = LayerNorm(
+        cfg.dModel,
+        eps: cfg.layerNormEps,
+        device: cfg.device,
+      );
 
   Tensor call(Tensor x) {
     var h = selfAttnLn(x + selfAttn(x, x));
@@ -335,14 +355,22 @@ class MarianDecoderBlock extends Module {
         device: cfg.device,
         seed: seed,
       ),
-      selfAttnLn = LayerNorm(cfg.dModel, eps: cfg.layerNormEps, device: cfg.device),
+      selfAttnLn = LayerNorm(
+        cfg.dModel,
+        eps: cfg.layerNormEps,
+        device: cfg.device,
+      ),
       crossAttn = MarianAttention(
         dModel: cfg.dModel,
         numHeads: cfg.numHeads,
         device: cfg.device,
         seed: seed + 5000,
       ),
-      crossAttnLn = LayerNorm(cfg.dModel, eps: cfg.layerNormEps, device: cfg.device),
+      crossAttnLn = LayerNorm(
+        cfg.dModel,
+        eps: cfg.layerNormEps,
+        device: cfg.device,
+      ),
       ffn = MarianFfn(
         dModel: cfg.dModel,
         ffnDim: cfg.ffnDim,
@@ -350,7 +378,11 @@ class MarianDecoderBlock extends Module {
         device: cfg.device,
         seed: seed + 10000,
       ),
-      finalLn = LayerNorm(cfg.dModel, eps: cfg.layerNormEps, device: cfg.device);
+      finalLn = LayerNorm(
+        cfg.dModel,
+        eps: cfg.layerNormEps,
+        device: cfg.device,
+      );
 
   Tensor call(
     Tensor x, {
@@ -368,7 +400,9 @@ class MarianDecoderBlock extends Module {
     required Tensor memory,
     required MarianDecoderBlockCache blockCache,
   }) {
-    var h = selfAttnLn(xSingle + selfAttn.callCachedSelf(xSingle, cache: blockCache.selfAttn));
+    var h = selfAttnLn(
+      xSingle + selfAttn.callCachedSelf(xSingle, cache: blockCache.selfAttn),
+    );
     blockCache.crossAttn ??= crossAttn.primeCross(memory);
     h = crossAttnLn(h + crossAttn.callCachedCross(h, blockCache.crossAttn!));
     h = finalLn(h + ffn(h));
@@ -419,7 +453,11 @@ class MarianEncoder extends Module {
       ),
       blocks = <MarianEncoderBlock>[],
       finalLn = config.addFinalLayerNorm
-          ? LayerNorm(config.dModel, eps: config.layerNormEps, device: config.device)
+          ? LayerNorm(
+              config.dModel,
+              eps: config.layerNormEps,
+              device: config.device,
+            )
           : null,
       embedScale = config.scaleEmbeddings
           ? math.sqrt(config.dModel.toDouble())
@@ -470,10 +508,7 @@ class MarianEncoder extends Module {
   ];
 
   @override
-  List<Module> submodules() => [
-    ...blocks,
-    if (finalLn != null) finalLn!,
-  ];
+  List<Module> submodules() => [...blocks, if (finalLn != null) finalLn!];
 }
 
 class MarianDecoder extends Module {
@@ -492,7 +527,11 @@ class MarianDecoder extends Module {
       ),
       blocks = <MarianDecoderBlock>[],
       finalLn = config.addFinalLayerNorm
-          ? LayerNorm(config.dModel, eps: config.layerNormEps, device: config.device)
+          ? LayerNorm(
+              config.dModel,
+              eps: config.layerNormEps,
+              device: config.device,
+            )
           : null,
       embedScale = config.scaleEmbeddings
           ? math.sqrt(config.dModel.toDouble())
@@ -578,11 +617,7 @@ class MarianDecoder extends Module {
     for (int j = 0; j < d; j++) {
       vals[j] = all[base + j];
     }
-    return Tensor.fromList(
-      [1, d],
-      vals,
-      device: positionEmbeddings.device,
-    );
+    return Tensor.fromList([1, d], vals, device: positionEmbeddings.device);
   }
 
   @override
@@ -592,10 +627,7 @@ class MarianDecoder extends Module {
   ];
 
   @override
-  List<Module> submodules() => [
-    ...blocks,
-    if (finalLn != null) finalLn!,
-  ];
+  List<Module> submodules() => [...blocks, if (finalLn != null) finalLn!];
 }
 
 // ---------------------------------------------------------------------------
@@ -629,11 +661,7 @@ class MarianModel extends Module {
     );
     final enc = MarianEncoder(config, shared);
     final dec = MarianDecoder(config, shared);
-    final bias = Tensor.fill(
-      [1, config.vocabSize],
-      0.0,
-      device: config.device,
-    );
+    final bias = Tensor.fill([1, config.vocabSize], 0.0, device: config.device);
     return MarianModel._(config, shared, enc, dec, bias);
   }
 
@@ -710,17 +738,14 @@ class MarianModel extends Module {
     required int startId,
     required int endId,
   }) {
-    final cache = MarianDecoderCache(
-      config.numDecoderLayers,
-      config.numHeads,
-    );
+    final cache = MarianDecoderCache(config.numDecoderLayers, config.numHeads);
     final out = <int>[startId];
     var feed = startId;
     for (int step = 0; step < maxNewTokens; step++) {
       final h = decoder.callCached(feed, memory: memory, cache: cache);
       // h: [1, dModel] -> logits [1, vocab] via tied embedding.
-      final logits = h.matmul(sharedEmbedding.weight.transpose()) +
-          finalLogitsBias;
+      final logits =
+          h.matmul(sharedEmbedding.weight.transpose()) + finalLogitsBias;
       final data = logits.toList();
       var bestIdx = 0;
       var bestVal = data[0];
@@ -737,6 +762,155 @@ class MarianModel extends Module {
     return out;
   }
 
+  /// Beam-search generation with length normalization.
+  ///
+  /// Maintains [numBeams] parallel hypotheses each with its own KV
+  /// cache. At every step, expands each active beam to `numBeams`
+  /// candidate continuations (top-K logits per beam), keeps the
+  /// global top-`numBeams` by cumulative log-probability, and forks
+  /// caches (via [MarianDecoderCache.clone]) when two children share
+  /// a parent.
+  ///
+  /// Finished beams (those that emitted `eosTokenId`) are stashed
+  /// with a length-normalized score `sum_log_prob / len^lengthPenalty`
+  /// (Wu et al. 2016). Generation stops when `numBeams` beams have
+  /// finished OR the active pool is empty OR `maxNewTokens` is hit.
+  /// Returns the best finished beam's token sequence.
+  ///
+  /// Falls back to greedy when `numBeams == 1`.
+  List<int> generateBeam(
+    List<int> srcTokens, {
+    int numBeams = 4,
+    int maxNewTokens = 60,
+    double lengthPenalty = 0.6,
+    int? decoderStartTokenId,
+    int? eosTokenId,
+  }) {
+    if (numBeams < 1) {
+      throw ArgumentError('generateBeam: numBeams must be >= 1');
+    }
+    if (numBeams == 1) {
+      return generate(
+        srcTokens,
+        maxNewTokens: maxNewTokens,
+        decoderStartTokenId: decoderStartTokenId,
+        eosTokenId: eosTokenId,
+      );
+    }
+    final memory = encode(srcTokens);
+    final startId = decoderStartTokenId ?? config.decoderStartTokenId;
+    final endId = eosTokenId ?? config.eosTokenId;
+
+    // Active beams. Score is cumulative log-prob (not normalized).
+    var active = <_Beam>[
+      _Beam(
+        seq: [startId],
+        cache: MarianDecoderCache(
+          config.numDecoderLayers,
+          config.numHeads,
+        ),
+        score: 0.0,
+      ),
+    ];
+    final finished = <_Beam>[];
+
+    for (int step = 0; step < maxNewTokens; step++) {
+      // Score every (beam, next_token) candidate.
+      final candidates = <_Candidate>[];
+      for (int b = 0; b < active.length; b++) {
+        final beam = active[b];
+        final feed = beam.seq.last;
+        // Advance beam's cache by feeding its last token.
+        final h = decoder.callCached(
+          feed,
+          memory: memory,
+          cache: beam.cache,
+        );
+        final logits =
+            h.matmul(sharedEmbedding.weight.transpose()) + finalLogitsBias;
+        final data = logits.toList();
+        final logProbs = _logSoftmax(data);
+        // Top-K per beam is sufficient (any lower rank can't survive
+        // the global top-K prune).
+        final topPerBeam = _topKIndices(logProbs, numBeams);
+        for (final idx in topPerBeam) {
+          candidates.add(_Candidate(
+            beamIdx: b,
+            tokenId: idx,
+            score: beam.score + logProbs[idx],
+          ));
+        }
+      }
+
+      // Global top-K.
+      candidates.sort((a, b) => b.score.compareTo(a.score));
+      final next = <_Beam>[];
+      for (final c in candidates) {
+        if (next.length >= numBeams) break;
+        final parent = active[c.beamIdx];
+        final newSeq = List<int>.of(parent.seq)..add(c.tokenId);
+        if (c.tokenId == endId) {
+          // Finished — length-normalized score.
+          final len = newSeq.length - 1; // exclude the start token
+          final norm = c.score / math.pow(len.toDouble(), lengthPenalty);
+          finished.add(_Beam(seq: newSeq, cache: parent.cache, score: norm));
+          continue;
+        }
+        // Fork the cache — parent may be used by another top candidate.
+        next.add(_Beam(
+          seq: newSeq,
+          cache: parent.cache.clone(),
+          score: c.score,
+        ));
+      }
+
+      if (finished.length >= numBeams) break;
+      if (next.isEmpty) break;
+      active = next;
+    }
+
+    // Prefer finished beams; fall back to best active (with length norm).
+    if (finished.isEmpty) {
+      for (final b in active) {
+        final len = b.seq.length - 1;
+        final norm = b.score / math.pow(len.toDouble(), lengthPenalty);
+        finished.add(_Beam(seq: b.seq, cache: b.cache, score: norm));
+      }
+    }
+    finished.sort((a, b) => b.score.compareTo(a.score));
+    return finished.first.seq;
+  }
+
+  /// Row-wise log-softmax over a single row of length V. Numerically
+  /// stable via max-subtraction.
+  static List<double> _logSoftmax(List<double> logits) {
+    var maxV = logits[0];
+    for (int i = 1; i < logits.length; i++) {
+      if (logits[i] > maxV) maxV = logits[i];
+    }
+    var sumExp = 0.0;
+    for (int i = 0; i < logits.length; i++) {
+      sumExp += math.exp(logits[i] - maxV);
+    }
+    final logSum = math.log(sumExp);
+    final out = List<double>.filled(logits.length, 0);
+    for (int i = 0; i < logits.length; i++) {
+      out[i] = (logits[i] - maxV) - logSum;
+    }
+    return out;
+  }
+
+  /// Indices of the top-K values in `data`, in descending order.
+  static List<int> _topKIndices(List<double> data, int k) {
+    final n = data.length;
+    final kk = k < n ? k : n;
+    final idx = List<int>.generate(n, (i) => i);
+    // Partial sort is nice but not built-in; full sort is fine at
+    // vocab sizes we care about (< 60k) and k around 4-8.
+    idx.sort((a, b) => data[b].compareTo(data[a]));
+    return idx.sublist(0, kk);
+  }
+
   @override
   List<Tensor> parameters() => [
     ...sharedEmbedding.parameters(),
@@ -746,4 +920,22 @@ class MarianModel extends Module {
 
   @override
   List<Module> submodules() => [sharedEmbedding, encoder, decoder];
+}
+
+class _Beam {
+  final List<int> seq;
+  final MarianDecoderCache cache;
+  final double score;
+  _Beam({required this.seq, required this.cache, required this.score});
+}
+
+class _Candidate {
+  final int beamIdx;
+  final int tokenId;
+  final double score;
+  _Candidate({
+    required this.beamIdx,
+    required this.tokenId,
+    required this.score,
+  });
 }

@@ -42,6 +42,8 @@ Future<void> main(List<String> args) async {
   var maxNew = 60;
   var useGpu = false;
   var noCache = false;
+  var numBeams = 1;
+  var lengthPenalty = 0.6;
   for (int i = 0; i < args.length; i++) {
     switch (args[i]) {
       case '--gpu':
@@ -55,6 +57,12 @@ Future<void> main(List<String> args) async {
         break;
       case '--max-new':
         maxNew = int.parse(args[++i]);
+        break;
+      case '--beams':
+        numBeams = int.parse(args[++i]);
+        break;
+      case '--length-penalty':
+        lengthPenalty = double.parse(args[++i]);
         break;
       case '--weights':
         weightsPath = args[++i];
@@ -108,13 +116,17 @@ Future<void> main(List<String> args) async {
   print('  -> $ids');
 
   print('');
-  print('== greedy decode (${noCache ? "no cache" : "KV cache"}) ==');
+  print('== ${numBeams == 1 ? "greedy" : "beam=$numBeams"} decode '
+      '(${noCache && numBeams == 1 ? "no cache" : "KV cache"}) ==');
   final swG = Stopwatch()..start();
-  final out = model.generate(
-    ids,
-    maxNewTokens: maxNew,
-    useCache: !noCache,
-  );
+  final out = numBeams == 1
+      ? model.generate(ids, maxNewTokens: maxNew, useCache: !noCache)
+      : model.generateBeam(
+          ids,
+          numBeams: numBeams,
+          maxNewTokens: maxNew,
+          lengthPenalty: lengthPenalty,
+        );
   swG.stop();
   final newTokens = out.sublist(1);
   print(
