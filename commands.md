@@ -27,6 +27,7 @@ fix so the CUDA driver stub is found. Drop it on native Linux.
 | S1 | whisper tiny.en  | 39M   | CPU    | ✅ local | [bin/whisper_demo.dart](bin/whisper_demo.dart) |
 | S2 | whisper tiny.en  | 39M   | GPU    | ✅ local | [bin/whisper_gpu_demo.dart](bin/whisper_gpu_demo.dart) |
 | S3 | whisper base (multilingual) | 74M | CPU/GPU | ✅ local | [bin/whisper_multilingual_demo.dart](bin/whisper_multilingual_demo.dart) — 99 languages, `--lang code`, `--translate` mode |
+| S4 | whisper small (multilingual) | 244M | GPU (CPU tight) | ✅ local | same binary with `--size small` — better quality, needs ~7 GB RAM on CPU |
 | F1 | facenet-vggface2 | 39M   | CPU    | n/a     | [bin/facenet/demo.dart](bin/facenet/demo.dart) — bit-exact vs. reference |
 | F2 | facenet-vggface2 | 39M   | GPU    | n/a     | [bin/facenet/gpu_demo.dart](bin/facenet/gpu_demo.dart) — same, on device |
 | F3 | facenet-vggface2 | 39M   | CPU/GPU | n/a    | [bin/facenet/verify.dart](bin/facenet/verify.dart) — pair verification |
@@ -1674,6 +1675,48 @@ Bemba, Nyanja/Chichewa, Tonga, or Lozi. The path forward:
 
 Verifying Zambian ASR end-to-end is deferred pending a test audio
 clip in one of the four languages.
+
+## S4. whisper small (multilingual, 244M, 99 languages)
+
+Same binary as S3, `--size small` picks the larger config:
+d_model=768, 12+12 layers, 12 heads, vocab=51865 (same as base).
+Same 99-language list, same prompt-token protocol.
+
+Quality bump over `--size base` is noticeable on all 99 languages
+(WER roughly 30-40% lower on standard benchmarks per OpenAI's
+Whisper paper) and matters even more for languages the base
+struggles with.
+
+One-time setup (~970 MB fp32 — 3× larger than base):
+
+```sh
+mkdir -p models/whisper-small
+for f in model.safetensors tokenizer.json config.json; do
+  curl -L -o "models/whisper-small/$f" \
+    "https://huggingface.co/openai/whisper-small/resolve/main/$f"
+done
+```
+
+Run:
+
+```sh
+LD_LIBRARY_PATH=/usr/lib/wsl/lib \
+  dart run bin/whisper_multilingual_demo.dart --size small --gpu \
+    --lang en --max-len 60
+```
+
+**RAM warning (CPU):** The 12-layer × 12-head × 1500-token encoder
+attention pushes RSS to ~7 GB peak in fp32. Machines with less
+than 12 GB free RAM will page or OOM. `--gpu` is the recommended
+path — weights are ~1 GB VRAM plus modest activations, all
+comfortable on a 6 GB card. When testing CPU behaviour is fine
+(shape / loader smoke), pin `--max-len 5` to skip the long decode.
+
+Zambian language fine-tunes: same story as S3, plus most community
+fine-tunes we surveyed (`chiyo123/whisper-small-bemba`,
+`simzacademy/whisper-small-lozi1`, etc.) are `whisper-small`-sized,
+so this is the natural base to port them onto once a test WAV
+is available.
 
 ## F1 / F2 / F3. FaceNet InceptionResnetV1 — face embeddings (39M, CPU or GPU)
 
