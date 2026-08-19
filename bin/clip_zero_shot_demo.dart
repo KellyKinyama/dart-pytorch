@@ -109,9 +109,7 @@ Future<void> main(List<String> args) async {
       presetLabel = 'CLIP-ViT-L/14';
       break;
     default:
-      stderr.writeln(
-        'unknown preset "$preset"; use base32 | base16 | large14',
-      );
+      stderr.writeln('unknown preset "$preset"; use base32 | base16 | large14');
       exit(64);
   }
   print(
