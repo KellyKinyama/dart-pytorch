@@ -116,8 +116,10 @@ Future<void> main(List<String> args) async {
   print('  -> $ids');
 
   print('');
-  print('== ${numBeams == 1 ? "greedy" : "beam=$numBeams"} decode '
-      '(${noCache && numBeams == 1 ? "no cache" : "KV cache"}) ==');
+  print(
+    '== ${numBeams == 1 ? "greedy" : "beam=$numBeams"} decode '
+    '(${noCache && numBeams == 1 ? "no cache" : "KV cache"}) ==',
+  );
   final swG = Stopwatch()..start();
   final out = numBeams == 1
       ? model.generate(ids, maxNewTokens: maxNew, useCache: !noCache)

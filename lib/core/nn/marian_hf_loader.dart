@@ -42,26 +42,53 @@ class MarianLoadReport {
 }
 
 class MarianHFLoader {
-  /// `Helsinki-NLP/opus-mt-en-de` config (~74 M dense).
-  static MarianConfig opusMtEnDeConfig({
+  /// Generic Opus-MT config factory. Every `Helsinki-NLP/opus-mt-*`
+  /// language pair we've tested shares the same 6+6-layer, 512-dim,
+  /// 8-head, ffn=2048, SiLU-activation architecture — only the vocab
+  /// size (and therefore pad / decoder-start ids) varies per pair.
+  ///
+  /// Pass `vocabSize` from the pair's `config.json` and this returns
+  /// a fully-populated [MarianConfig]. Convention (as used by
+  /// Helsinki-NLP): `padTokenId = vocabSize - 1`,
+  /// `decoderStartTokenId = padTokenId`, `eosTokenId = 0`.
+  static MarianConfig opusMtConfig({
+    required int vocabSize,
     Device device = Device.CPU,
     int seed = 0,
   }) => MarianConfig(
-    vocabSize: 58101,
+    vocabSize: vocabSize,
     dModel: 512,
     ffnDim: 2048,
     numLayers: 6,
     numDecoderLayers: 6,
     numHeads: 8,
     maxPositionEmbeddings: 512,
-    padTokenId: 58100,
+    padTokenId: vocabSize - 1,
     eosTokenId: 0,
-    decoderStartTokenId: 58100,
+    decoderStartTokenId: vocabSize - 1,
     scaleEmbeddings: true,
     activation: MarianActivation.silu,
     device: device,
     seed: seed,
   );
+
+  /// `Helsinki-NLP/opus-mt-en-de` config (~74 M dense).
+  static MarianConfig opusMtEnDeConfig({
+    Device device = Device.CPU,
+    int seed = 0,
+  }) => opusMtConfig(vocabSize: 58101, device: device, seed: seed);
+
+  /// `Helsinki-NLP/opus-mt-en-zh` — English -> Simplified Chinese.
+  static MarianConfig opusMtEnZhConfig({
+    Device device = Device.CPU,
+    int seed = 0,
+  }) => opusMtConfig(vocabSize: 65001, device: device, seed: seed);
+
+  /// `Helsinki-NLP/opus-mt-zh-en` — Chinese -> English.
+  static MarianConfig opusMtZhEnConfig({
+    Device device = Device.CPU,
+    int seed = 0,
+  }) => opusMtConfig(vocabSize: 65001, device: device, seed: seed);
 
   static MarianLoadReport loadFile(MarianModel model, String path) {
     final state = SafeTensors.loadFile(path);

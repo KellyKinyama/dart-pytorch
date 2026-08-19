@@ -20,6 +20,7 @@ fix so the CUDA driver stub is found. Drop it on native Linux.
 | T1 | flan-t5-small | 60M | CPU/GPU | ✅ local | [bin/t5_small_demo.dart](bin/t5_small_demo.dart) — encoder-decoder text-to-text (translation, summarization, QA) |
 | T2 | flan-t5-base | 250M | CPU/GPU | ✅ local | [bin/flan_t5_base_demo.dart](bin/flan_t5_base_demo.dart) — same arch, base config, ~0.7 tok/s CPU |
 | T3 | opus-mt-en-de | 74M | CPU/GPU | ✅ local | [bin/marian_en_de_demo.dart](bin/marian_en_de_demo.dart) — dedicated En→De translator, ~2 tok/s CPU |
+| T4 | opus-mt-en-zh / zh-en | 74M each | CPU/GPU | ✅ local | [bin/marian_translate.dart](bin/marian_translate.dart) — generic runner, `--pair en-de/en-zh/zh-en` |
 | E1 | bge-small-en-v1.5 | 33M | CPU/GPU | ✅ local | [bin/bge_demo.dart](bin/bge_demo.dart) — SOTA sentence embeddings (CLS-pool + L2) |
 | V4 | dinov2-small | 22M | CPU/GPU | n/a | [bin/dinov2_demo.dart](bin/dinov2_demo.dart) — self-supervised ViT-S/14 image features |
 | S1 | whisper tiny.en  | 39M   | CPU    | ✅ local | [bin/whisper_demo.dart](bin/whisper_demo.dart) |
@@ -447,6 +448,79 @@ read `vocab.json` and do greedy longest-match with the `▁`
 Edge-case inputs (rare compound words, non-Latin text) may
 diverge from the SPM output; for those, encode externally and
 pass raw ids.
+
+## T4. opus-mt-{en-zh, zh-en} (74M each, English ↔ Chinese)
+
+Same arch as T3 — every `Helsinki-NLP/opus-mt-*` pair uses the
+6+6-layer, 512-dim, 8-head, ffn=2048, SiLU Marian architecture.
+Only the vocab size differs (65001 for en-zh / zh-en vs 58101 for
+en-de). Loader factory:
+
+```dart
+// One line per new pair — vocab from the pair's config.json.
+MarianHFLoader.opusMtConfig(vocabSize: 65001)
+// Or use the named aliases:
+MarianHFLoader.opusMtEnZhConfig()
+MarianHFLoader.opusMtZhEnConfig()
+```
+
+One-time setup per pair (~300 MB fp32 each):
+
+```sh
+for pair in en-zh zh-en; do
+  mkdir -p models/opus-mt-$pair
+  for f in pytorch_model.bin vocab.json config.json; do
+    curl -L -o "models/opus-mt-$pair/$f" \
+      "https://huggingface.co/Helsinki-NLP/opus-mt-$pair/resolve/main/$f"
+  done
+  python3 scripts/convert_marian_pt_to_safetensors.py \
+    models/opus-mt-$pair/pytorch_model.bin \
+    models/opus-mt-$pair/model.safetensors
+done
+```
+
+Run with the generic `bin/marian_translate.dart` runner:
+
+```sh
+dart run bin/marian_translate.dart --pair en-zh \
+  --text "The weather is nice today." --beams 4
+dart run bin/marian_translate.dart --pair zh-en \
+  --text "你好，世界。" --beams 4
+```
+
+Verified end-to-end (beam=4):
+
+```
+== EN -> ZH ==
+  "Hello world."                                    -> "你好世界。"
+  "The weather is nice today."                      -> "今天天气不错"
+  "I love machine learning."                        -> "我喜欢机器学习"
+  "The quick brown fox jumps over the lazy dog."    -> "棕色狐狸跳过懒狗"
+
+== ZH -> EN ==
+  "你好，世界。"           -> "You're in the world."     [imperfect]
+  "今天天气很好。"         -> "It's a nice day."
+  "我喜欢机器学习。"        -> "I like machine learning."
+  "敏捷的棕色狐狸跳过懒狗。" -> "Agile brown fox skipping lazy dogs."
+```
+
+CLI (same as T3 with `--pair` added):
+
+```
+--pair NAME             en-de | en-zh | zh-en (default: en-de)
+--text STR              source sentence (default is language-appropriate)
+--max-new N             cap decoder steps (default 60)
+--beams N               beam-search width (default 1 = greedy)
+--length-penalty α      score = sum_log_prob / len^α (default 0.6)
+--gpu                   run on GPU
+--weights PATH          override model.safetensors
+--vocab PATH            override vocab.json
+```
+
+Every one of the 200+ opus-mt pairs (En↔Fr, En↔Es, En↔Ar, En↔Ru,
+etc.) can be added in ~5 lines: download + convert the checkpoint,
+add a factory alias with the pair's vocab size, and register the
+preset in `bin/marian_translate.dart`'s `_configForPair` switch.
 
 ## E1. bge-small-en-v1.5 (33M, SOTA sentence embeddings)
 

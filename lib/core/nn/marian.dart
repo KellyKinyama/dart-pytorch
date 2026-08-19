@@ -228,10 +228,8 @@ class MarianDecoderCache {
       seqLen = 0;
   MarianDecoderCache._from(this.blocks, this.seqLen);
 
-  MarianDecoderCache clone() => MarianDecoderCache._from(
-    [for (final b in blocks) b.clone()],
-    seqLen,
-  );
+  MarianDecoderCache clone() =>
+      MarianDecoderCache._from([for (final b in blocks) b.clone()], seqLen);
 }
 
 // ---------------------------------------------------------------------------
@@ -805,10 +803,7 @@ class MarianModel extends Module {
     var active = <_Beam>[
       _Beam(
         seq: [startId],
-        cache: MarianDecoderCache(
-          config.numDecoderLayers,
-          config.numHeads,
-        ),
+        cache: MarianDecoderCache(config.numDecoderLayers, config.numHeads),
         score: 0.0,
       ),
     ];
@@ -821,11 +816,7 @@ class MarianModel extends Module {
         final beam = active[b];
         final feed = beam.seq.last;
         // Advance beam's cache by feeding its last token.
-        final h = decoder.callCached(
-          feed,
-          memory: memory,
-          cache: beam.cache,
-        );
+        final h = decoder.callCached(feed, memory: memory, cache: beam.cache);
         final logits =
             h.matmul(sharedEmbedding.weight.transpose()) + finalLogitsBias;
         final data = logits.toList();
@@ -834,11 +825,13 @@ class MarianModel extends Module {
         // the global top-K prune).
         final topPerBeam = _topKIndices(logProbs, numBeams);
         for (final idx in topPerBeam) {
-          candidates.add(_Candidate(
-            beamIdx: b,
-            tokenId: idx,
-            score: beam.score + logProbs[idx],
-          ));
+          candidates.add(
+            _Candidate(
+              beamIdx: b,
+              tokenId: idx,
+              score: beam.score + logProbs[idx],
+            ),
+          );
         }
       }
 
@@ -857,11 +850,9 @@ class MarianModel extends Module {
           continue;
         }
         // Fork the cache — parent may be used by another top candidate.
-        next.add(_Beam(
-          seq: newSeq,
-          cache: parent.cache.clone(),
-          score: c.score,
-        ));
+        next.add(
+          _Beam(seq: newSeq, cache: parent.cache.clone(), score: c.score),
+        );
       }
 
       if (finished.length >= numBeams) break;
