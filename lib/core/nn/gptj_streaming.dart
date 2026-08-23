@@ -56,41 +56,41 @@ class GPTJStreamingRunner {
     this.reader, {
     this.keepFp16 = true,
     this.profile = false,
-  })  : wte = Embedding(
-          config.vocabSize,
-          config.embedDim,
-          device: config.embedDevice,
-          seed: config.seed,
-        ),
-        finalLn = LayerNorm(config.embedDim, device: config.lmDevice),
-        lmHead = Linear(
-          config.embedDim,
-          config.vocabSize,
-          bias: true,
-          device: config.lmDevice,
-          seed: config.seed + 900000,
-        ),
-        rope = RopeCache(
-          maxCtx: config.maxCtx,
-          headDim: config.embedDim ~/ config.numHeads,
-          rotaryDim: config.rotaryDim,
-          base: config.ropeBase,
-          device: Device.CPU,
-        ),
-        residentBlock = GPTJBlock(
-          config.embedDim,
-          config.numHeads,
-          ffnDim: config.ffnDim,
-          rope: RopeCache(
-            maxCtx: config.maxCtx,
-            headDim: config.embedDim ~/ config.numHeads,
-            rotaryDim: config.rotaryDim,
-            base: config.ropeBase,
-            device: Device.CPU,
-          ),
-          device: Device.CPU,
-          seed: config.seed + 100000,
-        ) {
+  }) : wte = Embedding(
+         config.vocabSize,
+         config.embedDim,
+         device: config.embedDevice,
+         seed: config.seed,
+       ),
+       finalLn = LayerNorm(config.embedDim, device: config.lmDevice),
+       lmHead = Linear(
+         config.embedDim,
+         config.vocabSize,
+         bias: true,
+         device: config.lmDevice,
+         seed: config.seed + 900000,
+       ),
+       rope = RopeCache(
+         maxCtx: config.maxCtx,
+         headDim: config.embedDim ~/ config.numHeads,
+         rotaryDim: config.rotaryDim,
+         base: config.ropeBase,
+         device: Device.CPU,
+       ),
+       residentBlock = GPTJBlock(
+         config.embedDim,
+         config.numHeads,
+         ffnDim: config.ffnDim,
+         rope: RopeCache(
+           maxCtx: config.maxCtx,
+           headDim: config.embedDim ~/ config.numHeads,
+           rotaryDim: config.rotaryDim,
+           base: config.ropeBase,
+           device: Device.CPU,
+         ),
+         device: Device.CPU,
+         seed: config.seed + 100000,
+       ) {
     if (config.embedDevice != Device.CPU || config.lmDevice != Device.CPU) {
       throw StateError(
         'GPTJStreamingRunner: only CPU is supported '
@@ -112,36 +112,29 @@ class GPTJStreamingRunner {
     );
     _copy(
       finalLn.gamma,
-      _expectShape(
-        reader.readTensor('transformer.ln_f.weight'),
-        [d],
-        'transformer.ln_f.weight',
-      ),
+      _expectShape(reader.readTensor('transformer.ln_f.weight'), [
+        d,
+      ], 'transformer.ln_f.weight'),
     );
     _copy(
       finalLn.beta,
-      _expectShape(
-        reader.readTensor('transformer.ln_f.bias'),
-        [d],
-        'transformer.ln_f.bias',
-      ),
+      _expectShape(reader.readTensor('transformer.ln_f.bias'), [
+        d,
+      ], 'transformer.ln_f.bias'),
     );
     _copy(
       lmHead.weight,
-      _expectShape(
-        reader.readTensor('lm_head.weight', keepFp16: keepFp16),
-        [config.vocabSize, d],
-        'lm_head.weight',
-      ),
+      _expectShape(reader.readTensor('lm_head.weight', keepFp16: keepFp16), [
+        config.vocabSize,
+        d,
+      ], 'lm_head.weight'),
     );
     _copy(
       lmHead.bias!,
       _reshape1xN(
-        _expectShape(
-          reader.readTensor('lm_head.bias'),
-          [config.vocabSize],
-          'lm_head.bias',
-        ),
+        _expectShape(reader.readTensor('lm_head.bias'), [
+          config.vocabSize,
+        ], 'lm_head.bias'),
       ),
     );
   }
@@ -162,19 +155,11 @@ class GPTJStreamingRunner {
 
     _copy(
       residentBlock.ln.gamma,
-      _expectShape(
-        reader.readTensor('$p.ln_1.weight'),
-        [d],
-        '$p.ln_1.weight',
-      ),
+      _expectShape(reader.readTensor('$p.ln_1.weight'), [d], '$p.ln_1.weight'),
     );
     _copy(
       residentBlock.ln.beta,
-      _expectShape(
-        reader.readTensor('$p.ln_1.bias'),
-        [d],
-        '$p.ln_1.bias',
-      ),
+      _expectShape(reader.readTensor('$p.ln_1.bias'), [d], '$p.ln_1.bias'),
     );
 
     final qW = _expectShape(
@@ -222,11 +207,9 @@ class GPTJStreamingRunner {
     _copy(
       residentBlock.ffn1.bias!,
       _reshape1xN(
-        _expectShape(
-          reader.readTensor('$p.mlp.fc_in.bias'),
-          [ffn],
-          '$p.mlp.fc_in.bias',
-        ),
+        _expectShape(reader.readTensor('$p.mlp.fc_in.bias'), [
+          ffn,
+        ], '$p.mlp.fc_in.bias'),
       ),
     );
     _copy(
@@ -240,11 +223,9 @@ class GPTJStreamingRunner {
     _copy(
       residentBlock.ffn2.bias!,
       _reshape1xN(
-        _expectShape(
-          reader.readTensor('$p.mlp.fc_out.bias'),
-          [d],
-          '$p.mlp.fc_out.bias',
-        ),
+        _expectShape(reader.readTensor('$p.mlp.fc_out.bias'), [
+          d,
+        ], '$p.mlp.fc_out.bias'),
       ),
     );
 
@@ -282,10 +263,7 @@ class GPTJStreamingRunner {
 
   /// Greedy autoregressive decode. No KV cache — every step re-runs
   /// all layers over the full prefix.
-  List<double> generate(
-    List<double> prompt, {
-    required int maxNewTokens,
-  }) {
+  List<double> generate(List<double> prompt, {required int maxNewTokens}) {
     if (prompt.isEmpty) {
       throw ArgumentError('generate: prompt must be non-empty');
     }
@@ -293,11 +271,7 @@ class GPTJStreamingRunner {
     final out = List<double>.of(prompt);
     for (int step = 0; step < maxNewTokens; step++) {
       if (out.length >= config.maxCtx) break;
-      final ctx = Tensor.fromList(
-        [out.length],
-        out,
-        device: Device.CPU,
-      );
+      final ctx = Tensor.fromList([out.length], out, device: Device.CPU);
       final logits = forward(ctx);
       final row = logits.toList();
       final base = (out.length - 1) * v;

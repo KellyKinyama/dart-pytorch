@@ -64,8 +64,10 @@ Future<void> main(List<String> args) async {
 
   print('== streaming GPT-J runner ==');
   print('  layers  : ${cfg.numLayers}');
-  print('  D / H   : ${cfg.embedDim} / ${cfg.numHeads} (headDim '
-      '${cfg.embedDim ~/ cfg.numHeads}, rot=${cfg.rotaryDim})');
+  print(
+    '  D / H   : ${cfg.embedDim} / ${cfg.numHeads} (headDim '
+    '${cfg.embedDim ~/ cfg.numHeads}, rot=${cfg.rotaryDim})',
+  );
   print('  vocab   : ${cfg.vocabSize}');
   print('  weights : $weightsPath');
 
@@ -77,12 +79,16 @@ Future<void> main(List<String> args) async {
   final swInit = Stopwatch()..start();
   final runner = GPTJStreamingRunner(cfg, reader, profile: profile);
   swInit.stop();
-  print('  init    : ${swInit.elapsedMilliseconds} ms '
-      '(wte + ln_f + lm_head loaded)');
+  print(
+    '  init    : ${swInit.elapsedMilliseconds} ms '
+    '(wte + ln_f + lm_head loaded)',
+  );
 
   final layerBytes = estimateGPTJLayerBytes(reader, cfg);
-  print('  layer   : ${(layerBytes / (1024 * 1024)).toStringAsFixed(1)} MB '
-      'on disk per layer (× ${cfg.numLayers} layers)');
+  print(
+    '  layer   : ${(layerBytes / (1024 * 1024)).toStringAsFixed(1)} MB '
+    'on disk per layer (× ${cfg.numLayers} layers)',
+  );
 
   final ids = tokenizer.encode(prompt);
   final promptF = ids.map((i) => i.toDouble()).toList();
@@ -98,8 +104,10 @@ Future<void> main(List<String> args) async {
   swG.stop();
   final newIds = out.skip(ids.length).map((v) => v.toInt()).toList();
   final text = tokenizer.decode(newIds);
-  print('  wall    : ${swG.elapsedMilliseconds} ms '
-      '(${(newIds.length * 1000.0 / swG.elapsedMilliseconds).toStringAsFixed(3)} tok/s)');
+  print(
+    '  wall    : ${swG.elapsedMilliseconds} ms '
+    '(${(newIds.length * 1000.0 / swG.elapsedMilliseconds).toStringAsFixed(3)} tok/s)',
+  );
   print('');
   print('== completion ==');
   print(prompt + text);
