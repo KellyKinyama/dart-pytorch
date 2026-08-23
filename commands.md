@@ -16,7 +16,9 @@ fix so the CUDA driver stub is found. Drop it on native Linux.
 | 7 | pythia-1b        | 1.0B  | GPU    | ✅ local | [bin/pythia/run_1b_gpu_api.dart](bin/pythia/run_1b_gpu_api.dart) |
 | 8 | gpt-j-6b (hybrid)| 6.05B | CPU + GPU | ✅ local | [bin/gptj/run_6b_hybrid_api.dart](bin/gptj/run_6b_hybrid_api.dart) |
 | 9 | gpt-j-6b (CPU)   | 6.05B | CPU    | ✅ local | [bin/gptj/run_6b_cpu_api.dart](bin/gptj/run_6b_cpu_api.dart) |
+| 9s | gpt-j-6b (**layer-streaming**) | 6.05B | CPU (~1.5 GB resident) | ✅ local | [bin/gptj_streaming_demo.dart](bin/gptj_streaming_demo.dart) — AirLLM-style; peak RAM ≈ embed + lm_head + one layer. See [doc/layer_streaming.md](doc/layer_streaming.md) |
 | 10 | smollm2-135m-instruct | 135M | CPU/GPU | ✅ local | [bin/smollm2_demo.dart](bin/smollm2_demo.dart) — Llama-arch tiny LM |
+| 10s | smollm2 / Llama / Qwen2.5 (**layer-streaming**) | any | CPU | ✅ local | [bin/llama_streaming_demo.dart](bin/llama_streaming_demo.dart) — AirLLM-style, one resident block, `--preset` selects any config from `LlamaHFLoader`. See [doc/layer_streaming.md](doc/layer_streaming.md) |
 | T1 | flan-t5-small | 60M | CPU/GPU | ✅ local | [bin/t5_small_demo.dart](bin/t5_small_demo.dart) — encoder-decoder text-to-text (translation, summarization, QA) |
 | T2 | flan-t5-base | 250M | CPU/GPU | ✅ local | [bin/flan_t5_base_demo.dart](bin/flan_t5_base_demo.dart) — same arch, base config, ~0.7 tok/s CPU |
 | T3 | opus-mt-en-de | 74M | CPU/GPU | ✅ local | [bin/marian_en_de_demo.dart](bin/marian_en_de_demo.dart) — dedicated En→De translator, ~2 tok/s CPU |

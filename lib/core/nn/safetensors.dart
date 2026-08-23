@@ -38,7 +38,8 @@ import '../tensor/dtype.dart';
 
 /// A single tensor entry parsed from a safetensors header, before the
 /// raw bytes have been decoded into a [Tensor].
-class SafeTensorEntry {  final String name;
+class SafeTensorEntry {
+  final String name;
   final String dtype;
   final List<int> shape;
   final int dataStart;
@@ -249,6 +250,40 @@ class SafeTensors {
     final meta = headerJson[metadataKey];
     if (meta is! Map) return const {};
     return meta.map((k, v) => MapEntry(k.toString(), v.toString()));
+  }
+
+  /// Parse a safetensors header without materializing any tensors.
+  /// Returns the entries (dtype, shape, byte offsets) and the byte
+  /// offset at which the raw tensor blob region begins. Used by
+  /// [SafeTensorsReader] to random-access individual tensors without
+  /// slurping the whole file into RAM.
+  static ({List<SafeTensorEntry> entries, int dataOffset}) parseHeaderOnly(
+    Uint8List headerBytes,
+  ) {
+    final entries = _parseHeader(headerBytes);
+    final off = _dataOffset(headerBytes);
+    return (entries: entries, dataOffset: off);
+  }
+
+  /// Decode a single tensor from a Uint8List that contains just that
+  /// tensor's raw blob (i.e. bytes [entry.dataStart, entry.dataEnd)
+  /// from the original file). `keepFp16` behaves as on [loadFile].
+  ///
+  /// Used by streaming readers that seek into a safetensors file,
+  /// read a single tensor's byte range, and decode it in isolation.
+  static Tensor decodeBlob(
+    SafeTensorEntry entry,
+    Uint8List blob, {
+    bool keepFp16 = false,
+  }) {
+    final synth = SafeTensorEntry(
+      name: entry.name,
+      dtype: entry.dtype,
+      shape: entry.shape,
+      dataStart: 0,
+      dataEnd: blob.length,
+    );
+    return _readTensor(blob, 0, synth, keepFp16: keepFp16);
   }
 
   // ---------------- internals ----------------
