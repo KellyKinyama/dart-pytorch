@@ -114,9 +114,7 @@ class SkyReelsV2StreamingRunner {
     if (src.dtype == DType.fp16 && dst.device == Device.CPU) {
       dst.adoptCpuStorageFrom(src);
     } else {
-      dst.assign(
-        Tensor.fromList(dst.shape, src.toList(), device: dst.device),
-      );
+      dst.assign(Tensor.fromList(dst.shape, src.toList(), device: dst.device));
     }
   }
 

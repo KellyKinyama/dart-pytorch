@@ -28,6 +28,7 @@ import '../tensor/tensor.dart';
 import '../tensor/dtype.dart';
 import 'embedding.dart';
 import 'gptj.dart';
+import 'kv_cache.dart';
 import 'layer_norm.dart';
 import 'linear.dart';
 import 'masks.dart';
@@ -236,7 +237,11 @@ class GPTJStreamingRunner {
     }
   }
 
-  Tensor forward(Tensor tokens) {
+  Tensor forward(
+    Tensor tokens, {
+    int startPos = 0,
+    EncoderCache? cache,
+  }) {
     if (tokens.shape.length != 1) {
       throw ArgumentError(
         'GPTJStreamingRunner: tokens must be 1D [seqLen]; '
@@ -244,9 +249,10 @@ class GPTJStreamingRunner {
       );
     }
     final n = tokens.shape.last;
-    if (n > config.maxCtx) {
+    if (startPos + n > config.maxCtx) {
       throw ArgumentError(
-        'GPTJStreamingRunner: seqLen $n exceeds maxCtx ${config.maxCtx}',
+        'GPTJStreamingRunner: window [$startPos, ${startPos + n}) '
+        'exceeds maxCtx ${config.maxCtx}',
       );
     }
     return Tensor.noGrad(() {
@@ -254,39 +260,75 @@ class GPTJStreamingRunner {
       final mask = n > 1 ? causalMask(n, device: x.device) : null;
       for (int i = 0; i < config.numLayers; i++) {
         _swapLayer(i);
-        x = residentBlock(x, mask: mask);
+        final layerCache = cache?.layers[i];
+        x = residentBlock(
+          x,
+          mask: mask,
+          cache: layerCache,
+          startPos: startPos,
+        );
       }
       x = finalLn(x);
       return lmHead(x);
     });
   }
 
-  /// Greedy autoregressive decode. No KV cache — every step re-runs
-  /// all layers over the full prefix.
-  List<double> generate(List<double> prompt, {required int maxNewTokens}) {
+  /// Greedy autoregressive decode. With [useCache] on (default), a
+  /// persistent per-layer KV cache is kept across steps so each
+  /// generated token only runs a **single-token** forward through
+  /// every streamed layer, rather than re-projecting the entire
+  /// prefix.
+  List<double> generate(
+    List<double> prompt, {
+    required int maxNewTokens,
+    bool useCache = true,
+  }) {
     if (prompt.isEmpty) {
       throw ArgumentError('generate: prompt must be non-empty');
     }
+    if (useCache) return _generateCached(prompt, maxNewTokens);
+    return _generateNoCache(prompt, maxNewTokens);
+  }
+
+  List<double> _generateCached(List<double> prompt, int maxNewTokens) {
+    final v = config.vocabSize;
+    final out = List<double>.of(prompt);
+    final cache = EncoderCache.empty(config.numLayers, config.numHeads);
+    final promptT = Tensor.fromList([prompt.length], prompt, device: Device.CPU);
+    var logits = forward(promptT, startPos: 0, cache: cache).toList();
+    out.add(_argmax(logits, (prompt.length - 1) * v, v).toDouble());
+    for (int step = 1; step < maxNewTokens; step++) {
+      if (cache.seqLen >= config.maxCtx) break;
+      final oneT = Tensor.fromList([1], [out.last], device: Device.CPU);
+      logits = forward(oneT, startPos: cache.seqLen, cache: cache).toList();
+      out.add(_argmax(logits, 0, v).toDouble());
+    }
+    return out;
+  }
+
+  List<double> _generateNoCache(List<double> prompt, int maxNewTokens) {
     final v = config.vocabSize;
     final out = List<double>.of(prompt);
     for (int step = 0; step < maxNewTokens; step++) {
       if (out.length >= config.maxCtx) break;
       final ctx = Tensor.fromList([out.length], out, device: Device.CPU);
-      final logits = forward(ctx);
-      final row = logits.toList();
-      final base = (out.length - 1) * v;
-      var best = double.negativeInfinity;
-      var arg = 0;
-      for (int t = 0; t < v; t++) {
-        final val = row[base + t];
-        if (val > best) {
-          best = val;
-          arg = t;
-        }
-      }
-      out.add(arg.toDouble());
+      final logits = forward(ctx).toList();
+      out.add(_argmax(logits, (out.length - 1) * v, v).toDouble());
     }
     return out;
+  }
+
+  static int _argmax(List<double> row, int base, int len) {
+    var best = double.negativeInfinity;
+    var arg = 0;
+    for (int t = 0; t < len; t++) {
+      final val = row[base + t];
+      if (val > best) {
+        best = val;
+        arg = t;
+      }
+    }
+    return arg;
   }
 
   void close() => reader.close();

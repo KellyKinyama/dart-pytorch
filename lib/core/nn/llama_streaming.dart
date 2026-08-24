@@ -40,6 +40,7 @@ import 'dart:typed_data';
 
 import '../tensor/tensor.dart';
 import '../tensor/dtype.dart';
+import 'kv_cache.dart';
 import 'llama.dart';
 import 'masks.dart';
 import 'rms_norm.dart';
@@ -273,18 +274,29 @@ class LlamaStreamingRunner {
     }
   }
 
-  /// Single forward: `tokens` is a 1D [seqLen] tensor of token ids
+  /// Single forward. `tokens` is a 1D `[seqLen]` tensor of token ids
   /// as float32. Returns `[seqLen, vocab]` logits.
-  Tensor forward(Tensor tokens) {
+  ///
+  /// If [cache] is supplied, per-layer K/V is appended to it (prompt
+  /// fill: `startPos=0`, `seqLen>=1`; single-token append:
+  /// `seqLen==1`, `startPos == cache.seqLen`). The cache survives
+  /// layer swaps because its K/V tensors are separate from the
+  /// resident block's weight tensors.
+  Tensor forward(
+    Tensor tokens, {
+    int startPos = 0,
+    EncoderCache? cache,
+  }) {
     if (tokens.shape.length != 1) {
       throw ArgumentError(
         'LlamaStreamingRunner: tokens must be 1D [seqLen]; got ${tokens.shape}',
       );
     }
     final n = tokens.shape.last;
-    if (n > config.maxCtx) {
+    if (startPos + n > config.maxCtx) {
       throw ArgumentError(
-        'LlamaStreamingRunner: seqLen $n exceeds maxCtx ${config.maxCtx}',
+        'LlamaStreamingRunner: window [$startPos, ${startPos + n}) '
+        'exceeds maxCtx ${config.maxCtx}',
       );
     }
     return Tensor.noGrad(() {
@@ -292,7 +304,13 @@ class LlamaStreamingRunner {
       final mask = n > 1 ? causalMask(n, device: x.device) : null;
       for (int i = 0; i < config.numLayers; i++) {
         _swapLayer(i);
-        x = residentBlock(x, mask: mask);
+        final layerCache = cache?.layers[i];
+        x = residentBlock(
+          x,
+          mask: mask,
+          cache: layerCache,
+          startPos: startPos,
+        );
       }
       x = finalNorm(x);
       final head = config.tieWeights ? _embedWeight : _untiedHeadWeight!;
@@ -300,32 +318,76 @@ class LlamaStreamingRunner {
     });
   }
 
-  /// Greedy autoregressive decode. No KV cache: every step re-runs
-  /// all layers over the full prefix.
-  List<double> generate(List<double> prompt, {required int maxNewTokens}) {
+  /// Greedy autoregressive decode. With [useCache] on (default), a
+  /// persistent per-layer KV cache is kept across steps so each
+  /// generated token only runs a **single-token** forward through
+  /// each streamed layer, rather than re-projecting the entire
+  /// prefix. Layer disk I/O is unchanged (still numLayers reads per
+  /// token), but per-layer matmul cost drops from `O(prefix × D²)`
+  /// to `O(1 × D²)` after the prompt.
+  List<double> generate(
+    List<double> prompt, {
+    required int maxNewTokens,
+    bool useCache = true,
+  }) {
     if (prompt.isEmpty) {
       throw ArgumentError('generate: prompt must be non-empty');
     }
+    if (useCache) return _generateCached(prompt, maxNewTokens);
+    return _generateNoCache(prompt, maxNewTokens);
+  }
+
+  List<double> _generateCached(List<double> prompt, int maxNewTokens) {
+    final v = config.vocabSize;
+    final out = List<double>.of(prompt);
+    final cache = EncoderCache.empty(config.numLayers, config.numKvHeads);
+
+    final promptT = Tensor.fromList(
+      [prompt.length],
+      prompt,
+      device: config.device,
+    );
+    var logits = forward(promptT, startPos: 0, cache: cache).toList();
+    var lastBase = (prompt.length - 1) * v;
+    out.add(_argmax(logits, lastBase, v).toDouble());
+
+    for (int step = 1; step < maxNewTokens; step++) {
+      if (cache.seqLen >= config.maxCtx) break;
+      final oneT = Tensor.fromList(
+        [1],
+        [out.last],
+        device: config.device,
+      );
+      logits = forward(oneT, startPos: cache.seqLen, cache: cache).toList();
+      out.add(_argmax(logits, 0, v).toDouble());
+    }
+    return out;
+  }
+
+  List<double> _generateNoCache(List<double> prompt, int maxNewTokens) {
     final v = config.vocabSize;
     final out = List<double>.of(prompt);
     for (int step = 0; step < maxNewTokens; step++) {
       if (out.length >= config.maxCtx) break;
       final ctx = Tensor.fromList([out.length], out, device: config.device);
-      final logits = forward(ctx);
-      final row = logits.toList();
+      final logits = forward(ctx).toList();
       final base = (out.length - 1) * v;
-      var best = double.negativeInfinity;
-      var arg = 0;
-      for (int t = 0; t < v; t++) {
-        final val = row[base + t];
-        if (val > best) {
-          best = val;
-          arg = t;
-        }
-      }
-      out.add(arg.toDouble());
+      out.add(_argmax(logits, base, v).toDouble());
     }
     return out;
+  }
+
+  static int _argmax(List<double> row, int base, int len) {
+    var best = double.negativeInfinity;
+    var arg = 0;
+    for (int t = 0; t < len; t++) {
+      final val = row[base + t];
+      if (val > best) {
+        best = val;
+        arg = t;
+      }
+    }
+    return arg;
   }
 
   void close() => reader.close();

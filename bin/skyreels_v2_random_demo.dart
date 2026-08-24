@@ -70,8 +70,10 @@ Future<void> main(List<String> args) async {
   final swInit = Stopwatch()..start();
   final model = SkyReelsV2Model(cfg);
   swInit.stop();
-  print('  init    : ${swInit.elapsedMilliseconds} ms '
-      '(fp32 random weights)');
+  print(
+    '  init    : ${swInit.elapsedMilliseconds} ms '
+    '(fp32 random weights)',
+  );
 
   final rng = math.Random(seed);
   final patchWidth = cfg.inDim * cfg.patchProduct;
@@ -100,8 +102,10 @@ Future<void> main(List<String> args) async {
   final y = Tensor.noGrad(() => model(patches, text, step));
   swF.stop();
   print('  wall    : ${swF.elapsedMilliseconds} ms');
-  print('  output  : ${y.shape} '
-      '(expected [$tokens, ${cfg.patchProduct * cfg.outDim}])');
+  print(
+    '  output  : ${y.shape} '
+    '(expected [$tokens, ${cfg.patchProduct * cfg.outDim}])',
+  );
 
   final row = y.toList();
   var mn = double.infinity;
@@ -118,19 +122,25 @@ Future<void> main(List<String> args) async {
     sum += v;
   }
   final finite = row.length - nan;
-  print('  stats   : min=${mn.toStringAsFixed(3)} '
-      'max=${mx.toStringAsFixed(3)} '
-      'mean=${(sum / (finite == 0 ? 1 : finite)).toStringAsFixed(5)} '
-      'nan=$nan/${row.length}');
+  print(
+    '  stats   : min=${mn.toStringAsFixed(3)} '
+    'max=${mx.toStringAsFixed(3)} '
+    'mean=${(sum / (finite == 0 ? 1 : finite)).toStringAsFixed(5)} '
+    'nan=$nan/${row.length}',
+  );
   if (nan > 0) {
     stderr.writeln('WARNING: forward produced NaN(s).');
   } else {
-    print('  status  : OK — SkyReels-V2 DiT skeleton compiles and '
-        'produces finite outputs.');
+    print(
+      '  status  : OK — SkyReels-V2 DiT skeleton compiles and '
+      'produces finite outputs.',
+    );
   }
   print('');
-  print('This does NOT render video. See doc/skyreels_v2_port.md for '
-      'what a real port would need on top of this skeleton (3D VAE, '
-      'T5, UniPC scheduler, 3D RoPE, patch Conv3D, i2v cross-attn, '
-      'diffusion forcing).');
+  print(
+    'This does NOT render video. See doc/skyreels_v2_port.md for '
+    'what a real port would need on top of this skeleton (3D VAE, '
+    'T5, UniPC scheduler, 3D RoPE, patch Conv3D, i2v cross-attn, '
+    'diffusion forcing).',
+  );
 }

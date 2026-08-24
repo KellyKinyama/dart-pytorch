@@ -107,10 +107,7 @@ class SkyReelsV2Config {
   /// `dim=1536, num_layers=30, num_heads=12, ffn_dim=8960` —
   /// standard Wan-1.3B numbers. Confirm against the shipped
   /// `Skywork/SkyReels-V2-DF-1.3B-540P` `config.json` before use.
-  static SkyReelsV2Config df1_3B({
-    Device device = Device.CPU,
-    int seed = 0,
-  }) =>
+  static SkyReelsV2Config df1_3B({Device device = Device.CPU, int seed = 0}) =>
       SkyReelsV2Config(
         dim: 1536,
         ffnDim: 8960,
@@ -124,10 +121,7 @@ class SkyReelsV2Config {
   /// `dim=5120, num_layers=40, num_heads=40, ffn_dim=13824` — Wan-14B
   /// numbers. Confirm against
   /// `Skywork/SkyReels-V2-DF-14B-540P` config before use.
-  static SkyReelsV2Config df14B({
-    Device device = Device.CPU,
-    int seed = 0,
-  }) =>
+  static SkyReelsV2Config df14B({Device device = Device.CPU, int seed = 0}) =>
       SkyReelsV2Config(
         dim: 5120,
         ffnDim: 13824,
@@ -186,43 +180,39 @@ class SkyReelsV2Block extends Module {
     double eps = 1e-6,
     Device device = Device.CPU,
     int seed = 0,
-  })  : modulation = Tensor.fill(
-          [1, 6, dim],
-          0.0,
-          device: device,
-        ),
-        norm1 = LayerNorm(dim, eps: eps, device: device),
-        norm3 = LayerNorm(dim, eps: eps, device: device),
-        norm2 = LayerNorm(dim, eps: eps, device: device),
-        selfAttn = MultiHeadAttention(
-          dim,
-          numHeads,
-          bias: true,
-          device: device,
-          seed: seed,
-        ),
-        crossAttn = MultiHeadCrossAttention(
-          dim,
-          dim,
-          numHeads,
-          bias: true,
-          device: device,
-          seed: seed + 10000,
-        ),
-        ffn1 = Linear(
-          dim,
-          ffnDim,
-          bias: true,
-          device: device,
-          seed: seed + 20000,
-        ),
-        ffn2 = Linear(
-          ffnDim,
-          dim,
-          bias: true,
-          device: device,
-          seed: seed + 30000,
-        );
+  }) : modulation = Tensor.fill([1, 6, dim], 0.0, device: device),
+       norm1 = LayerNorm(dim, eps: eps, device: device),
+       norm3 = LayerNorm(dim, eps: eps, device: device),
+       norm2 = LayerNorm(dim, eps: eps, device: device),
+       selfAttn = MultiHeadAttention(
+         dim,
+         numHeads,
+         bias: true,
+         device: device,
+         seed: seed,
+       ),
+       crossAttn = MultiHeadCrossAttention(
+         dim,
+         dim,
+         numHeads,
+         bias: true,
+         device: device,
+         seed: seed + 10000,
+       ),
+       ffn1 = Linear(
+         dim,
+         ffnDim,
+         bias: true,
+         device: device,
+         seed: seed + 20000,
+       ),
+       ffn2 = Linear(
+         ffnDim,
+         dim,
+         bias: true,
+         device: device,
+         seed: seed + 30000,
+       );
 
   /// `x`: `[seq_len, dim]`, `e6`: six `[1, dim]` modulation vectors
   /// (already summed with the block's own `modulation` param),
@@ -248,26 +238,26 @@ class SkyReelsV2Block extends Module {
 
   @override
   List<Tensor> parameters() => [
-        modulation,
-        ...norm1.parameters(),
-        ...norm3.parameters(),
-        ...norm2.parameters(),
-        ...selfAttn.parameters(),
-        ...crossAttn.parameters(),
-        ...ffn1.parameters(),
-        ...ffn2.parameters(),
-      ];
+    modulation,
+    ...norm1.parameters(),
+    ...norm3.parameters(),
+    ...norm2.parameters(),
+    ...selfAttn.parameters(),
+    ...crossAttn.parameters(),
+    ...ffn1.parameters(),
+    ...ffn2.parameters(),
+  ];
 
   @override
   List<Module> submodules() => [
-        norm1,
-        norm3,
-        norm2,
-        selfAttn,
-        crossAttn,
-        ffn1,
-        ffn2,
-      ];
+    norm1,
+    norm3,
+    norm2,
+    selfAttn,
+    crossAttn,
+    ffn1,
+    ffn2,
+  ];
 }
 
 /// Full SkyReels-V2 DiT backbone. See the library doc for the list
@@ -299,62 +289,62 @@ class SkyReelsV2Model extends Module {
   final Linear headOut;
 
   SkyReelsV2Model(this.config)
-      : patchEmbed = Linear(
-          config.inDim * config.patchProduct,
-          config.dim,
-          bias: true,
-          device: config.device,
-          seed: config.seed + 1,
-        ),
-        textEmbed0 = Linear(
-          config.textDim,
-          config.dim,
-          bias: true,
-          device: config.device,
-          seed: config.seed + 2,
-        ),
-        textEmbed2 = Linear(
-          config.dim,
-          config.dim,
-          bias: true,
-          device: config.device,
-          seed: config.seed + 3,
-        ),
-        timeEmbed0 = Linear(
-          config.freqDim,
-          config.dim,
-          bias: true,
-          device: config.device,
-          seed: config.seed + 4,
-        ),
-        timeEmbed2 = Linear(
-          config.dim,
-          config.dim,
-          bias: true,
-          device: config.device,
-          seed: config.seed + 5,
-        ),
-        timeProjection = Linear(
-          config.dim,
-          6 * config.dim,
-          bias: true,
-          device: config.device,
-          seed: config.seed + 6,
-        ),
-        blocks = <SkyReelsV2Block>[],
-        headModulation = Tensor.fill(
-          [1, 2, config.dim],
-          0.0,
-          device: config.device,
-        ),
-        headNorm = LayerNorm(config.dim, eps: config.eps, device: config.device),
-        headOut = Linear(
-          config.dim,
-          config.patchProduct * config.outDim,
-          bias: true,
-          device: config.device,
-          seed: config.seed + 7,
-        ) {
+    : patchEmbed = Linear(
+        config.inDim * config.patchProduct,
+        config.dim,
+        bias: true,
+        device: config.device,
+        seed: config.seed + 1,
+      ),
+      textEmbed0 = Linear(
+        config.textDim,
+        config.dim,
+        bias: true,
+        device: config.device,
+        seed: config.seed + 2,
+      ),
+      textEmbed2 = Linear(
+        config.dim,
+        config.dim,
+        bias: true,
+        device: config.device,
+        seed: config.seed + 3,
+      ),
+      timeEmbed0 = Linear(
+        config.freqDim,
+        config.dim,
+        bias: true,
+        device: config.device,
+        seed: config.seed + 4,
+      ),
+      timeEmbed2 = Linear(
+        config.dim,
+        config.dim,
+        bias: true,
+        device: config.device,
+        seed: config.seed + 5,
+      ),
+      timeProjection = Linear(
+        config.dim,
+        6 * config.dim,
+        bias: true,
+        device: config.device,
+        seed: config.seed + 6,
+      ),
+      blocks = <SkyReelsV2Block>[],
+      headModulation = Tensor.fill(
+        [1, 2, config.dim],
+        0.0,
+        device: config.device,
+      ),
+      headNorm = LayerNorm(config.dim, eps: config.eps, device: config.device),
+      headOut = Linear(
+        config.dim,
+        config.patchProduct * config.outDim,
+        bias: true,
+        device: config.device,
+        seed: config.seed + 7,
+      ) {
     for (int i = 0; i < config.numLayers; i++) {
       blocks.add(
         SkyReelsV2Block(
@@ -455,28 +445,28 @@ class SkyReelsV2Model extends Module {
 
   @override
   List<Tensor> parameters() => [
-        ...patchEmbed.parameters(),
-        ...textEmbed0.parameters(),
-        ...textEmbed2.parameters(),
-        ...timeEmbed0.parameters(),
-        ...timeEmbed2.parameters(),
-        ...timeProjection.parameters(),
-        for (final b in blocks) ...b.parameters(),
-        headModulation,
-        ...headNorm.parameters(),
-        ...headOut.parameters(),
-      ];
+    ...patchEmbed.parameters(),
+    ...textEmbed0.parameters(),
+    ...textEmbed2.parameters(),
+    ...timeEmbed0.parameters(),
+    ...timeEmbed2.parameters(),
+    ...timeProjection.parameters(),
+    for (final b in blocks) ...b.parameters(),
+    headModulation,
+    ...headNorm.parameters(),
+    ...headOut.parameters(),
+  ];
 
   @override
   List<Module> submodules() => [
-        patchEmbed,
-        textEmbed0,
-        textEmbed2,
-        timeEmbed0,
-        timeEmbed2,
-        timeProjection,
-        ...blocks,
-        headNorm,
-        headOut,
-      ];
+    patchEmbed,
+    textEmbed0,
+    textEmbed2,
+    timeEmbed0,
+    timeEmbed2,
+    timeProjection,
+    ...blocks,
+    headNorm,
+    headOut,
+  ];
 }
