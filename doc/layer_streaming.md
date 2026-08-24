@@ -183,7 +183,11 @@ dart run bin/moe_streaming_demo.dart --d 2048 --experts 60 --hidden 1408 --topk 
       and runs SwiGLU forward on real HF weight layout.
     * [bin/qwen15_moe_layer_stream.dart](../bin/qwen15_moe_layer_stream.dart)
       — same for `Qwen/Qwen1.5-MoE-A2.7B-Chat` (scalar-gated
-      `shared_expert`).
+      `shared_expert`). **Verified on real weights (layer 3):**
+      T=1 → 4/60 experts streamed (**93.3 % saved**),
+      T=4 → 16/60 (73.3 %), T=8 → 25/60 (58.3 %). Union grows with
+      batch size, so the AirLLM headline savings apply hardest to
+      single-token autoregressive generation.
   * Not yet: a full `DeepSeekV2StreamingRunner`. Qwen1.5-MoE E2E
     runner IS landed as [Qwen15MoEStreamingRunner](../lib/core/nn/qwen15_moe_streaming.dart)
     — plain MHA (Q/K/V bias, no O bias), RMSNorm × 2, router

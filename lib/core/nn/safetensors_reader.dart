@@ -135,17 +135,21 @@ class ShardedSafeTensorsReader {
     return ShardedSafeTensorsReader._({path: reader}, paramToShard);
   }
 
+  /// Open a sharded checkpoint by its `model.safetensors.index.json`.
+  ///
+  /// Shard files are opened **lazily** — the first `readTensor` for
+  /// a key opens (and keeps open) that key's shard. This lets you
+  /// work with partial downloads: as long as every key you actually
+  /// touch lives in a shard that's on disk, missing sibling shards
+  /// are harmless.
   static ShardedSafeTensorsReader fromIndex(String indexPath) {
     final index = SafeTensors.readShardIndex(indexPath);
     final baseDir = File(indexPath).parent.path;
-    final readers = <String, SafeTensorsReader>{};
     final paramToShard = <String, String>{};
     for (final e in index.weightMap.entries) {
-      final shardPath = '$baseDir${Platform.pathSeparator}${e.value}';
-      readers.putIfAbsent(shardPath, () => SafeTensorsReader.open(shardPath));
-      paramToShard[e.key] = shardPath;
+      paramToShard[e.key] = '$baseDir${Platform.pathSeparator}${e.value}';
     }
-    return ShardedSafeTensorsReader._(readers, paramToShard);
+    return ShardedSafeTensorsReader._(<String, SafeTensorsReader>{}, paramToShard);
   }
 
   /// Auto-detect: pick `fromIndex` if the file ends in `.index.json`,
@@ -158,20 +162,30 @@ class ShardedSafeTensorsReader {
   Iterable<String> get names => _paramToShard.keys;
   bool contains(String name) => _paramToShard.containsKey(name);
 
-  Tensor readTensor(String name, {bool keepFp16 = false}) {
+  /// Returns true iff [name]'s shard is on disk (readable). Useful
+  /// for probing partial downloads before touching a key.
+  bool shardOnDisk(String name) {
+    final shard = _paramToShard[name];
+    if (shard == null) return false;
+    return File(shard).existsSync();
+  }
+
+  SafeTensorsReader _openFor(String name) {
     final shard = _paramToShard[name];
     if (shard == null) {
       throw ArgumentError('no such tensor: "$name"');
     }
-    return _readers[shard]!.readTensor(name, keepFp16: keepFp16);
+    return _readers.putIfAbsent(shard, () => SafeTensorsReader.open(shard));
   }
+
+  Tensor readTensor(String name, {bool keepFp16 = false}) =>
+      _openFor(name).readTensor(name, keepFp16: keepFp16);
 
   /// Read only the entry (dtype/shape/offsets) without decoding the
   /// tensor. Useful for size / layout planning.
   SafeTensorEntry? entry(String name) {
-    final shard = _paramToShard[name];
-    if (shard == null) return null;
-    return _readers[shard]!.entry(name);
+    if (!_paramToShard.containsKey(name)) return null;
+    return _openFor(name).entry(name);
   }
 
   /// Approximate on-disk bytes of a tensor by name (from the header).
