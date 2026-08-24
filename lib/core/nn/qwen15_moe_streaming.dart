@@ -135,6 +135,20 @@ class Qwen15MoEStreamingRunner {
   /// Pre-transposed `[D, 1]` version cached at swap.
   Tensor _sharedExpertGateT;
 
+  /// Persistent per-layer caches of the transposed shared expert and
+  /// router weights. Populated once at construction — after that,
+  /// `_swapLayerNonExperts` skips disk I/O for these and just points
+  /// at the right layer's cached tensor. Costs ~1.6 GB extra fp16
+  /// storage (24 × 66 MB shared + 24 × 240 KB router) to save
+  /// ~5 seconds per forward on real Qwen1.5-MoE weights.
+  late final List<Tensor> _sharedGateTs;
+  late final List<Tensor> _sharedUpTs;
+  late final List<Tensor> _sharedDownTs;
+  late final List<Tensor> _sharedExpertGateTs;
+  late final List<Tensor> _routerWs;
+  late final List<Tensor> _attnNormGammas;
+  late final List<Tensor> _ffnNormGammas;
+
   /// Reused across forwards for row-broadcasting `[T, 1] @ [1, D]
   /// → [T, D]`. Allocated once.
   late final Tensor _onesD;
@@ -262,6 +276,62 @@ class Qwen15MoEStreamingRunner {
       );
       _headT = head.transpose(); // fp16-preserving; head then GC'd
     }
+
+    // Pre-load all layers' router + shared expert transposes + norms.
+    // Big memory win but eliminates ~66 MB of disk I/O per layer per
+    // forward. ~1.6 GB extra fp16 storage for the shared expert alone.
+    _sharedGateTs = List<Tensor>.filled(config.numLayers, _sharedGate);
+    _sharedUpTs = List<Tensor>.filled(config.numLayers, _sharedUp);
+    _sharedDownTs = List<Tensor>.filled(config.numLayers, _sharedDown);
+    _sharedExpertGateTs =
+        List<Tensor>.filled(config.numLayers, _sharedExpertGate);
+    _routerWs = List<Tensor>.filled(config.numLayers, _routerW);
+    _attnNormGammas = List<Tensor>.filled(config.numLayers, attnNorm.gamma);
+    _ffnNormGammas = List<Tensor>.filled(config.numLayers, ffnNorm.gamma);
+    for (int i = 0; i < config.numLayers; i++) {
+      final p = 'model.layers.$i.mlp';
+      final sG = _expectShape(
+        reader.readTensor('$p.shared_expert.gate_proj.weight',
+            keepFp16: keepFp16),
+        [config.sharedHidden, d],
+        '$p.shared_expert.gate_proj.weight',
+      );
+      final sU = _expectShape(
+        reader.readTensor('$p.shared_expert.up_proj.weight',
+            keepFp16: keepFp16),
+        [config.sharedHidden, d],
+        '$p.shared_expert.up_proj.weight',
+      );
+      final sD = _expectShape(
+        reader.readTensor('$p.shared_expert.down_proj.weight',
+            keepFp16: keepFp16),
+        [d, config.sharedHidden],
+        '$p.shared_expert.down_proj.weight',
+      );
+      final sEG = _expectShape(
+        reader.readTensor('$p.shared_expert_gate.weight', keepFp16: false),
+        [1, d],
+        '$p.shared_expert_gate.weight',
+      );
+      _sharedGateTs[i] = sG.transpose();
+      _sharedUpTs[i] = sU.transpose();
+      _sharedDownTs[i] = sD.transpose();
+      _sharedExpertGateTs[i] = sEG.transpose();
+      _routerWs[i] = reader
+          .readTensor('model.layers.$i.mlp.gate.weight', keepFp16: false)
+          .transpose();
+      // Norms are tiny [D] fp32 gammas — just cache the tensor ref.
+      _attnNormGammas[i] = _expectShape(
+        reader.readTensor('model.layers.$i.input_layernorm.weight'),
+        [d],
+        'model.layers.$i.input_layernorm.weight',
+      );
+      _ffnNormGammas[i] = _expectShape(
+        reader.readTensor('model.layers.$i.post_attention_layernorm.weight'),
+        [d],
+        'model.layers.$i.post_attention_layernorm.weight',
+      );
+    }
   }
 
   /// Swap layer [i]'s non-expert weights (MHA + norms + router +
@@ -276,22 +346,15 @@ class Qwen15MoEStreamingRunner {
     final headDim = d ~/ h;
     final p = 'model.layers.$i';
 
-    _copy(
-      attnNorm.gamma,
-      _expectShape(
-        reader.readTensor('$p.input_layernorm.weight'),
-        [d],
-        '$p.input_layernorm.weight',
-      ),
-    );
-    _copy(
-      ffnNorm.gamma,
-      _expectShape(
-        reader.readTensor('$p.post_attention_layernorm.weight'),
-        [d],
-        '$p.post_attention_layernorm.weight',
-      ),
-    );
+    // Norms + router + shared expert come from the per-layer cache
+    // populated at construction. No disk I/O, no transpose per swap.
+    _copy(attnNorm.gamma, _attnNormGammas[i]);
+    _copy(ffnNorm.gamma, _ffnNormGammas[i]);
+    _routerW = _routerWs[i];
+    _sharedGateT = _sharedGateTs[i];
+    _sharedUpT = _sharedUpTs[i];
+    _sharedDownT = _sharedDownTs[i];
+    _sharedExpertGateT = _sharedExpertGateTs[i];
 
     // Q / K / V (weights + biases, Qwen has all three biased).
     final qW = _expectShape(
@@ -355,50 +418,6 @@ class Qwen15MoEStreamingRunner {
         '$p.self_attn.o_proj.weight',
       ),
     );
-
-    // Router weight: HF ships [E, D], we want [D, E] for x @ router.
-    // .transpose() promotes to fp32; router is small (~240 KB fp32).
-    _routerW = reader
-        .readTensor('$p.mlp.gate.weight', keepFp16: false)
-        .transpose();
-
-    _sharedGate = _expectShape(
-      reader.readTensor(
-        '$p.mlp.shared_expert.gate_proj.weight',
-        keepFp16: keepFp16,
-      ),
-      [cfg.sharedHidden, d],
-      '$p.mlp.shared_expert.gate_proj.weight',
-    );
-    _sharedUp = _expectShape(
-      reader.readTensor(
-        '$p.mlp.shared_expert.up_proj.weight',
-        keepFp16: keepFp16,
-      ),
-      [cfg.sharedHidden, d],
-      '$p.mlp.shared_expert.up_proj.weight',
-    );
-    _sharedDown = _expectShape(
-      reader.readTensor(
-        '$p.mlp.shared_expert.down_proj.weight',
-        keepFp16: keepFp16,
-      ),
-      [d, cfg.sharedHidden],
-      '$p.mlp.shared_expert.down_proj.weight',
-    );
-    _sharedExpertGate = _expectShape(
-      reader.readTensor('$p.mlp.shared_expert_gate.weight', keepFp16: false),
-      [1, d],
-      '$p.mlp.shared_expert_gate.weight',
-    );
-
-    // Cache pre-transposed shared expert weights so per-token
-    // forward doesn't allocate 3 × 22 MB fp16 transposes per layer.
-    // Transpose preserves fp16 storage — same bytes, rearranged.
-    _sharedGateT = _sharedGate.transpose();
-    _sharedUpT = _sharedUp.transpose();
-    _sharedDownT = _sharedDown.transpose();
-    _sharedExpertGateT = _sharedExpertGate.transpose();
 
     if (sw != null) {
       sw.stop();
@@ -675,8 +694,15 @@ class _StageProfile {
   }
 
   void report(int numLayers) {
-    final total = embed + swap + mha + router + sharedExpert +
-        expertStream + expertCompute + head;
+    final total =
+        embed +
+        swap +
+        mha +
+        router +
+        sharedExpert +
+        expertStream +
+        expertCompute +
+        head;
     if (total == 0) return;
     String row(String name, int us) {
       final ms = us / 1000.0;
@@ -684,6 +710,7 @@ class _StageProfile {
       return '  ${name.padRight(18)} ${ms.toStringAsFixed(0).padLeft(6)} ms  '
           '(${pct.toStringAsFixed(1).padLeft(4)} %)';
     }
+
     // ignore: avoid_print
     print('  ---- forward profile (numLayers=$numLayers) ----');
     // ignore: avoid_print
@@ -706,4 +733,3 @@ class _StageProfile {
     print('  ---- $expertsCounted routed experts fired total ----');
   }
 }
-
