@@ -125,7 +125,20 @@ dart run bin/gptj_streaming_demo.dart \
 - **Prefetching** — overlap layer *i+1* read with layer *i* compute
   (AirLLM's ~10% speedup). Would use a background `Future` or
   isolate.
-- **KV cache** — see above.
+- **KV cache** — done. `LlamaStreamingRunner.generate` and
+  `GPTJStreamingRunner.generate` keep a persistent `EncoderCache`
+  across layer swaps. Only visible speedup on big models where
+  matmul (not disk I/O) dominates.
+- **MoE per-expert streaming** — done, in
+  [bin/moe_streaming_demo.dart](../bin/moe_streaming_demo.dart).
+  Runs the router for a batch, computes the union of top-K experts
+  the tokens actually pick, and streams only those experts' weights
+  from disk. Verified 75 % savings at E=16 K=4, **90.6 % savings at
+  DeepSeek-V2-Lite scale (E=64, K=6)** — matches AirLLM's Kimi K3
+  claim that sparse-MoE lets a 2.8T model fit in ~4 GB resident.
+  Not yet wired into a full `DeepSeekV2StreamingRunner` (needs MLA
+  attention + dense-vs-MoE layer switching + persistent embed/head
+  in the same shape as `LlamaStreamingRunner`).
 - **Block-wise int4/int8 compression** — AirLLM's on-disk quantized
   weight format. Would need a new safetensors dtype path plus a
   dequant-on-load step.
