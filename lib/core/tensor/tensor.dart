@@ -533,16 +533,15 @@ class Tensor implements ffi.Finalizable {
     if (dtype == DType.fp16) {
       final src = _cpuF16Bits!;
       final out = Uint16List(n);
-      for (int i = 0; i < n; i++) {
-        out[i] = src[start * c + i];
-      }
+      // Uint16List.setRange is a native memmove; much faster than a
+      // scalar copy loop for the per-head Q/K/V slicing during layer
+      // swaps.
+      out.setRange(0, n, src, start * c);
       return Tensor._cpuF16([end - start, c], out);
     }
     final src = _cpuData!;
     final out = Float32List(n);
-    for (int i = 0; i < n; i++) {
-      out[i] = src[start * c + i];
-    }
+    out.setRange(0, n, src, start * c);
     return Tensor._cpu([end - start, c], out);
   }
 
