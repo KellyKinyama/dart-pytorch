@@ -1,17 +1,13 @@
 /// AirLLM-style per-expert streaming on a real MoE layer of
-/// `Qwen/Qwen1.5-MoE-A2.7B-Chat`.
-///
-/// Same shape as [bin/deepseek_v2_moe_layer_stream.dart] but for
-/// Qwen2-MoE architecture, which uses plain MHA (not MLA), all-MoE
-/// layers, and a single shared expert with `hidden = 5632` gated by
-/// a learned scalar (`shared_expert_gate.weight`).
+/// `Qwen/Qwen1.5-MoE-A2.7B-Chat`. Uses the reusable
+/// [MoeStreamingLayer] helper.
 ///
 ///   dart run bin/qwen15_moe_layer_stream.dart \
 ///     --index ~/models/qwen1.5-moe-a2.7b-chat/model.safetensors.index.json \
 ///     --layer 0 --tokens 1 --seed 0
 ///
-/// Layer 0 fits entirely in shard 1, so this demo works once the
-/// first shard of the checkpoint has finished downloading.
+/// Layer 0 fits entirely in shard 1, so this works once the first
+/// shard finishes downloading.
 library;
 
 import 'dart:io';
@@ -24,7 +20,7 @@ const int _d = 2048;
 const int _e = 60;
 const int _k = 4;
 const int _moeHidden = 1408;
-const int _sharedHidden = 5632; // shared_expert_intermediate_size
+const int _sharedHidden = 5632;
 const int _numLayers = 24;
 
 Future<void> main(List<String> args) async {
@@ -75,12 +71,10 @@ Future<void> main(List<String> args) async {
   print('== Qwen1.5-MoE-A2.7B per-expert streaming (real weights) ==');
   print('  index          : $indexPath');
   print('  layer          : $layer (of $_numLayers, all MoE)');
-  print('  D (embed)      : $_d');
-  print('  E (routed)     : $_e');
-  print('  K (top-K)      : $_k');
-  print('  hidden (routed): $_moeHidden');
-  print('  shared         : 1 fused expert hidden=$_sharedHidden '
-      '(+ shared_expert_gate scalar)');
+  print('  D              : $_d');
+  print('  E / K          : $_e / $_k');
+  print('  moe_hidden     : $_moeHidden');
+  print('  shared_hidden  : $_sharedHidden (scalar-gated shared_expert)');
   print('  gate           : softmax + no-renormalize (Qwen2-MoE)');
   print('  tokens         : $tokens');
 
@@ -90,50 +84,35 @@ Future<void> main(List<String> args) async {
   print('  header parse   : ${swOpen.elapsedMilliseconds} ms');
 
   final p = 'model.layers.$layer.mlp';
-  final gateKey = '$p.gate.weight';
-  if (!reader.contains(gateKey)) {
-    stderr.writeln('no "$gateKey" — layer $layer might not be in a '
-        'downloaded shard yet, or this checkpoint has a different layout');
+  final moe = MoeStreamingLayer(
+    prefix: p,
+    numExperts: _e,
+    topK: _k,
+    reader: reader,
+    gate: GateFunction.softmax,
+  );
+  if (!reader.contains(moe.routerKey)) {
+    stderr.writeln('no "${moe.routerKey}" — layer $layer probably not '
+        'in a downloaded shard yet');
     exit(2);
   }
-  // Verify the layer's shard is actually on disk (hf writes 0-byte
-  // placeholders in the local-dir before download completes).
-  for (final key in [
-    gateKey,
-    '$p.experts.0.gate_proj.weight',
-    '$p.shared_expert.gate_proj.weight',
-  ]) {
-    try {
-      reader.entry(key);
-    } catch (_) {
-      // fall-through; the read below will fail with a better message.
-    }
-  }
 
-  // Report on-disk shapes.
-  final routedBytes = _bytesOf(reader, '$p.experts.0.gate_proj.weight');
-  final sharedGateBytes =
-      _bytesOf(reader, '$p.shared_expert.gate_proj.weight');
-  final gateWBytes = _bytesOf(reader, gateKey);
-  final expertBytes = 3 * routedBytes;
-  final totalExpertsBytes = _e * expertBytes;
-  final sharedBytes = 3 * sharedGateBytes;
+  final routedBytes = moe.expertBytes();
+  final totalRouted = _e * routedBytes;
+  final sharedGateEntry = reader.entry('$p.shared_expert.gate_proj.weight')!;
+  final sharedBytes = 3 * (sharedGateEntry.dataEnd - sharedGateEntry.dataStart);
   print('');
   print('== on-disk footprint (one layer) ==');
-  print('  gate (router)  : ${_fmtBytes(gateWBytes)}');
+  print('  1 routed expert: ${_fmtBytes(routedBytes)}');
+  print('  all routed     : ${_fmtBytes(totalRouted)}');
   print('  shared         : ${_fmtBytes(sharedBytes)}');
-  print('  1 routed expert: ${_fmtBytes(expertBytes)} '
-      '(3 × ${_fmtBytes(routedBytes)})');
-  print('  all routed     : ${_fmtBytes(totalExpertsBytes)} '
-      '($_e × ${_fmtBytes(expertBytes)})');
 
   final swLoad = Stopwatch()..start();
-  // HF gate.weight shape is [E, D]; transpose to [D, E] for x @ gW.
-  final gateW = reader.readTensor(gateKey).transpose();
+  final routerW = moe.loadRouter();
   swLoad.stop();
   print('');
   print('== persistent load ==');
-  print('  gateW shape    : ${gateW.shape} '
+  print('  routerW shape  : ${routerW.shape} '
       '(${swLoad.elapsedMilliseconds} ms)');
 
   final sharedGate = reader.readTensor('$p.shared_expert.gate_proj.weight');
@@ -141,12 +120,6 @@ Future<void> main(List<String> args) async {
   final sharedDown = reader.readTensor('$p.shared_expert.down_proj.weight');
   final sharedExpertGate =
       reader.readTensor('$p.shared_expert_gate.weight'); // [1, D]
-  print('  shared_gate    : ${sharedGate.shape} '
-      '(expected [$_sharedHidden, $_d])');
-  print('  shared_down    : ${sharedDown.shape} '
-      '(expected [$_d, $_sharedHidden])');
-  print('  shared_expert_gate: ${sharedExpertGate.shape} '
-      '(expected [1, $_d])');
 
   final rng = math.Random(seed);
   final xVals = List<double>.generate(
@@ -155,32 +128,17 @@ Future<void> main(List<String> args) async {
   );
   final x = Tensor.fromList([tokens, _d], xVals, device: Device.CPU);
 
-  // Route.
-  final gateLogits = x.matmul(gateW); // [T, E]
-  final scores = gateLogits.softmax();
-  final flat = scores.toList();
-  final used = <int>{};
-  for (int i = 0; i < tokens; i++) {
-    final indexed = List<MapEntry<int, double>>.generate(
-      _e,
-      (j) => MapEntry(j, flat[i * _e + j]),
-    );
-    indexed.sort((a, b) => b.value.compareTo(a.value));
-    for (int r = 0; r < _k; r++) {
-      used.add(indexed[r].key);
-    }
-  }
-  final sortedUsed = used.toList()..sort();
+  final decision = moe.route(routerW, x);
+  final report = moe.report(decision, bytesPerExpert: routedBytes);
   print('');
   print('== routing ==');
-  print('  top-K experts  : $sortedUsed (${used.length} of $_e = '
-      '${(used.length * 100 / _e).toStringAsFixed(1)}%)');
-  final streamedBytes = used.length * expertBytes;
-  print('  streamed       : ${_fmtBytes(streamedBytes)} '
-      '(vs ${_fmtBytes(totalExpertsBytes)} for full layer)');
-  print('  saved          : '
-      '${_fmtBytes(totalExpertsBytes - streamedBytes)} '
-      '(${((totalExpertsBytes - streamedBytes) * 100 / totalExpertsBytes).toStringAsFixed(1)}%)');
+  print('  top-K experts  : ${decision.sortedUnion} '
+      '(${decision.union.length} of $_e = '
+      '${(decision.union.length * 100 / _e).toStringAsFixed(1)}%)');
+  print('  streamed       : ${_fmtBytes(report.streamedBytes)} '
+      '(vs ${_fmtBytes(report.totalBytes)} for full layer)');
+  print('  saved          : ${_fmtBytes(report.savedBytes)} '
+      '(${report.savedPercent.toStringAsFixed(1)}%)');
 
   if (reportOnly) {
     reader.close();
@@ -188,49 +146,30 @@ Future<void> main(List<String> args) async {
   }
 
   final swExperts = Stopwatch()..start();
-  final eGate = <int, Tensor>{};
-  final eUp = <int, Tensor>{};
-  final eDown = <int, Tensor>{};
-  for (final j in sortedUsed) {
-    eGate[j] = reader.readTensor('$p.experts.$j.gate_proj.weight');
-    eUp[j] = reader.readTensor('$p.experts.$j.up_proj.weight');
-    eDown[j] = reader.readTensor('$p.experts.$j.down_proj.weight');
+  final loaded = <int, RoutedExpertWeights>{};
+  for (final j in decision.sortedUnion) {
+    loaded[j] = moe.loadRoutedExpert(j);
   }
   swExperts.stop();
   print('  load           : ${swExperts.elapsedMilliseconds} ms '
-      '(${used.length} experts)');
-
-  // Top-K mask (softmax scores, no renormalize).
-  final maskVals = List<double>.filled(tokens * _e, 0.0);
-  for (int i = 0; i < tokens; i++) {
-    final indexed = List<MapEntry<int, double>>.generate(
-      _e,
-      (j) => MapEntry(j, flat[i * _e + j]),
-    );
-    indexed.sort((a, b) => b.value.compareTo(a.value));
-    for (int r = 0; r < _k; r++) {
-      maskVals[i * _e + indexed[r].key] = 1.0;
-    }
-  }
+      '(${decision.union.length} experts)');
 
   final swF = Stopwatch()..start();
-
-  // Shared expert output, scalar-gated by sigmoid(x @ shared_expert_gate^T).
-  final sharedOut = _swiGlu(x, sharedGate, sharedUp, sharedDown); // [T, D]
+  final sharedOut = swiGluForwardRaw(x, sharedGate, sharedUp, sharedDown);
   final sharedGateLogit = x.matmul(sharedExpertGate.transpose()); // [T, 1]
   final sharedGateScore = sharedGateLogit.sigmoid();
   final onesD = Tensor.fill([1, _d], 1.0, device: Device.CPU);
-  final sharedGateBcast = sharedGateScore.matmul(onesD); // [T, D]
+  final sharedGateBcast = sharedGateScore.matmul(onesD);
   var acc = sharedOut * sharedGateBcast;
 
-  for (final j in sortedUsed) {
-    final wjVals = List<double>.filled(tokens, 0.0);
-    for (int i = 0; i < tokens; i++) {
-      wjVals[i] = flat[i * _e + j] * maskVals[i * _e + j];
-    }
-    final wj = Tensor.fromList([tokens, 1], wjVals, device: Device.CPU);
-    final wjBcast = wj.matmul(onesD); // [T, D]
-    final expertOut = _swiGlu(x, eGate[j]!, eUp[j]!, eDown[j]!);
+  for (final j in decision.sortedUnion) {
+    final wj = Tensor.fromList(
+      [tokens, 1],
+      decision.weightForExpert(j),
+      device: Device.CPU,
+    );
+    final wjBcast = wj.matmul(onesD);
+    final expertOut = swiGluForward(x, loaded[j]!);
     acc = acc + (expertOut * wjBcast);
   }
   swF.stop();
@@ -264,22 +203,6 @@ Future<void> main(List<String> args) async {
   }
 
   reader.close();
-}
-
-Tensor _swiGlu(Tensor x, Tensor gW, Tensor uW, Tensor dW) {
-  final gate = x.matmul(gW.transpose());
-  final up = x.matmul(uW.transpose());
-  final act = gate * gate.sigmoid();
-  return (act * up).matmul(dW.transpose());
-}
-
-int _bytesOf(ShardedSafeTensorsReader reader, String name) {
-  final e = reader.entry(name);
-  if (e == null) {
-    stderr.writeln('missing tensor: $name');
-    exit(3);
-  }
-  return e.dataEnd - e.dataStart;
 }
 
 String _fmtBytes(int b) {
