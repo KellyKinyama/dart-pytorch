@@ -31,6 +31,7 @@ Future<void> main(List<String> args) async {
   var prompt = 'The capital of France is';
   var maxNew = 10;
   var profile = false;
+  int? numLayersOverride;
   for (int i = 0; i < args.length; i++) {
     switch (args[i]) {
       case '--index':
@@ -45,6 +46,9 @@ Future<void> main(List<String> args) async {
       case '--max-new':
         maxNew = int.parse(args[++i]);
         break;
+      case '--num-layers':
+        numLayersOverride = int.parse(args[++i]);
+        break;
       case '--profile':
         profile = true;
         break;
@@ -52,7 +56,7 @@ Future<void> main(List<String> args) async {
       case '--help':
         stdout.writeln(
           'usage: qwen15_moe_streaming_demo [--index P] [--tokenizer P] '
-          '[--prompt S] [--max-new N] [--profile]',
+          '[--prompt S] [--max-new N] [--num-layers N] [--profile]',
         );
         return;
     }
@@ -70,12 +74,32 @@ Future<void> main(List<String> args) async {
     }
   }
 
-  final cfg = const Qwen15MoEConfig();
+  final baseCfg = const Qwen15MoEConfig();
+  final cfg = numLayersOverride == null
+      ? baseCfg
+      : Qwen15MoEConfig(
+          vocabSize: baseCfg.vocabSize,
+          dim: baseCfg.dim,
+          numHeads: baseCfg.numHeads,
+          numKvHeads: baseCfg.numKvHeads,
+          numLayers: numLayersOverride,
+          moeHidden: baseCfg.moeHidden,
+          sharedHidden: baseCfg.sharedHidden,
+          numExperts: baseCfg.numExperts,
+          topK: baseCfg.topK,
+          maxCtx: baseCfg.maxCtx,
+          ropeBase: baseCfg.ropeBase,
+          rmsNormEps: baseCfg.rmsNormEps,
+          tieWeights: baseCfg.tieWeights,
+        );
   final tokenizer = HFBpeTokenizer.loadFile(tokenizerPath);
 
   print('== Qwen1.5-MoE-A2.7B streaming demo (real weights) ==');
   print('  index        : $indexPath');
-  print('  layers       : ${cfg.numLayers}');
+  print(
+    '  layers       : ${cfg.numLayers}'
+    '${numLayersOverride != null ? " (overridden from ${baseCfg.numLayers})" : ""}',
+  );
   print('  D            : ${cfg.dim}');
   print('  E / K        : ${cfg.numExperts} / ${cfg.topK}');
 

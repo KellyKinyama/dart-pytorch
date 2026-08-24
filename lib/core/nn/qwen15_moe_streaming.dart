@@ -159,17 +159,15 @@ class Qwen15MoEStreamingRunner {
     // One resident block: MHA fp16 + shared expert fp16 + router +
     // scratch for one transposed shared_gate/up/down (fp32
     // promotion at forward time).
-    final residentBlockBytes = 4 * d * d * 2 + // Q/K/V/O fp16
+    final residentBlockBytes =
+        4 * d * d * 2 + // Q/K/V/O fp16
         3 * config.sharedHidden * d * 2 + // shared fp16
         3 * config.sharedHidden * d * 4; // shared transposes fp32
     // Per-forward transient: K experts × (fp16 read + fp32 transpose)
     // held briefly.
-    final perLayerTransient = config.topK *
-        3 *
-        config.moeHidden *
-        d *
-        (2 + 4);
-    final peakEst = embedBytes +
+    final perLayerTransient = config.topK * 3 * config.moeHidden * d * (2 + 4);
+    final peakEst =
+        embedBytes +
         headBytes +
         residentBlockBytes +
         perLayerTransient +
