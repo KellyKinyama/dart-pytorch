@@ -129,16 +129,28 @@ dart run bin/gptj_streaming_demo.dart \
   `GPTJStreamingRunner.generate` keep a persistent `EncoderCache`
   across layer swaps. Only visible speedup on big models where
   matmul (not disk I/O) dominates.
-- **MoE per-expert streaming** — done, in
-  [bin/moe_streaming_demo.dart](../bin/moe_streaming_demo.dart).
+- **MoE per-expert streaming** — done. Library:
+  [lib/core/nn/moe_streaming.dart](../lib/core/nn/moe_streaming.dart)
+  (`MoeStreamingLayer.route`, `.loadRoutedExpert`, `MoeStreamingReport`).
   Runs the router for a batch, computes the union of top-K experts
   the tokens actually pick, and streams only those experts' weights
-  from disk. Verified 75 % savings at E=16 K=4, **90.6 % savings at
-  DeepSeek-V2-Lite scale (E=64, K=6)** — matches AirLLM's Kimi K3
-  claim that sparse-MoE lets a 2.8T model fit in ~4 GB resident.
-  Not yet wired into a full `DeepSeekV2StreamingRunner` (needs MLA
-  attention + dense-vs-MoE layer switching + persistent embed/head
-  in the same shape as `LlamaStreamingRunner`).
+  from disk.
+  * Synthetic validator:
+    [bin/moe_streaming_demo.dart](../bin/moe_streaming_demo.dart) —
+    75 % savings at E=16 K=4, **90.6 % at DeepSeek-V2-Lite scale
+    (E=64 K=6)**, **93.3 % at Qwen1.5-MoE scale (E=60 K=4)**.
+  * Real-weights runners (per-layer only, no MLA / full-model
+    orchestration yet):
+    * [bin/deepseek_v2_moe_layer_stream.dart](../bin/deepseek_v2_moe_layer_stream.dart)
+      — loads one MoE layer of `deepseek-ai/DeepSeek-V2-Lite-Chat`
+      and runs SwiGLU forward on real HF weight layout.
+    * [bin/qwen15_moe_layer_stream.dart](../bin/qwen15_moe_layer_stream.dart)
+      — same for `Qwen/Qwen1.5-MoE-A2.7B-Chat` (scalar-gated
+      `shared_expert`).
+  * Not yet: a full `DeepSeekV2StreamingRunner` or
+    `Qwen15MoEStreamingRunner`. Qwen1.5-MoE is the closer target
+    since it uses plain MHA (not MLA) — the missing pieces are
+    identical to `LlamaStreamingRunner` plus the MoE FFN glue.
 - **Block-wise int4/int8 compression** — AirLLM's on-disk quantized
   weight format. Would need a new safetensors dtype path plus a
   dequant-on-load step.
