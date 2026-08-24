@@ -282,11 +282,7 @@ class LlamaStreamingRunner {
   /// `seqLen==1`, `startPos == cache.seqLen`). The cache survives
   /// layer swaps because its K/V tensors are separate from the
   /// resident block's weight tensors.
-  Tensor forward(
-    Tensor tokens, {
-    int startPos = 0,
-    EncoderCache? cache,
-  }) {
+  Tensor forward(Tensor tokens, {int startPos = 0, EncoderCache? cache}) {
     if (tokens.shape.length != 1) {
       throw ArgumentError(
         'LlamaStreamingRunner: tokens must be 1D [seqLen]; got ${tokens.shape}',
@@ -305,12 +301,7 @@ class LlamaStreamingRunner {
       for (int i = 0; i < config.numLayers; i++) {
         _swapLayer(i);
         final layerCache = cache?.layers[i];
-        x = residentBlock(
-          x,
-          mask: mask,
-          cache: layerCache,
-          startPos: startPos,
-        );
+        x = residentBlock(x, mask: mask, cache: layerCache, startPos: startPos);
       }
       x = finalNorm(x);
       final head = config.tieWeights ? _embedWeight : _untiedHeadWeight!;
@@ -353,11 +344,7 @@ class LlamaStreamingRunner {
 
     for (int step = 1; step < maxNewTokens; step++) {
       if (cache.seqLen >= config.maxCtx) break;
-      final oneT = Tensor.fromList(
-        [1],
-        [out.last],
-        device: config.device,
-      );
+      final oneT = Tensor.fromList([1], [out.last], device: config.device);
       logits = forward(oneT, startPos: cache.seqLen, cache: cache).toList();
       out.add(_argmax(logits, 0, v).toDouble());
     }

@@ -126,13 +126,19 @@ Future<void> main(List<String> args) async {
   final used = _topKExpertsForBatch(moe, x, k);
   print('');
   print('== routing ==');
-  print('  top-K experts  : ${used.toList()..sort()} '
-      '(${used.length} of $e = ${(used.length * 100 / e).toStringAsFixed(1)}%)');
+  print(
+    '  top-K experts  : ${used.toList()..sort()} '
+    '(${used.length} of $e = ${(used.length * 100 / e).toStringAsFixed(1)}%)',
+  );
   final streamedBytes = used.length * expertBytes;
-  print('  streamed       : ${_fmtBytes(streamedBytes)} '
-      '(vs ${_fmtBytes(totalExpertBytes)} for full layer)');
-  print('  saved          : ${_fmtBytes(totalExpertBytes - streamedBytes)} '
-      '(${((totalExpertBytes - streamedBytes) * 100 / totalExpertBytes).toStringAsFixed(1)}%)');
+  print(
+    '  streamed       : ${_fmtBytes(streamedBytes)} '
+    '(vs ${_fmtBytes(totalExpertBytes)} for full layer)',
+  );
+  print(
+    '  saved          : ${_fmtBytes(totalExpertBytes - streamedBytes)} '
+    '(${((totalExpertBytes - streamedBytes) * 100 / totalExpertBytes).toStringAsFixed(1)}%)',
+  );
 
   // 2. Load only those experts' weights from disk into the resident
   //    module. Other experts keep their fp32 random init — they get
@@ -142,8 +148,10 @@ Future<void> main(List<String> args) async {
     _streamExpert(reader, j, moe.routedExperts[j]);
   }
   swLoad.stop();
-  print('  load           : ${swLoad.elapsedMilliseconds} ms '
-      '(${used.length} experts)');
+  print(
+    '  load           : ${swLoad.elapsedMilliseconds} ms '
+    '(${used.length} experts)',
+  );
 
   // 3. Forward — sparseExecution ensures only loaded experts run.
   final swF = Stopwatch()..start();
@@ -169,13 +177,17 @@ Future<void> main(List<String> args) async {
     sum += v;
   }
   final finite = row.length - nan;
-  print('  stats          : min=${mn.toStringAsFixed(3)} '
-      'max=${mx.toStringAsFixed(3)} '
-      'mean=${(sum / (finite == 0 ? 1 : finite)).toStringAsFixed(5)} '
-      'nan=$nan/${row.length}');
+  print(
+    '  stats          : min=${mn.toStringAsFixed(3)} '
+    'max=${mx.toStringAsFixed(3)} '
+    'mean=${(sum / (finite == 0 ? 1 : finite)).toStringAsFixed(5)} '
+    'nan=$nan/${row.length}',
+  );
   if (nan == 0) {
-    print('  status         : OK — per-expert streaming produces '
-        'finite outputs; unused experts skipped by sparseExecution.');
+    print(
+      '  status         : OK — per-expert streaming produces '
+      'finite outputs; unused experts skipped by sparseExecution.',
+    );
   }
 
   reader.close();
@@ -212,11 +224,7 @@ Set<int> _topKExpertsForBatch(MoEFeedForward moe, Tensor x, int k) {
 
 /// Load expert `j`'s w1/w2/w3 fp16 from the reader into the resident
 /// module's tensors via `adoptCpuStorageFrom`.
-void _streamExpert(
-  ShardedSafeTensorsReader reader,
-  int j,
-  Expert dst,
-) {
+void _streamExpert(ShardedSafeTensorsReader reader, int j, Expert dst) {
   void load(String name, Tensor into) {
     final src = reader.readTensor(name, keepFp16: true);
     if (src.length != into.length) {

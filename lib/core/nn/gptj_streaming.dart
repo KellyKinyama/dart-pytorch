@@ -237,11 +237,7 @@ class GPTJStreamingRunner {
     }
   }
 
-  Tensor forward(
-    Tensor tokens, {
-    int startPos = 0,
-    EncoderCache? cache,
-  }) {
+  Tensor forward(Tensor tokens, {int startPos = 0, EncoderCache? cache}) {
     if (tokens.shape.length != 1) {
       throw ArgumentError(
         'GPTJStreamingRunner: tokens must be 1D [seqLen]; '
@@ -261,12 +257,7 @@ class GPTJStreamingRunner {
       for (int i = 0; i < config.numLayers; i++) {
         _swapLayer(i);
         final layerCache = cache?.layers[i];
-        x = residentBlock(
-          x,
-          mask: mask,
-          cache: layerCache,
-          startPos: startPos,
-        );
+        x = residentBlock(x, mask: mask, cache: layerCache, startPos: startPos);
       }
       x = finalLn(x);
       return lmHead(x);
@@ -294,7 +285,11 @@ class GPTJStreamingRunner {
     final v = config.vocabSize;
     final out = List<double>.of(prompt);
     final cache = EncoderCache.empty(config.numLayers, config.numHeads);
-    final promptT = Tensor.fromList([prompt.length], prompt, device: Device.CPU);
+    final promptT = Tensor.fromList(
+      [prompt.length],
+      prompt,
+      device: Device.CPU,
+    );
     var logits = forward(promptT, startPos: 0, cache: cache).toList();
     out.add(_argmax(logits, (prompt.length - 1) * v, v).toDouble());
     for (int step = 1; step < maxNewTokens; step++) {
