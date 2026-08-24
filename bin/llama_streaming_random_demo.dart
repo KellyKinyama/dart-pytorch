@@ -100,6 +100,44 @@ Future<void> main(List<String> args) async {
   );
   print('  out-dir : $outDir');
 
+  // Peak resident RAM estimate (fp16):
+  //   embed table + optional untied lm_head + one layer + one layer of
+  //   slice scratch + ~200 MB Dart runtime + activations.
+  final d = cfg.embedDim;
+  final embedBytes = cfg.vocabSize * d * 2;
+  final headBytes = cfg.tieWeights ? 0 : cfg.vocabSize * d * 2;
+  final ffn = cfg.ffnDim;
+  final layerBytesEst =
+      2 *
+      (d * d +
+          2 * (cfg.numKvHeads * (d ~/ cfg.numHeads)) * d +
+          d * d +
+          3 * ffn * d);
+  final peakEst =
+      embedBytes + headBytes + 2 * layerBytesEst + 300 * 1024 * 1024;
+  final freeRam = _freeRamBytes();
+  print(
+    '  RAM est : peak ~${_fmtBytes(peakEst)} '
+    '(embed ${_fmtBytes(embedBytes)}'
+    '${headBytes > 0 ? " + untied lm_head ${_fmtBytes(headBytes)}" : ""} '
+    '+ 2×layer + runtime)',
+  );
+  if (freeRam != null) {
+    print(
+      '  RAM free: ${_fmtBytes(freeRam)} '
+      '(from /proc/meminfo MemAvailable)',
+    );
+    if (peakEst > freeRam) {
+      stderr.writeln(
+        'ABORT: predicted peak ~${_fmtBytes(peakEst)} exceeds free RAM '
+        '${_fmtBytes(freeRam)}. Pick a smaller --preset (e.g. '
+        'llama-3.2-1b or llama-3.2-3b), free some RAM, or grow the WSL '
+        'memory limit in %USERPROFILE%\\.wslconfig.',
+      );
+      exit(3);
+    }
+  }
+
   if (!File(ckptPath).existsSync()) {
     final swGen = Stopwatch()..start();
     if (shards == 1) {
@@ -410,4 +448,18 @@ String _fmtBytes(int b) {
     i++;
   }
   return '${v.toStringAsFixed(2)} ${units[i]}';
+}
+
+int? _freeRamBytes() {
+  try {
+    final txt = File('/proc/meminfo').readAsStringSync();
+    for (final line in txt.split('\n')) {
+      if (line.startsWith('MemAvailable:')) {
+        final parts = line.split(RegExp(r'\s+'));
+        final kb = int.parse(parts[1]);
+        return kb * 1024;
+      }
+    }
+  } catch (_) {}
+  return null;
 }

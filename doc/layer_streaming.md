@@ -55,8 +55,21 @@ For each `forward(tokens)`:
 3. Final norm + `lm_head`.
 
 Peak resident RAM ≈ `embed_bytes + lm_head_bytes + ~2×layer_bytes +
-activations`. For Llama-3.1-8B fp16 that's ~500 MB + 500 MB + 400 MB
-+ activations ≈ 1.5–2 GB.
+activations`. For Llama-3.1-8B fp16 that's ~1.05 GB + 1.05 GB + 872 MB
++ activations ≈ 3.3 GB. Embed and lm_head are loaded **directly** as
+fp16 tensors from disk — never allocated as fp32 first — which is
+what makes the peak match the fp16 checkpoint layout rather than
+double it.
+
+The [bin/llama_streaming_random_demo.dart](../bin/llama_streaming_random_demo.dart)
+demo computes this estimate at startup, reads `MemAvailable` from
+`/proc/meminfo`, and refuses to run if the prediction exceeds free
+RAM. On WSL, grow the RAM limit via `%USERPROFILE%\.wslconfig`:
+
+```ini
+[wsl2]
+memory=16GB
+```
 
 ## Building blocks
 

@@ -40,8 +40,6 @@ import 'dart:typed_data';
 
 import '../tensor/tensor.dart';
 import '../tensor/dtype.dart';
-import 'embedding.dart';
-import 'linear.dart';
 import 'llama.dart';
 import 'masks.dart';
 import 'rms_norm.dart';
@@ -59,9 +57,16 @@ class LlamaStreamingRunner {
   /// Print per-layer swap timings.
   final bool profile;
 
-  final Embedding embedIn;
+  /// Persistent token embedding table, loaded fp16 directly from
+  /// disk — never allocated as fp32 to keep peak RAM low. Shape
+  /// `[vocabSize, embedDim]`.
+  late final Tensor _embedWeight;
+
+  /// Persistent untied lm_head weight (null for tied models). Shape
+  /// `[vocabSize, embedDim]`, fp16.
+  late final Tensor? _untiedHeadWeight;
+
   final RMSNorm finalNorm;
-  final Linear? untiedHead;
   final RopeCache rope;
 
   /// The single resident block whose weight storage is swapped in
@@ -73,13 +78,7 @@ class LlamaStreamingRunner {
     this.reader, {
     this.keepFp16 = true,
     this.profile = false,
-  }) : embedIn = Embedding(
-         config.vocabSize,
-         config.embedDim,
-         device: config.device,
-         seed: config.seed,
-       ),
-       finalNorm = RMSNorm(
+  }) : finalNorm = RMSNorm(
          config.embedDim,
          eps: config.rmsNormEps,
          device: config.device,
@@ -90,15 +89,6 @@ class LlamaStreamingRunner {
          base: config.ropeBase,
          device: config.device,
        ),
-       untiedHead = config.tieWeights
-           ? null
-           : Linear(
-               config.embedDim,
-               config.vocabSize,
-               bias: false,
-               device: config.device,
-               seed: config.seed + 900000,
-             ),
        residentBlock = LlamaBlock(
          config.embedDim,
          config.numHeads,
@@ -126,30 +116,24 @@ class LlamaStreamingRunner {
 
   void _loadPersistent() {
     final d = config.embedDim;
-    _copy(
-      embedIn.weight,
-      _expectShape(
-        reader.readTensor('model.embed_tokens.weight', keepFp16: keepFp16),
-        [config.vocabSize, d],
-        'model.embed_tokens.weight',
-      ),
+    _embedWeight = _expectShape(
+      reader.readTensor('model.embed_tokens.weight', keepFp16: keepFp16),
+      [config.vocabSize, d],
+      'model.embed_tokens.weight',
     );
     _copy(
       finalNorm.gamma,
-      _expectShape(
-        // gamma is a small [D] fp32 tensor — never fp16 promotion win.
-        reader.readTensor('model.norm.weight'),
-        [d],
-        'model.norm.weight',
-      ),
+      _expectShape(reader.readTensor('model.norm.weight'), [
+        d,
+      ], 'model.norm.weight'),
     );
-    if (!config.tieWeights) {
-      _copy(
-        untiedHead!.weight,
-        _expectShape(reader.readTensor('lm_head.weight', keepFp16: keepFp16), [
-          config.vocabSize,
-          d,
-        ], 'lm_head.weight'),
+    if (config.tieWeights) {
+      _untiedHeadWeight = null;
+    } else {
+      _untiedHeadWeight = _expectShape(
+        reader.readTensor('lm_head.weight', keepFp16: keepFp16),
+        [config.vocabSize, d],
+        'lm_head.weight',
       );
     }
   }
@@ -304,17 +288,15 @@ class LlamaStreamingRunner {
       );
     }
     return Tensor.noGrad(() {
-      var x = embedIn(tokens);
+      var x = _embedWeight.embedding(tokens);
       final mask = n > 1 ? causalMask(n, device: x.device) : null;
       for (int i = 0; i < config.numLayers; i++) {
         _swapLayer(i);
         x = residentBlock(x, mask: mask);
       }
       x = finalNorm(x);
-      if (config.tieWeights) {
-        return x.matmul(embedIn.weight.transpose());
-      }
-      return untiedHead!(x);
+      final head = config.tieWeights ? _embedWeight : _untiedHeadWeight!;
+      return x.matmul(head.transpose());
     });
   }
 
