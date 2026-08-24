@@ -25,14 +25,14 @@ import 'dart:math' as math;
 import 'package:dart_pytorch/dart_pytorch.dart';
 
 // Config values pulled from DeepSeek-V2-Lite-Chat config.json.
-const int _D = 2048;
-const int _E = 64;
-const int _K = 6;
-const int _MOE_HIDDEN = 1408;
-const int _SHARED_EXPERTS = 2;
-const int _SHARED_HIDDEN = _SHARED_EXPERTS * _MOE_HIDDEN;
-const int _NUM_LAYERS = 27;
-const int _FIRST_DENSE = 1;
+const int _d = 2048;
+const int _e = 64;
+const int _k = 6;
+const int _moeHidden = 1408;
+const int _sharedExperts = 2;
+const int _sharedHidden = _sharedExperts * _moeHidden;
+const int _numLayers = 27;
+const int _firstDense = 1;
 
 Future<void> main(List<String> args) async {
   var indexPath =
@@ -76,10 +76,10 @@ Future<void> main(List<String> args) async {
     stderr.writeln('  # then curl the config, index, and 4 shards from HF');
     exit(2);
   }
-  if (layer < _FIRST_DENSE || layer >= _NUM_LAYERS) {
+  if (layer < _firstDense || layer >= _numLayers) {
     stderr.writeln(
       'layer $layer is dense or out of range — MoE layers '
-      'are [$_FIRST_DENSE, $_NUM_LAYERS)',
+      'are [$_firstDense, $_numLayers)',
     );
     exit(2);
   }
@@ -87,16 +87,16 @@ Future<void> main(List<String> args) async {
   print('== DeepSeek-V2-Lite per-expert streaming (real weights) ==');
   print('  index          : $indexPath');
   print(
-    '  layer          : $layer (of $_NUM_LAYERS, first '
-    '$_FIRST_DENSE dense)',
+    '  layer          : $layer (of $_numLayers, first '
+    '$_firstDense dense)',
   );
-  print('  D (embed)      : $_D');
-  print('  E (routed)     : $_E');
-  print('  K (top-K)      : $_K');
-  print('  hidden (routed): $_MOE_HIDDEN');
+  print('  D (embed)      : $_d');
+  print('  E (routed)     : $_e');
+  print('  K (top-K)      : $_k');
+  print('  hidden (routed): $_moeHidden');
   print(
-    '  shared         : $_SHARED_EXPERTS experts fused as SwiGLU '
-    'hidden=$_SHARED_HIDDEN',
+    '  shared         : $_sharedExperts experts fused as SwiGLU '
+    'hidden=$_sharedHidden',
   );
   print('  gate           : softmax + no-renormalize (V2 config)');
   print('  tokens         : $tokens');
@@ -121,7 +121,7 @@ Future<void> main(List<String> args) async {
   );
   final gateWBytes = _reportShape(reader, gateKey);
   final expertBytes = 3 * routedBytes;
-  final totalExpertsBytes = _E * expertBytes;
+  final totalExpertsBytes = _e * expertBytes;
   final sharedBytes = 3 * sharedGateBytes;
   print('');
   print('== on-disk footprint (one layer) ==');
@@ -136,7 +136,7 @@ Future<void> main(List<String> args) async {
   );
   print(
     '  all routed     : ${_fmtBytes(totalExpertsBytes)} '
-    '($_E × ${_fmtBytes(expertBytes)})',
+    '($_e × ${_fmtBytes(expertBytes)})',
   );
 
   // Persistent load: router weight + shared experts. These are the
@@ -160,12 +160,12 @@ Future<void> main(List<String> args) async {
   final sharedDown = reader.readTensor('$p.shared_experts.down_proj.weight');
   print(
     '  shared_gate    : ${sharedGate.shape} '
-    '(expected [$_SHARED_HIDDEN, $_D])',
+    '(expected [$_sharedHidden, $_d])',
   );
   print('  shared_up      : ${sharedUp.shape}');
   print(
     '  shared_down    : ${sharedDown.shape} '
-    '(expected [$_D, $_SHARED_HIDDEN])',
+    '(expected [$_d, $_sharedHidden])',
   );
 
   // A DeepSeekV2StreamingRunner would run MLA first and pass its
@@ -173,10 +173,10 @@ Future<void> main(List<String> args) async {
   // routing and per-expert streaming only.
   final rng = math.Random(seed);
   final xVals = List<double>.generate(
-    tokens * _D,
+    tokens * _d,
     (_) => (rng.nextDouble() - 0.5) * 0.1,
   );
-  final x = Tensor.fromList([tokens, _D], xVals, device: Device.CPU);
+  final x = Tensor.fromList([tokens, _d], xVals, device: Device.CPU);
 
   // Route in fp32.
   final gateLogits = x.matmul(gateW); // [T, E]
@@ -185,11 +185,11 @@ Future<void> main(List<String> args) async {
   final used = <int>{};
   for (int i = 0; i < tokens; i++) {
     final indexed = List<MapEntry<int, double>>.generate(
-      _E,
-      (j) => MapEntry(j, flat[i * _E + j]),
+      _e,
+      (j) => MapEntry(j, flat[i * _e + j]),
     );
     indexed.sort((a, b) => b.value.compareTo(a.value));
-    for (int r = 0; r < _K; r++) {
+    for (int r = 0; r < _k; r++) {
       used.add(indexed[r].key);
     }
   }
@@ -197,8 +197,8 @@ Future<void> main(List<String> args) async {
   print('');
   print('== routing ==');
   print(
-    '  top-K experts  : $sortedUsed (${used.length} of $_E = '
-    '${(used.length * 100 / _E).toStringAsFixed(1)}%)',
+    '  top-K experts  : $sortedUsed (${used.length} of $_e = '
+    '${(used.length * 100 / _e).toStringAsFixed(1)}%)',
   );
   final streamedBytes = used.length * expertBytes;
   print(
@@ -237,15 +237,15 @@ Future<void> main(List<String> args) async {
   // Softmax + top-K mask (softmax weights sum to 1 across full E; we
   // multiply expert outputs by that weight but keep only top-K
   // active). V2 has norm_topk_prob=false so no renormalization.
-  final maskVals = List<double>.filled(tokens * _E, 0.0);
+  final maskVals = List<double>.filled(tokens * _e, 0.0);
   for (int i = 0; i < tokens; i++) {
     final indexed = List<MapEntry<int, double>>.generate(
-      _E,
-      (j) => MapEntry(j, flat[i * _E + j]),
+      _e,
+      (j) => MapEntry(j, flat[i * _e + j]),
     );
     indexed.sort((a, b) => b.value.compareTo(a.value));
-    for (int r = 0; r < _K; r++) {
-      maskVals[i * _E + indexed[r].key] = 1.0;
+    for (int r = 0; r < _k; r++) {
+      maskVals[i * _e + indexed[r].key] = 1.0;
     }
   }
 
@@ -255,10 +255,10 @@ Future<void> main(List<String> args) async {
     // Per-token weight for expert j: scores[:, j] * mask[:, j].
     final wjVals = List<double>.filled(tokens, 0.0);
     for (int i = 0; i < tokens; i++) {
-      wjVals[i] = flat[i * _E + j] * maskVals[i * _E + j];
+      wjVals[i] = flat[i * _e + j] * maskVals[i * _e + j];
     }
     final wj = Tensor.fromList([tokens, 1], wjVals, device: Device.CPU);
-    final onesD = Tensor.fill([1, _D], 1.0, device: Device.CPU);
+    final onesD = Tensor.fill([1, _d], 1.0, device: Device.CPU);
     final wjBcast = wj.matmul(onesD); // [T, D]
     final expertOut = _swiGluBatch(
       x,
@@ -275,7 +275,7 @@ Future<void> main(List<String> args) async {
     '  wall           : ${swF.elapsedMilliseconds} ms (routed '
     'via ${used.length} experts + shared)',
   );
-  print('  output shape   : ${acc.shape} (expected [$tokens, $_D])');
+  print('  output shape   : ${acc.shape} (expected [$tokens, $_d])');
 
   final row = acc.toList();
   var mn = double.infinity;
