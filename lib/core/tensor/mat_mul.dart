@@ -79,6 +79,15 @@ extension TensorMatMul on Tensor {
     final a = _readAsFp32();
     final b = o._readAsFp32();
     final out = Float32List(m * n);
+    // OpenBLAS SGEMM: 20-50x faster than the Dart triple loop on the
+    // shapes we care about ([T, D=2048] @ [D, hidden=1408..151936]).
+    // Threshold on total ops — the FFI copy overhead (3 memcpys of
+    // roughly `m*k + k*n + m*n` floats) means BLAS only wins when the
+    // matmul is doing enough work to amortise it.
+    if (m * k * n > 1000000 && Blas.enabled) {
+      Blas.sgemm(a, b, out, m, k, n);
+      return Tensor._cpu([m, n], out);
+    }
     // i,p,j loop order — `b[bRow + j]` and `out[outRow + j]` sweep
     // sequentially on the inner axis, `a[aRow + p]` is invariant.
     // ~5× faster than the i,j,p order that strides through `b` by n

@@ -282,28 +282,36 @@ class Qwen15MoEStreamingRunner {
     _sharedGateTs = List<Tensor>.filled(config.numLayers, _sharedGateT);
     _sharedUpTs = List<Tensor>.filled(config.numLayers, _sharedUpT);
     _sharedDownTs = List<Tensor>.filled(config.numLayers, _sharedDownT);
-    _sharedExpertGateTs =
-        List<Tensor>.filled(config.numLayers, _sharedExpertGateT);
+    _sharedExpertGateTs = List<Tensor>.filled(
+      config.numLayers,
+      _sharedExpertGateT,
+    );
     _routerWs = List<Tensor>.filled(config.numLayers, _routerW);
     _attnNormGammas = List<Tensor>.filled(config.numLayers, attnNorm.gamma);
     _ffnNormGammas = List<Tensor>.filled(config.numLayers, ffnNorm.gamma);
     for (int i = 0; i < config.numLayers; i++) {
       final p = 'model.layers.$i.mlp';
       final sG = _expectShape(
-        reader.readTensor('$p.shared_expert.gate_proj.weight',
-            keepFp16: keepFp16),
+        reader.readTensor(
+          '$p.shared_expert.gate_proj.weight',
+          keepFp16: keepFp16,
+        ),
         [config.sharedHidden, d],
         '$p.shared_expert.gate_proj.weight',
       );
       final sU = _expectShape(
-        reader.readTensor('$p.shared_expert.up_proj.weight',
-            keepFp16: keepFp16),
+        reader.readTensor(
+          '$p.shared_expert.up_proj.weight',
+          keepFp16: keepFp16,
+        ),
         [config.sharedHidden, d],
         '$p.shared_expert.up_proj.weight',
       );
       final sD = _expectShape(
-        reader.readTensor('$p.shared_expert.down_proj.weight',
-            keepFp16: keepFp16),
+        reader.readTensor(
+          '$p.shared_expert.down_proj.weight',
+          keepFp16: keepFp16,
+        ),
         [d, config.sharedHidden],
         '$p.shared_expert.down_proj.weight',
       );
@@ -367,21 +375,15 @@ class Qwen15MoEStreamingRunner {
         [d, d],
         '$p.o_proj.weight',
       );
-      _qBs[i] = _expectShape(
-        reader.readTensor('$p.q_proj.bias'),
-        [h * headDim],
-        '$p.q_proj.bias',
-      );
-      _kBs[i] = _expectShape(
-        reader.readTensor('$p.k_proj.bias'),
-        [kvH * headDim],
-        '$p.k_proj.bias',
-      );
-      _vBs[i] = _expectShape(
-        reader.readTensor('$p.v_proj.bias'),
-        [kvH * headDim],
-        '$p.v_proj.bias',
-      );
+      _qBs[i] = _expectShape(reader.readTensor('$p.q_proj.bias'), [
+        h * headDim,
+      ], '$p.q_proj.bias');
+      _kBs[i] = _expectShape(reader.readTensor('$p.k_proj.bias'), [
+        kvH * headDim,
+      ], '$p.k_proj.bias');
+      _vBs[i] = _expectShape(reader.readTensor('$p.v_proj.bias'), [
+        kvH * headDim,
+      ], '$p.v_proj.bias');
     }
   }
 
