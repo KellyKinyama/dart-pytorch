@@ -152,8 +152,9 @@ class MoeStreamingLayer {
     final e = numExperts;
     final k = topK < e ? topK : e;
     final logits = x.matmul(routerW); // [T, E]
-    final scores =
-        gate == GateFunction.softmax ? logits.softmax() : logits.sigmoid();
+    final scores = gate == GateFunction.softmax
+        ? logits.softmax()
+        : logits.sigmoid();
     final flat = scores.toList();
 
     final union = <int>{};
@@ -193,13 +194,15 @@ class MoeStreamingLayer {
   }
 
   /// Bytes plan given a [MoeRoutingDecision].
-  MoeStreamingReport report(MoeRoutingDecision decision, {int? bytesPerExpert}) =>
-      MoeStreamingReport(
-        numExperts: numExperts,
-        topK: topK,
-        streamedExperts: decision.union.length,
-        expertBytes: bytesPerExpert ?? expertBytes(),
-      );
+  MoeStreamingReport report(
+    MoeRoutingDecision decision, {
+    int? bytesPerExpert,
+  }) => MoeStreamingReport(
+    numExperts: numExperts,
+    topK: topK,
+    streamedExperts: decision.union.length,
+    expertBytes: bytesPerExpert ?? expertBytes(),
+  );
 }
 
 class MoeRoutingDecision {

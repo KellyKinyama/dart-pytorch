@@ -66,6 +66,7 @@ export 'core/nn/gptj_streaming.dart';
 export 'core/nn/safetensors.dart';
 export 'core/nn/safetensors_reader.dart';
 export 'core/nn/moe_streaming.dart';
+export 'core/nn/qwen15_moe_streaming.dart';
 export 'core/nn/gpt2_hf_loader.dart';
 export 'core/nn/rotary.dart';
 export 'core/nn/pythia.dart';

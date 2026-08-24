@@ -27,7 +27,8 @@ const int _numLayers = 27;
 const int _firstDense = 1;
 
 Future<void> main(List<String> args) async {
-  var indexPath = '${_defaultHome()}/models/deepseek-v2-lite-chat/'
+  var indexPath =
+      '${_defaultHome()}/models/deepseek-v2-lite-chat/'
       'model.safetensors.index.json';
   var layer = 5;
   var tokens = 1;
@@ -62,13 +63,17 @@ Future<void> main(List<String> args) async {
 
   if (!File(indexPath).existsSync()) {
     stderr.writeln('missing: $indexPath');
-    stderr.writeln('download: hf download deepseek-ai/DeepSeek-V2-Lite-Chat '
-        '--local-dir ~/models/deepseek-v2-lite-chat');
+    stderr.writeln(
+      'download: hf download deepseek-ai/DeepSeek-V2-Lite-Chat '
+      '--local-dir ~/models/deepseek-v2-lite-chat',
+    );
     exit(2);
   }
   if (layer < _firstDense || layer >= _numLayers) {
-    stderr.writeln('layer $layer is dense or out of range — MoE layers '
-        'are [$_firstDense, $_numLayers)');
+    stderr.writeln(
+      'layer $layer is dense or out of range — MoE layers '
+      'are [$_firstDense, $_numLayers)',
+    );
     exit(2);
   }
 
@@ -78,8 +83,10 @@ Future<void> main(List<String> args) async {
   print('  D              : $_d');
   print('  E / K          : $_e / $_k');
   print('  moe_hidden     : $_moeHidden');
-  print('  shared         : $_sharedExperts experts fused as SwiGLU '
-      'hidden=$_sharedHidden');
+  print(
+    '  shared         : $_sharedExperts experts fused as SwiGLU '
+    'hidden=$_sharedHidden',
+  );
   print('  gate           : softmax + no-renormalize (V2 config)');
   print('  tokens         : $tokens');
 
@@ -97,8 +104,10 @@ Future<void> main(List<String> args) async {
     gate: GateFunction.softmax,
   );
   if (!reader.contains(moe.routerKey)) {
-    stderr.writeln('layer $layer is not a MoE layer or its shard is '
-        'not on disk yet (no "${moe.routerKey}")');
+    stderr.writeln(
+      'layer $layer is not a MoE layer or its shard is '
+      'not on disk yet (no "${moe.routerKey}")',
+    );
     exit(2);
   }
 
@@ -117,11 +126,12 @@ Future<void> main(List<String> args) async {
   swLoad.stop();
   print('');
   print('== persistent load ==');
-  print('  routerW shape  : ${routerW.shape} '
-      '(${swLoad.elapsedMilliseconds} ms)');
+  print(
+    '  routerW shape  : ${routerW.shape} '
+    '(${swLoad.elapsedMilliseconds} ms)',
+  );
 
-  final sharedGate =
-      reader.readTensor('$p.shared_experts.gate_proj.weight');
+  final sharedGate = reader.readTensor('$p.shared_experts.gate_proj.weight');
   final sharedUp = reader.readTensor('$p.shared_experts.up_proj.weight');
   final sharedDown = reader.readTensor('$p.shared_experts.down_proj.weight');
 
@@ -136,13 +146,19 @@ Future<void> main(List<String> args) async {
   final report = moe.report(decision, bytesPerExpert: routedBytes);
   print('');
   print('== routing ==');
-  print('  top-K experts  : ${decision.sortedUnion} '
-      '(${decision.union.length} of $_e = '
-      '${(decision.union.length * 100 / _e).toStringAsFixed(1)}%)');
-  print('  streamed       : ${_fmtBytes(report.streamedBytes)} '
-      '(vs ${_fmtBytes(report.totalBytes)} for full layer)');
-  print('  saved          : ${_fmtBytes(report.savedBytes)} '
-      '(${report.savedPercent.toStringAsFixed(1)}%)');
+  print(
+    '  top-K experts  : ${decision.sortedUnion} '
+    '(${decision.union.length} of $_e = '
+    '${(decision.union.length * 100 / _e).toStringAsFixed(1)}%)',
+  );
+  print(
+    '  streamed       : ${_fmtBytes(report.streamedBytes)} '
+    '(vs ${_fmtBytes(report.totalBytes)} for full layer)',
+  );
+  print(
+    '  saved          : ${_fmtBytes(report.savedBytes)} '
+    '(${report.savedPercent.toStringAsFixed(1)}%)',
+  );
 
   if (reportOnly) {
     reader.close();
@@ -155,8 +171,10 @@ Future<void> main(List<String> args) async {
     loaded[j] = moe.loadRoutedExpert(j);
   }
   swExperts.stop();
-  print('  load           : ${swExperts.elapsedMilliseconds} ms '
-      '(${decision.union.length} experts)');
+  print(
+    '  load           : ${swExperts.elapsedMilliseconds} ms '
+    '(${decision.union.length} experts)',
+  );
 
   final swF = Stopwatch()..start();
   var acc = swiGluForwardRaw(x, sharedGate, sharedUp, sharedDown);
@@ -174,8 +192,10 @@ Future<void> main(List<String> args) async {
   swF.stop();
   print('');
   print('== forward ==');
-  print('  wall           : ${swF.elapsedMilliseconds} ms (routed via '
-      '${decision.union.length} experts + shared)');
+  print(
+    '  wall           : ${swF.elapsedMilliseconds} ms (routed via '
+    '${decision.union.length} experts + shared)',
+  );
   print('  output shape   : ${acc.shape} (expected [$tokens, $_d])');
 
   final row = acc.toList();
@@ -193,13 +213,17 @@ Future<void> main(List<String> args) async {
     sum += v;
   }
   final finite = row.length - nan;
-  print('  stats          : min=${mn.toStringAsFixed(4)} '
-      'max=${mx.toStringAsFixed(4)} '
-      'mean=${(sum / (finite == 0 ? 1 : finite)).toStringAsFixed(6)} '
-      'nan=$nan/${row.length}');
+  print(
+    '  stats          : min=${mn.toStringAsFixed(4)} '
+    'max=${mx.toStringAsFixed(4)} '
+    'mean=${(sum / (finite == 0 ? 1 : finite)).toStringAsFixed(6)} '
+    'nan=$nan/${row.length}',
+  );
   if (nan == 0) {
-    print('  status         : OK — per-expert streaming against real '
-        'DeepSeek-V2-Lite weights produces finite outputs.');
+    print(
+      '  status         : OK — per-expert streaming against real '
+      'DeepSeek-V2-Lite weights produces finite outputs.',
+    );
   }
 
   reader.close();

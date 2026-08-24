@@ -24,7 +24,8 @@ const int _sharedHidden = 5632;
 const int _numLayers = 24;
 
 Future<void> main(List<String> args) async {
-  var indexPath = '${_defaultHome()}/models/qwen1.5-moe-a2.7b-chat/'
+  var indexPath =
+      '${_defaultHome()}/models/qwen1.5-moe-a2.7b-chat/'
       'model.safetensors.index.json';
   var layer = 0;
   var tokens = 1;
@@ -59,8 +60,10 @@ Future<void> main(List<String> args) async {
 
   if (!File(indexPath).existsSync()) {
     stderr.writeln('missing: $indexPath');
-    stderr.writeln('download: hf download Qwen/Qwen1.5-MoE-A2.7B-Chat '
-        '--local-dir ~/models/qwen1.5-moe-a2.7b-chat');
+    stderr.writeln(
+      'download: hf download Qwen/Qwen1.5-MoE-A2.7B-Chat '
+      '--local-dir ~/models/qwen1.5-moe-a2.7b-chat',
+    );
     exit(2);
   }
   if (layer < 0 || layer >= _numLayers) {
@@ -92,8 +95,10 @@ Future<void> main(List<String> args) async {
     gate: GateFunction.softmax,
   );
   if (!reader.contains(moe.routerKey)) {
-    stderr.writeln('no "${moe.routerKey}" — layer $layer probably not '
-        'in a downloaded shard yet');
+    stderr.writeln(
+      'no "${moe.routerKey}" — layer $layer probably not '
+      'in a downloaded shard yet',
+    );
     exit(2);
   }
 
@@ -112,14 +117,17 @@ Future<void> main(List<String> args) async {
   swLoad.stop();
   print('');
   print('== persistent load ==');
-  print('  routerW shape  : ${routerW.shape} '
-      '(${swLoad.elapsedMilliseconds} ms)');
+  print(
+    '  routerW shape  : ${routerW.shape} '
+    '(${swLoad.elapsedMilliseconds} ms)',
+  );
 
   final sharedGate = reader.readTensor('$p.shared_expert.gate_proj.weight');
   final sharedUp = reader.readTensor('$p.shared_expert.up_proj.weight');
   final sharedDown = reader.readTensor('$p.shared_expert.down_proj.weight');
-  final sharedExpertGate =
-      reader.readTensor('$p.shared_expert_gate.weight'); // [1, D]
+  final sharedExpertGate = reader.readTensor(
+    '$p.shared_expert_gate.weight',
+  ); // [1, D]
 
   final rng = math.Random(seed);
   final xVals = List<double>.generate(
@@ -132,13 +140,19 @@ Future<void> main(List<String> args) async {
   final report = moe.report(decision, bytesPerExpert: routedBytes);
   print('');
   print('== routing ==');
-  print('  top-K experts  : ${decision.sortedUnion} '
-      '(${decision.union.length} of $_e = '
-      '${(decision.union.length * 100 / _e).toStringAsFixed(1)}%)');
-  print('  streamed       : ${_fmtBytes(report.streamedBytes)} '
-      '(vs ${_fmtBytes(report.totalBytes)} for full layer)');
-  print('  saved          : ${_fmtBytes(report.savedBytes)} '
-      '(${report.savedPercent.toStringAsFixed(1)}%)');
+  print(
+    '  top-K experts  : ${decision.sortedUnion} '
+    '(${decision.union.length} of $_e = '
+    '${(decision.union.length * 100 / _e).toStringAsFixed(1)}%)',
+  );
+  print(
+    '  streamed       : ${_fmtBytes(report.streamedBytes)} '
+    '(vs ${_fmtBytes(report.totalBytes)} for full layer)',
+  );
+  print(
+    '  saved          : ${_fmtBytes(report.savedBytes)} '
+    '(${report.savedPercent.toStringAsFixed(1)}%)',
+  );
 
   if (reportOnly) {
     reader.close();
@@ -151,8 +165,10 @@ Future<void> main(List<String> args) async {
     loaded[j] = moe.loadRoutedExpert(j);
   }
   swExperts.stop();
-  print('  load           : ${swExperts.elapsedMilliseconds} ms '
-      '(${decision.union.length} experts)');
+  print(
+    '  load           : ${swExperts.elapsedMilliseconds} ms '
+    '(${decision.union.length} experts)',
+  );
 
   final swF = Stopwatch()..start();
   final sharedOut = swiGluForwardRaw(x, sharedGate, sharedUp, sharedDown);
@@ -193,13 +209,17 @@ Future<void> main(List<String> args) async {
     sum += v;
   }
   final finite = row.length - nan;
-  print('  stats          : min=${mn.toStringAsFixed(4)} '
-      'max=${mx.toStringAsFixed(4)} '
-      'mean=${(sum / (finite == 0 ? 1 : finite)).toStringAsFixed(6)} '
-      'nan=$nan/${row.length}');
+  print(
+    '  stats          : min=${mn.toStringAsFixed(4)} '
+    'max=${mx.toStringAsFixed(4)} '
+    'mean=${(sum / (finite == 0 ? 1 : finite)).toStringAsFixed(6)} '
+    'nan=$nan/${row.length}',
+  );
   if (nan == 0) {
-    print('  status         : OK — per-expert streaming against real '
-        'Qwen1.5-MoE weights produces finite outputs.');
+    print(
+      '  status         : OK — per-expert streaming against real '
+      'Qwen1.5-MoE weights produces finite outputs.',
+    );
   }
 
   reader.close();

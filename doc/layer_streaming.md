@@ -147,10 +147,15 @@ dart run bin/gptj_streaming_demo.dart \
     * [bin/qwen15_moe_layer_stream.dart](../bin/qwen15_moe_layer_stream.dart)
       — same for `Qwen/Qwen1.5-MoE-A2.7B-Chat` (scalar-gated
       `shared_expert`).
-  * Not yet: a full `DeepSeekV2StreamingRunner` or
-    `Qwen15MoEStreamingRunner`. Qwen1.5-MoE is the closer target
-    since it uses plain MHA (not MLA) — the missing pieces are
-    identical to `LlamaStreamingRunner` plus the MoE FFN glue.
+  * Not yet: a full `DeepSeekV2StreamingRunner`. Qwen1.5-MoE E2E
+    runner IS landed as [Qwen15MoEStreamingRunner](../lib/core/nn/qwen15_moe_streaming.dart)
+    — plain MHA (Q/K/V bias, no O bias), RMSNorm × 2, router
+    swap-in, scalar-gated `shared_expert`, top-K expert streaming
+    per layer, KV cache across layer swaps. Random-weight validator
+    [bin/qwen15_moe_streaming_random_demo.dart](../bin/qwen15_moe_streaming_random_demo.dart)
+    runs a tiny preset E2E in ~50 ms (2 layers, D=128, E=8, K=2).
+    Real-weight demo [bin/qwen15_moe_streaming_demo.dart](../bin/qwen15_moe_streaming_demo.dart)
+    is ready — needs the 28.6 GB HF checkpoint on disk.
 - **Block-wise int4/int8 compression** — AirLLM's on-disk quantized
   weight format. Would need a new safetensors dtype path plus a
   dequant-on-load step.
