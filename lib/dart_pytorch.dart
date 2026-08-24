@@ -72,6 +72,8 @@ export 'core/nn/pythia_hf_loader.dart';
 export 'core/nn/llama.dart';
 export 'core/nn/llama_hf_loader.dart';
 export 'core/nn/llama_streaming.dart';
+export 'core/nn/skyreels_v2.dart';
+export 'core/nn/skyreels_v2_streaming.dart';
 export 'core/nn/vision_projector.dart';
 export 'core/nn/llama_vision.dart';
 export 'core/nn/clip_hf_loader.dart';
