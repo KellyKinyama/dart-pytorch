@@ -113,26 +113,16 @@ class Qwen15MoEStreamingRunner {
   /// which promotes to fp32 — held as fp32.
   Tensor _routerW;
 
-  /// Shared expert SwiGLU: shape `[hidden_shared, D]` for
-  /// `gate`/`up`, `[D, hidden_shared]` for `down`. fp16 storage
-  /// preserved across swaps.
-  Tensor _sharedGate;
-  Tensor _sharedUp;
-  Tensor _sharedDown;
-
   /// Pre-transposed shared expert weights, computed at swap time so
   /// `forward` doesn't allocate 3 × 22 MB fp16 transposes per layer
   /// per token. `_sharedGateT` and `_sharedUpT` are `[D, hidden]`,
-  /// `_sharedDownT` is `[hidden, D]`.
+  /// `_sharedDownT` is `[hidden, D]`. Reassigned per swap from the
+  /// `_sharedGateTs` / `_sharedUpTs` / `_sharedDownTs` caches.
   Tensor _sharedGateT;
   Tensor _sharedUpT;
   Tensor _sharedDownT;
 
-  /// Learned scalar gate `[1, D]` applied via `sigmoid(x @
-  /// shared_expert_gate.T)` to weight the shared expert output.
-  Tensor _sharedExpertGate;
-
-  /// Pre-transposed `[D, 1]` version cached at swap.
+  /// Pre-transposed `[D, 1]` version of the scalar shared_expert_gate.
   Tensor _sharedExpertGateT;
 
   /// Persistent per-layer caches of the transposed shared expert and
@@ -188,14 +178,10 @@ class Qwen15MoEStreamingRunner {
          seed: 0,
        ),
        _routerW = Tensor.fill([config.dim, config.numExperts], 0.0),
-       _sharedGate = Tensor.fill([config.sharedHidden, config.dim], 0.0),
-       _sharedUp = Tensor.fill([config.sharedHidden, config.dim], 0.0),
-       _sharedDown = Tensor.fill([config.dim, config.sharedHidden], 0.0),
-       _sharedGateT = Tensor.fill([config.dim, config.sharedHidden], 0.0),
-       _sharedUpT = Tensor.fill([config.dim, config.sharedHidden], 0.0),
-       _sharedDownT = Tensor.fill([config.sharedHidden, config.dim], 0.0),
-       _sharedExpertGate = Tensor.fill([1, config.dim], 0.0),
-       _sharedExpertGateT = Tensor.fill([config.dim, 1], 0.0) {
+       _sharedGateT = Tensor.fill([1, 1], 0.0),
+       _sharedUpT = Tensor.fill([1, 1], 0.0),
+       _sharedDownT = Tensor.fill([1, 1], 0.0),
+       _sharedExpertGateT = Tensor.fill([1, 1], 0.0) {
     attn.rope = rope;
     _onesD = Tensor.fill([1, config.dim], 1.0);
     _ramGuard();
@@ -293,11 +279,11 @@ class Qwen15MoEStreamingRunner {
     // Pre-load all layers' router + shared expert transposes + norms.
     // Big memory win but eliminates ~66 MB of disk I/O per layer per
     // forward. ~1.6 GB extra fp16 storage for the shared expert alone.
-    _sharedGateTs = List<Tensor>.filled(config.numLayers, _sharedGate);
-    _sharedUpTs = List<Tensor>.filled(config.numLayers, _sharedUp);
-    _sharedDownTs = List<Tensor>.filled(config.numLayers, _sharedDown);
+    _sharedGateTs = List<Tensor>.filled(config.numLayers, _sharedGateT);
+    _sharedUpTs = List<Tensor>.filled(config.numLayers, _sharedUpT);
+    _sharedDownTs = List<Tensor>.filled(config.numLayers, _sharedDownT);
     _sharedExpertGateTs =
-        List<Tensor>.filled(config.numLayers, _sharedExpertGate);
+        List<Tensor>.filled(config.numLayers, _sharedExpertGateT);
     _routerWs = List<Tensor>.filled(config.numLayers, _routerW);
     _attnNormGammas = List<Tensor>.filled(config.numLayers, attnNorm.gamma);
     _ffnNormGammas = List<Tensor>.filled(config.numLayers, ffnNorm.gamma);
