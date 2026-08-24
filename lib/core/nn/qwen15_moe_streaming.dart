@@ -457,8 +457,18 @@ class Qwen15MoEStreamingRunner {
   }
 
   /// Full forward through all N layers. `tokens` is `[seqLen]`
-  /// float32 token ids. Returns `[seqLen, vocab]` logits.
-  Tensor forward(Tensor tokens, {int startPos = 0, EncoderCache? cache}) {
+  /// float32 token ids. Returns `[seqLen, vocab]` logits — or, when
+  /// [lastRowOnly] is true, just the last row `[1, vocab]`. Slicing
+  /// off the prefix before the final head projection saves
+  /// `(seqLen - 1) × D × vocab` matmul ops per forward. Only safe
+  /// when the caller uses just the last-position logits (which is
+  /// what [generate] does for prompt-fill).
+  Tensor forward(
+    Tensor tokens, {
+    int startPos = 0,
+    EncoderCache? cache,
+    bool lastRowOnly = false,
+  }) {
     if (tokens.shape.length != 1) {
       throw ArgumentError(
         'Qwen15MoEStreamingRunner: tokens must be 1D [seqLen]; '
@@ -486,6 +496,9 @@ class Qwen15MoEStreamingRunner {
         );
       }
       x = finalNorm(x);
+      if (lastRowOnly && n > 1) {
+        x = x.sliceRows(n - 1, n);
+      }
       return x.matmul(_headT);
     });
   }
@@ -500,8 +513,14 @@ class Qwen15MoEStreamingRunner {
     final cache = EncoderCache.empty(config.numLayers, config.numKvHeads);
 
     final promptT = Tensor.fromList([prompt.length], prompt);
-    var logits = forward(promptT, startPos: 0, cache: cache).toList();
-    out.add(_argmax(logits, (prompt.length - 1) * v, v).toDouble());
+    // Prompt fill only needs the last position's logits for argmax.
+    var logits = forward(
+      promptT,
+      startPos: 0,
+      cache: cache,
+      lastRowOnly: true,
+    ).toList();
+    out.add(_argmax(logits, 0, v).toDouble());
 
     for (int step = 1; step < maxNewTokens; step++) {
       if (cache.seqLen >= config.maxCtx) break;
