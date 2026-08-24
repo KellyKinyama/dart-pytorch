@@ -149,6 +149,19 @@ class Qwen15MoEStreamingRunner {
   late final List<Tensor> _attnNormGammas;
   late final List<Tensor> _ffnNormGammas;
 
+  /// Persistent per-layer MHA weight caches. Each entry is the full
+  /// `[H*headDim, D]` fp16 blob (biases as `[H*headDim]` fp32). Per
+  /// swap, sliceRows produces fresh per-head views (native memmove);
+  /// no disk I/O. Costs ~24 x 32 MB fp16 = 768 MB persistent for
+  /// Qwen1.5-MoE's Q/K/V/O with biases.
+  late final List<Tensor> _qWs;
+  late final List<Tensor> _kWs;
+  late final List<Tensor> _vWs;
+  late final List<Tensor> _oWs;
+  late final List<Tensor> _qBs;
+  late final List<Tensor> _kBs;
+  late final List<Tensor> _vBs;
+
   /// Reused across forwards for row-broadcasting `[T, 1] @ [1, D]
   /// → [T, D]`. Allocated once.
   late final Tensor _onesD;
@@ -332,6 +345,58 @@ class Qwen15MoEStreamingRunner {
         'model.layers.$i.post_attention_layernorm.weight',
       );
     }
+
+    // Cache MHA weights per layer. Bulk fp16 blobs stay on the runner;
+    // per-swap `sliceRows` creates fresh per-head views via native
+    // memmove and the resident MHA adopts them.
+    final h = config.numHeads;
+    final kvH = config.numKvHeads;
+    final headDim = d ~/ h;
+    _qWs = List<Tensor>.filled(config.numLayers, Tensor.fill([1, 1], 0.0));
+    _kWs = List<Tensor>.filled(config.numLayers, Tensor.fill([1, 1], 0.0));
+    _vWs = List<Tensor>.filled(config.numLayers, Tensor.fill([1, 1], 0.0));
+    _oWs = List<Tensor>.filled(config.numLayers, Tensor.fill([1, 1], 0.0));
+    _qBs = List<Tensor>.filled(config.numLayers, Tensor.fill([1], 0.0));
+    _kBs = List<Tensor>.filled(config.numLayers, Tensor.fill([1], 0.0));
+    _vBs = List<Tensor>.filled(config.numLayers, Tensor.fill([1], 0.0));
+    for (int i = 0; i < config.numLayers; i++) {
+      final p = 'model.layers.$i.self_attn';
+      _qWs[i] = _expectShape(
+        reader.readTensor('$p.q_proj.weight', keepFp16: keepFp16),
+        [h * headDim, d],
+        '$p.q_proj.weight',
+      );
+      _kWs[i] = _expectShape(
+        reader.readTensor('$p.k_proj.weight', keepFp16: keepFp16),
+        [kvH * headDim, d],
+        '$p.k_proj.weight',
+      );
+      _vWs[i] = _expectShape(
+        reader.readTensor('$p.v_proj.weight', keepFp16: keepFp16),
+        [kvH * headDim, d],
+        '$p.v_proj.weight',
+      );
+      _oWs[i] = _expectShape(
+        reader.readTensor('$p.o_proj.weight', keepFp16: keepFp16),
+        [d, d],
+        '$p.o_proj.weight',
+      );
+      _qBs[i] = _expectShape(
+        reader.readTensor('$p.q_proj.bias'),
+        [h * headDim],
+        '$p.q_proj.bias',
+      );
+      _kBs[i] = _expectShape(
+        reader.readTensor('$p.k_proj.bias'),
+        [kvH * headDim],
+        '$p.k_proj.bias',
+      );
+      _vBs[i] = _expectShape(
+        reader.readTensor('$p.v_proj.bias'),
+        [kvH * headDim],
+        '$p.v_proj.bias',
+      );
+    }
   }
 
   /// Swap layer [i]'s non-expert weights (MHA + norms + router +
@@ -344,10 +409,9 @@ class Qwen15MoEStreamingRunner {
     final h = cfg.numHeads;
     final kvH = cfg.numKvHeads;
     final headDim = d ~/ h;
-    final p = 'model.layers.$i';
 
-    // Norms + router + shared expert come from the per-layer cache
-    // populated at construction. No disk I/O, no transpose per swap.
+    // All non-expert weights come from per-layer caches populated at
+    // construction. No disk I/O in this method.
     _copy(attnNorm.gamma, _attnNormGammas[i]);
     _copy(ffnNorm.gamma, _ffnNormGammas[i]);
     _routerW = _routerWs[i];
@@ -356,53 +420,37 @@ class Qwen15MoEStreamingRunner {
     _sharedDownT = _sharedDownTs[i];
     _sharedExpertGateT = _sharedExpertGateTs[i];
 
-    // Q / K / V (weights + biases, Qwen has all three biased).
-    final qW = _expectShape(
-      reader.readTensor('$p.self_attn.q_proj.weight', keepFp16: keepFp16),
-      [h * headDim, d],
-      '$p.self_attn.q_proj.weight',
-    );
+    // Q / K / V per-head from cached full weight blobs. sliceRows
+    // creates a fresh fp16 buffer (native memmove) so the cache
+    // survives the adopt.
+    final qW = _qWs[i];
     for (int hh = 0; hh < h; hh++) {
       _copy(attn.wq[hh].weight, qW.sliceRows(hh * headDim, (hh + 1) * headDim));
     }
-    final kW = _expectShape(
-      reader.readTensor('$p.self_attn.k_proj.weight', keepFp16: keepFp16),
-      [kvH * headDim, d],
-      '$p.self_attn.k_proj.weight',
-    );
+    final kW = _kWs[i];
     for (int hh = 0; hh < kvH; hh++) {
       _copy(attn.wk[hh].weight, kW.sliceRows(hh * headDim, (hh + 1) * headDim));
     }
-    final vW = _expectShape(
-      reader.readTensor('$p.self_attn.v_proj.weight', keepFp16: keepFp16),
-      [kvH * headDim, d],
-      '$p.self_attn.v_proj.weight',
-    );
+    final vW = _vWs[i];
     for (int hh = 0; hh < kvH; hh++) {
       _copy(attn.wv[hh].weight, vW.sliceRows(hh * headDim, (hh + 1) * headDim));
     }
 
-    final qB = _expectShape(reader.readTensor('$p.self_attn.q_proj.bias'), [
-      h * headDim,
-    ], '$p.self_attn.q_proj.bias');
+    final qB = _qBs[i];
     for (int hh = 0; hh < h; hh++) {
       _copy(
         attn.wq[hh].bias!,
         _reshape1xN(_sliceVector(qB, hh * headDim, (hh + 1) * headDim)),
       );
     }
-    final kB = _expectShape(reader.readTensor('$p.self_attn.k_proj.bias'), [
-      kvH * headDim,
-    ], '$p.self_attn.k_proj.bias');
+    final kB = _kBs[i];
     for (int hh = 0; hh < kvH; hh++) {
       _copy(
         attn.wk[hh].bias!,
         _reshape1xN(_sliceVector(kB, hh * headDim, (hh + 1) * headDim)),
       );
     }
-    final vB = _expectShape(reader.readTensor('$p.self_attn.v_proj.bias'), [
-      kvH * headDim,
-    ], '$p.self_attn.v_proj.bias');
+    final vB = _vBs[i];
     for (int hh = 0; hh < kvH; hh++) {
       _copy(
         attn.wv[hh].bias!,
@@ -410,14 +458,7 @@ class Qwen15MoEStreamingRunner {
       );
     }
 
-    _copy(
-      attn.wo.weight,
-      _expectShape(
-        reader.readTensor('$p.self_attn.o_proj.weight', keepFp16: keepFp16),
-        [d, d],
-        '$p.self_attn.o_proj.weight',
-      ),
-    );
+    _copy(attn.wo.weight, _oWs[i].sliceRows(0, _oWs[i].shape[0]));
 
     if (sw != null) {
       sw.stop();
