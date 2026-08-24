@@ -79,13 +79,20 @@ extension TensorMatMul on Tensor {
     final a = _readAsFp32();
     final b = o._readAsFp32();
     final out = Float32List(m * n);
+    // i,p,j loop order — `b[bRow + j]` and `out[outRow + j]` sweep
+    // sequentially on the inner axis, `a[aRow + p]` is invariant.
+    // ~5× faster than the i,j,p order that strides through `b` by n
+    // in the inner loop.
     for (int i = 0; i < m; i++) {
-      for (int j = 0; j < n; j++) {
-        double s = 0;
-        for (int p = 0; p < k; p++) {
-          s += a[i * k + p] * b[p * n + j];
+      final aRow = i * k;
+      final outRow = i * n;
+      for (int p = 0; p < k; p++) {
+        final aip = a[aRow + p];
+        if (aip == 0.0) continue;
+        final bRow = p * n;
+        for (int j = 0; j < n; j++) {
+          out[outRow + j] += aip * b[bRow + j];
         }
-        out[i * n + j] = s;
       }
     }
     return Tensor._cpu([m, n], out);

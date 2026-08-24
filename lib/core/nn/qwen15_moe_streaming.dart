@@ -84,6 +84,10 @@ class Qwen15MoEStreamingRunner {
   final bool keepFp16;
   final bool profile;
 
+  /// Per-stage timing accumulator. Only populated when [profile] is
+  /// true; reset at the start of every [forward].
+  final _StageProfile _prof = _StageProfile();
+
   /// Persistent — loaded fp16 directly from disk.
   late final Tensor _embedWeight;
 
@@ -398,8 +402,7 @@ class Qwen15MoEStreamingRunner {
 
     if (sw != null) {
       sw.stop();
-      // ignore: avoid_print
-      print('  [layer $i] non-expert swap ${sw.elapsedMilliseconds} ms');
+      _prof.swap += sw.elapsedMicroseconds;
     }
   }
 
@@ -412,13 +415,21 @@ class Qwen15MoEStreamingRunner {
     MHACache? cache,
     required int startPos,
   }) {
+    final sw = profile ? Stopwatch() : null;
     // Self-attention half.
+    sw?.reset();
+    sw?.start();
     final h = attn(attnNorm(x), mask: mask, cache: cache, startPos: startPos);
     final x2 = x + h;
+    if (sw != null) {
+      sw.stop();
+      _prof.mha += sw.elapsedMicroseconds;
+    }
 
     // MoE FFN half.
+    sw?.reset();
+    sw?.start();
     final hFfn = ffnNorm(x2);
-
     final moeStreaming = MoeStreamingLayer(
       prefix: 'model.layers.$layerIdx.mlp',
       numExperts: config.numExperts,
@@ -427,23 +438,40 @@ class Qwen15MoEStreamingRunner {
       gate: GateFunction.softmax, // Qwen2-MoE
     );
     final decision = moeStreaming.route(_routerW, hFfn);
+    if (sw != null) {
+      sw.stop();
+      _prof.router += sw.elapsedMicroseconds;
+    }
 
     // Shared expert path (fused SwiGLU + scalar sigmoid gate). Uses
     // the pre-transposed weights cached at swap time — saves 3 × 22
     // MB fp16 transpose allocations per layer per token.
+    sw?.reset();
+    sw?.start();
     final gate = hFfn.matmul(_sharedGateT);
     final up = hFfn.matmul(_sharedUpT);
     final act = gate * gate.sigmoid();
     final sharedOut = (act * up).matmul(_sharedDownT);
-
     final sharedGateLogit = hFfn.matmul(_sharedExpertGateT);
     final sharedGateScore = sharedGateLogit.sigmoid();
     final sharedGateBcast = sharedGateScore.matmul(_onesD);
     var acc = sharedOut * sharedGateBcast;
+    if (sw != null) {
+      sw.stop();
+      _prof.sharedExpert += sw.elapsedMicroseconds;
+    }
 
     // Routed experts — stream only the union of top-K.
     for (final j in decision.sortedUnion) {
+      sw?.reset();
+      sw?.start();
       final w = moeStreaming.loadRoutedExpert(j, keepFp16: keepFp16);
+      if (sw != null) {
+        sw.stop();
+        _prof.expertStream += sw.elapsedMicroseconds;
+      }
+      sw?.reset();
+      sw?.start();
       final expertOut = swiGluForward(hFfn, w);
       final wj = Tensor.fromList([
         hFfn.shape[0],
@@ -451,7 +479,12 @@ class Qwen15MoEStreamingRunner {
       ], decision.weightForExpert(j));
       final wjBcast = wj.matmul(_onesD);
       acc = acc + (expertOut * wjBcast);
+      if (sw != null) {
+        sw.stop();
+        _prof.expertCompute += sw.elapsedMicroseconds;
+      }
     }
+    _prof.expertsCounted += decision.sortedUnion.length;
 
     return x2 + acc;
   }
@@ -483,8 +516,16 @@ class Qwen15MoEStreamingRunner {
       );
     }
     return Tensor.noGrad(() {
+      final sw = profile ? Stopwatch() : null;
+      _prof.reset();
+      sw?.reset();
+      sw?.start();
       var x = _embedWeight.embedding(tokens);
       final mask = n > 1 ? causalMask(n, device: x.device) : null;
+      if (sw != null) {
+        sw.stop();
+        _prof.embed += sw.elapsedMicroseconds;
+      }
       for (int i = 0; i < config.numLayers; i++) {
         _swapLayerNonExperts(i);
         x = _forwardLayer(
@@ -495,11 +536,19 @@ class Qwen15MoEStreamingRunner {
           startPos: startPos,
         );
       }
+      sw?.reset();
+      sw?.start();
       x = finalNorm(x);
       if (lastRowOnly && n > 1) {
         x = x.sliceRows(n - 1, n);
       }
-      return x.matmul(_headT);
+      final logits = x.matmul(_headT);
+      if (sw != null) {
+        sw.stop();
+        _prof.head += sw.elapsedMicroseconds;
+        _prof.report(config.numLayers);
+      }
+      return logits;
     });
   }
 
@@ -599,3 +648,62 @@ class Qwen15MoEStreamingRunner {
     return Tensor.fromList([1, v.shape[0]], v.toList());
   }
 }
+
+/// Per-forward stage timing accumulator. All fields are microseconds
+/// summed across every layer / expert of a single `forward()` call.
+class _StageProfile {
+  int embed = 0;
+  int swap = 0;
+  int mha = 0;
+  int router = 0;
+  int sharedExpert = 0;
+  int expertStream = 0;
+  int expertCompute = 0;
+  int head = 0;
+  int expertsCounted = 0;
+
+  void reset() {
+    embed = 0;
+    swap = 0;
+    mha = 0;
+    router = 0;
+    sharedExpert = 0;
+    expertStream = 0;
+    expertCompute = 0;
+    head = 0;
+    expertsCounted = 0;
+  }
+
+  void report(int numLayers) {
+    final total = embed + swap + mha + router + sharedExpert +
+        expertStream + expertCompute + head;
+    if (total == 0) return;
+    String row(String name, int us) {
+      final ms = us / 1000.0;
+      final pct = 100 * us / total;
+      return '  ${name.padRight(18)} ${ms.toStringAsFixed(0).padLeft(6)} ms  '
+          '(${pct.toStringAsFixed(1).padLeft(4)} %)';
+    }
+    // ignore: avoid_print
+    print('  ---- forward profile (numLayers=$numLayers) ----');
+    // ignore: avoid_print
+    print(row('embed', embed));
+    // ignore: avoid_print
+    print(row('layer swaps', swap));
+    // ignore: avoid_print
+    print(row('MHA total', mha));
+    // ignore: avoid_print
+    print(row('router+norms', router));
+    // ignore: avoid_print
+    print(row('shared expert', sharedExpert));
+    // ignore: avoid_print
+    print(row('expert stream I/O', expertStream));
+    // ignore: avoid_print
+    print(row('expert compute', expertCompute));
+    // ignore: avoid_print
+    print(row('head projection', head));
+    // ignore: avoid_print
+    print('  ---- $expertsCounted routed experts fired total ----');
+  }
+}
+
