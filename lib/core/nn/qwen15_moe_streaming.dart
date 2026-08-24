@@ -86,7 +86,14 @@ class Qwen15MoEStreamingRunner {
 
   /// Persistent — loaded fp16 directly from disk.
   late final Tensor _embedWeight;
-  late final Tensor? _untiedHeadWeight;
+
+  /// Pre-transposed output projection `[D, vocab]`, cached at load
+  /// time so `forward` doesn't rebuild a 622 MB tensor every call.
+  /// For tied weights this points at `_embedWeight.transpose()` (also
+  /// cached, so both the lookup table and the head projection are
+  /// resident). For untied weights only this transposed copy is kept —
+  /// the raw `[vocab, D]` layout is dropped after transposing.
+  late final Tensor _headT;
 
   final RMSNorm finalNorm;
   final RopeCache rope;
@@ -109,9 +116,20 @@ class Qwen15MoEStreamingRunner {
   Tensor _sharedUp;
   Tensor _sharedDown;
 
+  /// Pre-transposed shared expert weights, computed at swap time so
+  /// `forward` doesn't allocate 3 × 22 MB fp16 transposes per layer
+  /// per token. `_sharedGateT` and `_sharedUpT` are `[D, hidden]`,
+  /// `_sharedDownT` is `[hidden, D]`.
+  Tensor _sharedGateT;
+  Tensor _sharedUpT;
+  Tensor _sharedDownT;
+
   /// Learned scalar gate `[1, D]` applied via `sigmoid(x @
   /// shared_expert_gate.T)` to weight the shared expert output.
   Tensor _sharedExpertGate;
+
+  /// Pre-transposed `[D, 1]` version cached at swap.
+  Tensor _sharedExpertGateT;
 
   /// Reused across forwards for row-broadcasting `[T, 1] @ [1, D]
   /// → [T, D]`. Allocated once.
@@ -142,7 +160,11 @@ class Qwen15MoEStreamingRunner {
        _sharedGate = Tensor.fill([config.sharedHidden, config.dim], 0.0),
        _sharedUp = Tensor.fill([config.sharedHidden, config.dim], 0.0),
        _sharedDown = Tensor.fill([config.dim, config.sharedHidden], 0.0),
-       _sharedExpertGate = Tensor.fill([1, config.dim], 0.0) {
+       _sharedGateT = Tensor.fill([config.dim, config.sharedHidden], 0.0),
+       _sharedUpT = Tensor.fill([config.dim, config.sharedHidden], 0.0),
+       _sharedDownT = Tensor.fill([config.sharedHidden, config.dim], 0.0),
+       _sharedExpertGate = Tensor.fill([1, config.dim], 0.0),
+       _sharedExpertGateT = Tensor.fill([config.dim, 1], 0.0) {
     attn.rope = rope;
     _onesD = Tensor.fill([1, config.dim], 1.0);
     _ramGuard();
@@ -227,13 +249,14 @@ class Qwen15MoEStreamingRunner {
       ], 'model.norm.weight'),
     );
     if (config.tieWeights) {
-      _untiedHeadWeight = null;
+      _headT = _embedWeight.transpose();
     } else {
-      _untiedHeadWeight = _expectShape(
+      final head = _expectShape(
         reader.readTensor('lm_head.weight', keepFp16: keepFp16),
         [config.vocabSize, d],
         'lm_head.weight',
       );
+      _headT = head.transpose(); // fp16-preserving; head then GC'd
     }
   }
 
@@ -365,6 +388,14 @@ class Qwen15MoEStreamingRunner {
       '$p.mlp.shared_expert_gate.weight',
     );
 
+    // Cache pre-transposed shared expert weights so per-token
+    // forward doesn't allocate 3 × 22 MB fp16 transposes per layer.
+    // Transpose preserves fp16 storage — same bytes, rearranged.
+    _sharedGateT = _sharedGate.transpose();
+    _sharedUpT = _sharedUp.transpose();
+    _sharedDownT = _sharedDown.transpose();
+    _sharedExpertGateT = _sharedExpertGate.transpose();
+
     if (sw != null) {
       sw.stop();
       // ignore: avoid_print
@@ -397,14 +428,15 @@ class Qwen15MoEStreamingRunner {
     );
     final decision = moeStreaming.route(_routerW, hFfn);
 
-    // Shared expert path (fused SwiGLU + scalar sigmoid gate).
-    final sharedOut = swiGluForwardRaw(
-      hFfn,
-      _sharedGate,
-      _sharedUp,
-      _sharedDown,
-    );
-    final sharedGateLogit = hFfn.matmul(_sharedExpertGate.transpose());
+    // Shared expert path (fused SwiGLU + scalar sigmoid gate). Uses
+    // the pre-transposed weights cached at swap time — saves 3 × 22
+    // MB fp16 transpose allocations per layer per token.
+    final gate = hFfn.matmul(_sharedGateT);
+    final up = hFfn.matmul(_sharedUpT);
+    final act = gate * gate.sigmoid();
+    final sharedOut = (act * up).matmul(_sharedDownT);
+
+    final sharedGateLogit = hFfn.matmul(_sharedExpertGateT);
     final sharedGateScore = sharedGateLogit.sigmoid();
     final sharedGateBcast = sharedGateScore.matmul(_onesD);
     var acc = sharedOut * sharedGateBcast;
@@ -454,8 +486,7 @@ class Qwen15MoEStreamingRunner {
         );
       }
       x = finalNorm(x);
-      final head = config.tieWeights ? _embedWeight : _untiedHeadWeight!;
-      return x.matmul(head.transpose());
+      return x.matmul(_headT);
     });
   }
 
