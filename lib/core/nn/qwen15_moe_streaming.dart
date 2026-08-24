@@ -28,6 +28,7 @@
 /// model run in ~1.5 GB.
 library;
 
+import 'dart:io' as io;
 import 'dart:typed_data';
 
 import '../tensor/tensor.dart';
@@ -144,7 +145,74 @@ class Qwen15MoEStreamingRunner {
        _sharedExpertGate = Tensor.fill([1, config.dim], 0.0) {
     attn.rope = rope;
     _onesD = Tensor.fill([1, config.dim], 1.0);
+    _ramGuard();
     _loadPersistent();
+  }
+
+  /// Pessimistic peak-RAM estimate and abort if it exceeds
+  /// `/proc/meminfo` `MemAvailable`. Prevents the WSL crush loop when
+  /// the caller picks a config that can't fit.
+  void _ramGuard() {
+    final d = config.dim;
+    final embedBytes = config.vocabSize * d * 2; // fp16
+    final headBytes = config.tieWeights ? 0 : config.vocabSize * d * 2;
+    // One resident block: MHA fp16 + shared expert fp16 + router +
+    // scratch for one transposed shared_gate/up/down (fp32
+    // promotion at forward time).
+    final residentBlockBytes = 4 * d * d * 2 + // Q/K/V/O fp16
+        3 * config.sharedHidden * d * 2 + // shared fp16
+        3 * config.sharedHidden * d * 4; // shared transposes fp32
+    // Per-forward transient: K experts × (fp16 read + fp32 transpose)
+    // held briefly.
+    final perLayerTransient = config.topK *
+        3 *
+        config.moeHidden *
+        d *
+        (2 + 4);
+    final peakEst = embedBytes +
+        headBytes +
+        residentBlockBytes +
+        perLayerTransient +
+        300 * 1024 * 1024; // Dart runtime + activations
+
+    final free = _freeRamBytes();
+    if (free == null) return;
+    if (peakEst > free) {
+      throw StateError(
+        'Qwen15MoEStreamingRunner: predicted peak ~${_fmtBytes(peakEst)} '
+        '(embed ${_fmtBytes(embedBytes)}'
+        '${headBytes > 0 ? ' + lm_head ${_fmtBytes(headBytes)}' : ''} '
+        '+ resident block ${_fmtBytes(residentBlockBytes)} '
+        '+ per-forward transient ${_fmtBytes(perLayerTransient)}) '
+        'exceeds free RAM ${_fmtBytes(free)}. Either shrink the '
+        'preset, close other processes, or raise the WSL memory '
+        'limit in %USERPROFILE%\\.wslconfig.',
+      );
+    }
+  }
+
+  static int? _freeRamBytes() {
+    try {
+      final txt = io.File('/proc/meminfo').readAsStringSync();
+      for (final line in txt.split('\n')) {
+        if (line.startsWith('MemAvailable:')) {
+          final parts = line.split(RegExp(r'\s+'));
+          return int.parse(parts[1]) * 1024;
+        }
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  static String _fmtBytes(int b) {
+    const units = ['B', 'KB', 'MB', 'GB'];
+    var i = 0;
+    double v = b.toDouble();
+    while (v >= 1024 && i < units.length - 1) {
+      v /= 1024;
+      i++;
+    }
+    return '${v.toStringAsFixed(2)} ${units[i]}';
   }
 
   void _loadPersistent() {

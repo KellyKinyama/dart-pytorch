@@ -290,6 +290,26 @@ class Tensor implements ffi.Finalizable {
     return Tensor._cpuF16(shape, Uint16List.fromList(bits));
   }
 
+  /// Same as [Tensor.fromFp16Bits] but **takes ownership** of `bits`
+  /// (no defensive copy). The tensor's storage aliases the passed
+  /// `Uint16List` directly, so the caller must not mutate `bits`
+  /// after handing it over. Also safe when `bits` is a
+  /// `Uint16List.view` over a `Uint8List` that the tensor should
+  /// keep alive — the view's `.buffer` reference is enough.
+  ///
+  /// Used by [SafeTensorsReader] to load huge fp16 tensors without
+  /// the 3× peak-RAM spike of `fromFp16Bits` + intermediate copy.
+  factory Tensor.adoptFp16Bits(List<int> shape, Uint16List bits) {
+    final expected = shape.reduce((a, b) => a * b);
+    if (bits.length != expected) {
+      throw ArgumentError(
+        'adoptFp16Bits: shape $shape expects $expected values, got '
+        '${bits.length}',
+      );
+    }
+    return Tensor._cpuF16(shape, bits);
+  }
+
   /// Materialise `this` as an fp32 CPU tensor. If already fp32, this
   /// clones for safety (callers of a low-level "give me fp32" method
   /// should not observe aliasing). Detached from the autograd graph.

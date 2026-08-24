@@ -103,6 +103,20 @@ class SafeTensorsReader {
         got += n;
       }
     }
+    // Fast-path: keep-fp16 read from a per-tensor scoped blob can
+    // avoid two 622-MB-scale copies (Uint16List(n) + fromList) by
+    // aliasing blob's bytes as a Uint16List view and letting the
+    // tensor take ownership. Only safe here — the blob is a fresh
+    // allocation whose lifetime is tied to this one tensor.
+    if (keepFp16 &&
+        e.dtype == 'F16' &&
+        byteLen == e.numElements * 2) {
+      final bits = Uint16List.view(blob.buffer, 0, e.numElements);
+      return Tensor.adoptFp16Bits(
+        e.shape.isEmpty ? const [1] : e.shape,
+        bits,
+      );
+    }
     return SafeTensors.decodeBlob(e, blob, keepFp16: keepFp16);
   }
 
@@ -149,7 +163,10 @@ class ShardedSafeTensorsReader {
     for (final e in index.weightMap.entries) {
       paramToShard[e.key] = '$baseDir${Platform.pathSeparator}${e.value}';
     }
-    return ShardedSafeTensorsReader._(<String, SafeTensorsReader>{}, paramToShard);
+    return ShardedSafeTensorsReader._(
+      <String, SafeTensorsReader>{},
+      paramToShard,
+    );
   }
 
   /// Auto-detect: pick `fromIndex` if the file ends in `.index.json`,
