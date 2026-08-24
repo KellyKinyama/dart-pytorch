@@ -58,17 +58,17 @@ Future<void> main(List<String> args) async {
 
   final cfg = switch (preset.toLowerCase()) {
     'tiny' => const Qwen15MoEConfig(
-        vocabSize: 512,
-        dim: 128,
-        numHeads: 4,
-        numKvHeads: 4,
-        numLayers: 2,
-        moeHidden: 64,
-        sharedHidden: 256,
-        numExperts: 8,
-        topK: 2,
-        maxCtx: 128,
-      ),
+      vocabSize: 512,
+      dim: 128,
+      numHeads: 4,
+      numKvHeads: 4,
+      numLayers: 2,
+      moeHidden: 64,
+      sharedHidden: 256,
+      numExperts: 8,
+      topK: 2,
+      maxCtx: 128,
+    ),
     'full' => const Qwen15MoEConfig(), // A2.7B defaults
     _ => throw ArgumentError('unknown --preset "$preset" (tiny|full)'),
   };
@@ -92,17 +92,25 @@ Future<void> main(List<String> args) async {
 
   final free = _freeRamBytes();
   final expertsPerLayer = cfg.numExperts * 3 * cfg.moeHidden * cfg.dim * 2;
-  final peakEst = cfg.vocabSize * cfg.dim * 2 * 2 // embed + lm_head fp16
-      +
+  final peakEst =
+      cfg.vocabSize *
+          cfg.dim *
+          2 *
+          2 // embed + lm_head fp16
+          +
       100 * 1024 * 1024 + // one resident block
       3 * cfg.topK * cfg.moeHidden * cfg.dim * 2 + // streamed scratch
       200 * 1024 * 1024; // Dart runtime + activations
   print('  RAM est peak : ${_fmtBytes(peakEst)}');
-  print('  per-layer exp: ${_fmtBytes(expertsPerLayer)} on disk '
-      '(saved ${((cfg.numExperts - cfg.topK) * 100 / cfg.numExperts).toStringAsFixed(1)}% by streaming top-${cfg.topK})');
+  print(
+    '  per-layer exp: ${_fmtBytes(expertsPerLayer)} on disk '
+    '(saved ${((cfg.numExperts - cfg.topK) * 100 / cfg.numExperts).toStringAsFixed(1)}% by streaming top-${cfg.topK})',
+  );
   if (free != null) {
-    print('  RAM free     : ${_fmtBytes(free)} '
-        '(from /proc/meminfo MemAvailable)');
+    print(
+      '  RAM free     : ${_fmtBytes(free)} '
+      '(from /proc/meminfo MemAvailable)',
+    );
     if (peakEst > free) {
       stderr.writeln('ABORT: predicted peak exceeds free RAM');
       exit(3);
@@ -114,8 +122,10 @@ Future<void> main(List<String> args) async {
     final swGen = Stopwatch()..start();
     _writeShardFile(ckptPath, specs, math.Random(seed));
     swGen.stop();
-    print('  gen          : ${swGen.elapsedMilliseconds} ms '
-        '(${(totalBytes / (1024 * 1024) / (swGen.elapsedMilliseconds / 1000.0)).toStringAsFixed(1)} MB/s write)');
+    print(
+      '  gen          : ${swGen.elapsedMilliseconds} ms '
+      '(${(totalBytes / (1024 * 1024) / (swGen.elapsedMilliseconds / 1000.0)).toStringAsFixed(1)} MB/s write)',
+    );
   } else {
     print('  gen          : (exists, skipping)');
   }
@@ -126,11 +136,12 @@ Future<void> main(List<String> args) async {
   print('  header parse : ${swOpen.elapsedMilliseconds} ms');
 
   final swInit = Stopwatch()..start();
-  final runner =
-      Qwen15MoEStreamingRunner(cfg, reader, profile: profile);
+  final runner = Qwen15MoEStreamingRunner(cfg, reader, profile: profile);
   swInit.stop();
-  print('  runner init  : ${swInit.elapsedMilliseconds} ms '
-      '(persistent embed + head + rope + resident block)');
+  print(
+    '  runner init  : ${swInit.elapsedMilliseconds} ms '
+    '(persistent embed + head + rope + resident block)',
+  );
 
   // Random prompt.
   final rng = math.Random(seed + 1);
@@ -152,8 +163,10 @@ Future<void> main(List<String> args) async {
   final logits = runner.forward(promptTensor);
   swF.stop();
   print('  wall         : ${swF.elapsedMilliseconds} ms');
-  print('  logits shape : ${logits.shape} '
-      '(expected [$seqLen, ${cfg.vocabSize}])');
+  print(
+    '  logits shape : ${logits.shape} '
+    '(expected [$seqLen, ${cfg.vocabSize}])',
+  );
 
   final row = logits.toList();
   var mn = double.infinity;
@@ -170,13 +183,17 @@ Future<void> main(List<String> args) async {
     sum += v;
   }
   final finite = row.length - nan;
-  print('  stats        : min=${mn.toStringAsFixed(4)} '
-      'max=${mx.toStringAsFixed(4)} '
-      'mean=${(sum / (finite == 0 ? 1 : finite)).toStringAsFixed(5)} '
-      'nan=$nan/${row.length}');
+  print(
+    '  stats        : min=${mn.toStringAsFixed(4)} '
+    'max=${mx.toStringAsFixed(4)} '
+    'mean=${(sum / (finite == 0 ? 1 : finite)).toStringAsFixed(5)} '
+    'nan=$nan/${row.length}',
+  );
   if (nan == 0) {
-    print('  status       : OK — Qwen1.5-MoE streaming runner produces '
-        'finite outputs end-to-end.');
+    print(
+      '  status       : OK — Qwen1.5-MoE streaming runner produces '
+      'finite outputs end-to-end.',
+    );
   } else {
     stderr.writeln('WARNING: $nan NaN(s) in output.');
   }
@@ -194,8 +211,10 @@ Future<void> main(List<String> args) async {
   final newIds = out.skip(seqLen).map((v) => v.toInt()).toList();
   print('  wall         : ${swG.elapsedMilliseconds} ms');
   print('  new ids      : $newIds');
-  print('  status       : OK — KV cache survives per-layer swaps and '
-      'per-token expert streaming.');
+  print(
+    '  status       : OK — KV cache survives per-layer swaps and '
+    'per-token expert streaming.',
+  );
 
   runner.close();
   if (!keep) {
@@ -275,11 +294,7 @@ List<_Spec> _qwen15Specs(Qwen15MoEConfig cfg) {
 // Safetensors writer — chunked to bound peak RAM.
 // ---------------------------------------------------------------------------
 
-void _writeShardFile(
-  String path,
-  List<_Spec> specs,
-  math.Random rng,
-) {
+void _writeShardFile(String path, List<_Spec> specs, math.Random rng) {
   var running = 0;
   final offsets = <int>[];
   for (final s in specs) {

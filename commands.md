@@ -19,6 +19,13 @@ fix so the CUDA driver stub is found. Drop it on native Linux.
 | 9s | gpt-j-6b (**layer-streaming**) | 6.05B | CPU (~1.5 GB resident) | ✅ local | [bin/gptj_streaming_demo.dart](bin/gptj_streaming_demo.dart) — AirLLM-style; peak RAM ≈ embed + lm_head + one layer. See [doc/layer_streaming.md](doc/layer_streaming.md) |
 | 10 | smollm2-135m-instruct | 135M | CPU/GPU | ✅ local | [bin/smollm2_demo.dart](bin/smollm2_demo.dart) — Llama-arch tiny LM |
 | 10s | smollm2 / Llama / Qwen2.5 (**layer-streaming**) | any | CPU | ✅ local | [bin/llama_streaming_demo.dart](bin/llama_streaming_demo.dart) — AirLLM-style, one resident block, `--preset` selects any config from `LlamaHFLoader`. See [doc/layer_streaming.md](doc/layer_streaming.md) |
+| 10rw | Llama-family random-weights validator | any preset | CPU | n/a | [bin/llama_streaming_random_demo.dart](bin/llama_streaming_random_demo.dart) — generates a synthetic fp16 checkpoint at any `LlamaHFLoader` preset shape (single-file or `--shards N`), reads `MemAvailable`, aborts if peak > free RAM. Verified up to Llama-3.2-3B (2 shards, 5.98 GB fp16, all logits finite). |
+| M1 | MoE per-expert streaming (**synthetic**) | any E, K | CPU | n/a | [bin/moe_streaming_demo.dart](bin/moe_streaming_demo.dart) — AirLLM's Kimi K3 trick. Small: 75 % expert bytes saved at E=16 K=4. DeepSeek-V2-Lite scale: 90.6 % at E=64 K=6. Qwen1.5-MoE scale: 93.3 % at E=60 K=4. |
+| M2 | DeepSeek-V2-Lite MoE layer (**real weights**) | 16B / 2.4B active | CPU | ✅ HF | [bin/deepseek_v2_moe_layer_stream.dart](bin/deepseek_v2_moe_layer_stream.dart) — real-checkpoint per-expert streaming for ONE MoE layer (of 26). Not a full-model runner (needs MLA). Download: `hf download deepseek-ai/DeepSeek-V2-Lite-Chat --local-dir ~/models/deepseek-v2-lite-chat` (~31 GB bf16). |
+| M3 | Qwen1.5-MoE layer (**real weights**) | 14B / 2.7B active | CPU | ✅ HF | [bin/qwen15_moe_layer_stream.dart](bin/qwen15_moe_layer_stream.dart) — single-layer variant. Layer 0 fits entirely in shard 1. |
+| M3+ | **Qwen1.5-MoE-A2.7B E2E (layer + per-expert streaming)** | 14B total / 2.7B active | CPU (~1.5 GB resident) | ✅ HF | [bin/qwen15_moe_streaming_demo.dart](bin/qwen15_moe_streaming_demo.dart) — full 24-layer forward with KV cache, per-expert streaming (~4 of 60 experts loaded per token per layer). See below for exact command. Download: `hf download Qwen/Qwen1.5-MoE-A2.7B-Chat --local-dir ~/models/qwen1.5-moe-a2.7b-chat` (~28.6 GB bf16). |
+| M3r | Qwen1.5-MoE random-weights E2E validator | tiny \| full preset | CPU | n/a | [bin/qwen15_moe_streaming_random_demo.dart](bin/qwen15_moe_streaming_random_demo.dart) — generates synthetic checkpoint, runs `forward` + `generate` (KV cache) end-to-end. Tiny preset (D=128 L=2 E=8) finishes in ~50 ms. |
+| V1 | SkyReels-V2 DiT skeleton (**aspirational**) | 1.3B / 14B | CPU | n/a | [bin/skyreels_v2_random_demo.dart](bin/skyreels_v2_random_demo.dart) — Wan-arch video DiT backbone port. Random-weight forward, compiles + finite outputs, does NOT render video (no VAE / T5 / UniPC / 3D-RoPE / Conv3D). See [doc/skyreels_v2_port.md](doc/skyreels_v2_port.md). |
 | T1 | flan-t5-small | 60M | CPU/GPU | ✅ local | [bin/t5_small_demo.dart](bin/t5_small_demo.dart) — encoder-decoder text-to-text (translation, summarization, QA) |
 | T2 | flan-t5-base | 250M | CPU/GPU | ✅ local | [bin/flan_t5_base_demo.dart](bin/flan_t5_base_demo.dart) — same arch, base config, ~0.7 tok/s CPU |
 | T3 | opus-mt-en-de | 74M | CPU/GPU | ✅ local | [bin/marian_en_de_demo.dart](bin/marian_en_de_demo.dart) — dedicated En→De translator, ~2 tok/s CPU |
@@ -47,6 +54,63 @@ fix so the CUDA driver stub is found. Drop it on native Linux.
 All `tokenizer.json` files are already downloaded under
 `models/<name>/`, so every command below runs fully offline — no
 network access needed at runtime. `--text` works everywhere.
+
+### AirLLM-style layer + per-expert streaming
+
+Full details in [doc/layer_streaming.md](doc/layer_streaming.md).
+All streaming runners are CPU-only, fp16-checkpoint-preferred.
+
+**Llama-family layer streaming** (verified on smollm2-135m):
+
+```sh
+# real weights, one resident block, ~2.5 s init + full generate loop
+dart run bin/llama_streaming_demo.dart \
+  --weights   models/smollm2-135m/model.safetensors \
+  --tokenizer models/smollm2-135m/tokenizer.json \
+  --preset    smollm2-135m \
+  --prompt    "The capital of France is" --max-new 10
+# → "The capital of France is Paris. Paris is the largest city in France and"
+
+# random-weight validator for any Llama-family shape (also tests sharded reader)
+dart run bin/llama_streaming_random_demo.dart --preset llama-3.2-1b --shards 4
+```
+
+**Qwen1.5-MoE-A2.7B end-to-end streaming** — 14 B total, 2.7 B
+active, **~1.5 GB resident RAM** while the checkpoint is 28.6 GB on
+disk. Per token, ~4 of 60 experts are streamed per layer (93 %+ of
+per-layer expert bytes skipped):
+
+```sh
+# one-time download (~28.6 GB bf16 → WSL ext4, not /mnt/c)
+hf download Qwen/Qwen1.5-MoE-A2.7B-Chat \
+  --local-dir ~/models/qwen1.5-moe-a2.7b-chat
+
+# real-weights run
+dart run bin/qwen15_moe_streaming_demo.dart \
+  --index     ~/models/qwen1.5-moe-a2.7b-chat/model.safetensors.index.json \
+  --tokenizer ~/models/qwen1.5-moe-a2.7b-chat/tokenizer.json \
+  --prompt    "The capital of France is" --max-new 10
+
+# random-weight smoke test (tiny preset, ~30 ms wall)
+dart run bin/qwen15_moe_streaming_random_demo.dart
+```
+
+**MoE per-expert streaming validator** (works on any config, no weights):
+
+```sh
+# 90.6 % savings at DeepSeek-V2-Lite scale
+dart run bin/moe_streaming_demo.dart --d 2048 --experts 64 --hidden 1408 --topk 6 --tokens 1
+# 93.3 % savings at Qwen1.5-MoE scale
+dart run bin/moe_streaming_demo.dart --d 2048 --experts 60 --hidden 1408 --topk 4 --tokens 1
+```
+
+**Single-layer streaming on real MoE checkpoints** (once the shard
+containing your layer has finished downloading):
+
+```sh
+dart run bin/qwen15_moe_layer_stream.dart      --layer 0
+dart run bin/deepseek_v2_moe_layer_stream.dart --layer 5
+```
 
 ### Refresh tokenizers (only if you nuke `models/`)
 

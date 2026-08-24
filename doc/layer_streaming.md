@@ -120,6 +120,43 @@ dart run bin/gptj_streaming_demo.dart \
   --prompt "Once upon a time," --max-new 5
 ```
 
+**MoE end-to-end** — Qwen1.5-MoE-A2.7B-Chat, 14 B total / 2.7 B
+active, ~1.5 GB resident while the checkpoint is 28.6 GB on disk.
+Per token, only the top-K=4 of E=60 experts get streamed per layer
+(≈93 % of per-layer expert bytes skipped):
+
+```bash
+# one-time download to WSL ext4 (NOT /mnt/c)
+hf download Qwen/Qwen1.5-MoE-A2.7B-Chat \
+  --local-dir ~/models/qwen1.5-moe-a2.7b-chat
+
+# then run
+dart run bin/qwen15_moe_streaming_demo.dart \
+  --index     ~/models/qwen1.5-moe-a2.7b-chat/model.safetensors.index.json \
+  --tokenizer ~/models/qwen1.5-moe-a2.7b-chat/tokenizer.json \
+  --prompt    "The capital of France is" --max-new 10
+```
+
+Random-weight smoke test — no download needed, exercises the full
+pipeline (layer swap + MHA + routing + per-expert stream + KV
+cache) end-to-end in ~30 ms on a tiny preset:
+
+```bash
+dart run bin/qwen15_moe_streaming_random_demo.dart
+# or the real A2.7B shape (28.6 GB temp write, several minutes)
+dart run bin/qwen15_moe_streaming_random_demo.dart --preset full --keep
+```
+
+MoE per-expert streaming validator — measures byte savings at any
+`(D, E, H, K)` without needing a real checkpoint:
+
+```bash
+# 90.6 % savings at DeepSeek-V2-Lite scale
+dart run bin/moe_streaming_demo.dart --d 2048 --experts 64 --hidden 1408 --topk 6 --tokens 1
+# 93.3 % savings at Qwen1.5-MoE scale
+dart run bin/moe_streaming_demo.dart --d 2048 --experts 60 --hidden 1408 --topk 4 --tokens 1
+```
+
 ## What's not implemented
 
 - **Prefetching** — overlap layer *i+1* read with layer *i* compute

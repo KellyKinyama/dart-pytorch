@@ -121,27 +121,27 @@ class Qwen15MoEStreamingRunner {
     this.reader, {
     this.keepFp16 = true,
     this.profile = false,
-  })  : finalNorm = RMSNorm(config.dim, eps: config.rmsNormEps),
-        rope = RopeCache(
-          maxCtx: config.maxCtx,
-          headDim: config.dim ~/ config.numHeads,
-          base: config.ropeBase,
-        ),
-        attnNorm = RMSNorm(config.dim, eps: config.rmsNormEps),
-        ffnNorm = RMSNorm(config.dim, eps: config.rmsNormEps),
-        attn = MultiHeadAttention(
-          config.dim,
-          config.numHeads,
-          numKvHeads: config.numKvHeads,
-          bias: true, // Qwen has bias on Q/K/V
-          outBias: false, // but not on O
-          seed: 0,
-        ),
-        _routerW = Tensor.fill([config.dim, config.numExperts], 0.0),
-        _sharedGate = Tensor.fill([config.sharedHidden, config.dim], 0.0),
-        _sharedUp = Tensor.fill([config.sharedHidden, config.dim], 0.0),
-        _sharedDown = Tensor.fill([config.dim, config.sharedHidden], 0.0),
-        _sharedExpertGate = Tensor.fill([1, config.dim], 0.0) {
+  }) : finalNorm = RMSNorm(config.dim, eps: config.rmsNormEps),
+       rope = RopeCache(
+         maxCtx: config.maxCtx,
+         headDim: config.dim ~/ config.numHeads,
+         base: config.ropeBase,
+       ),
+       attnNorm = RMSNorm(config.dim, eps: config.rmsNormEps),
+       ffnNorm = RMSNorm(config.dim, eps: config.rmsNormEps),
+       attn = MultiHeadAttention(
+         config.dim,
+         config.numHeads,
+         numKvHeads: config.numKvHeads,
+         bias: true, // Qwen has bias on Q/K/V
+         outBias: false, // but not on O
+         seed: 0,
+       ),
+       _routerW = Tensor.fill([config.dim, config.numExperts], 0.0),
+       _sharedGate = Tensor.fill([config.sharedHidden, config.dim], 0.0),
+       _sharedUp = Tensor.fill([config.sharedHidden, config.dim], 0.0),
+       _sharedDown = Tensor.fill([config.dim, config.sharedHidden], 0.0),
+       _sharedExpertGate = Tensor.fill([1, config.dim], 0.0) {
     attn.rope = rope;
     _onesD = Tensor.fill([1, config.dim], 1.0);
     _loadPersistent();
@@ -156,11 +156,9 @@ class Qwen15MoEStreamingRunner {
     );
     _copy(
       finalNorm.gamma,
-      _expectShape(
-        reader.readTensor('model.norm.weight'),
-        [d],
-        'model.norm.weight',
-      ),
+      _expectShape(reader.readTensor('model.norm.weight'), [
+        d,
+      ], 'model.norm.weight'),
     );
     if (config.tieWeights) {
       _untiedHeadWeight = null;
@@ -209,10 +207,7 @@ class Qwen15MoEStreamingRunner {
       '$p.self_attn.q_proj.weight',
     );
     for (int hh = 0; hh < h; hh++) {
-      _copy(
-        attn.wq[hh].weight,
-        qW.sliceRows(hh * headDim, (hh + 1) * headDim),
-      );
+      _copy(attn.wq[hh].weight, qW.sliceRows(hh * headDim, (hh + 1) * headDim));
     }
     final kW = _expectShape(
       reader.readTensor('$p.self_attn.k_proj.weight', keepFp16: keepFp16),
@@ -220,10 +215,7 @@ class Qwen15MoEStreamingRunner {
       '$p.self_attn.k_proj.weight',
     );
     for (int hh = 0; hh < kvH; hh++) {
-      _copy(
-        attn.wk[hh].weight,
-        kW.sliceRows(hh * headDim, (hh + 1) * headDim),
-      );
+      _copy(attn.wk[hh].weight, kW.sliceRows(hh * headDim, (hh + 1) * headDim));
     }
     final vW = _expectShape(
       reader.readTensor('$p.self_attn.v_proj.weight', keepFp16: keepFp16),
@@ -231,39 +223,30 @@ class Qwen15MoEStreamingRunner {
       '$p.self_attn.v_proj.weight',
     );
     for (int hh = 0; hh < kvH; hh++) {
-      _copy(
-        attn.wv[hh].weight,
-        vW.sliceRows(hh * headDim, (hh + 1) * headDim),
-      );
+      _copy(attn.wv[hh].weight, vW.sliceRows(hh * headDim, (hh + 1) * headDim));
     }
 
-    final qB = _expectShape(
-      reader.readTensor('$p.self_attn.q_proj.bias'),
-      [h * headDim],
-      '$p.self_attn.q_proj.bias',
-    );
+    final qB = _expectShape(reader.readTensor('$p.self_attn.q_proj.bias'), [
+      h * headDim,
+    ], '$p.self_attn.q_proj.bias');
     for (int hh = 0; hh < h; hh++) {
       _copy(
         attn.wq[hh].bias!,
         _reshape1xN(_sliceVector(qB, hh * headDim, (hh + 1) * headDim)),
       );
     }
-    final kB = _expectShape(
-      reader.readTensor('$p.self_attn.k_proj.bias'),
-      [kvH * headDim],
-      '$p.self_attn.k_proj.bias',
-    );
+    final kB = _expectShape(reader.readTensor('$p.self_attn.k_proj.bias'), [
+      kvH * headDim,
+    ], '$p.self_attn.k_proj.bias');
     for (int hh = 0; hh < kvH; hh++) {
       _copy(
         attn.wk[hh].bias!,
         _reshape1xN(_sliceVector(kB, hh * headDim, (hh + 1) * headDim)),
       );
     }
-    final vB = _expectShape(
-      reader.readTensor('$p.self_attn.v_proj.bias'),
-      [kvH * headDim],
-      '$p.self_attn.v_proj.bias',
-    );
+    final vB = _expectShape(reader.readTensor('$p.self_attn.v_proj.bias'), [
+      kvH * headDim,
+    ], '$p.self_attn.v_proj.bias');
     for (int hh = 0; hh < kvH; hh++) {
       _copy(
         attn.wv[hh].bias!,
@@ -349,7 +332,12 @@ class Qwen15MoEStreamingRunner {
     final decision = moeStreaming.route(_routerW, hFfn);
 
     // Shared expert path (fused SwiGLU + scalar sigmoid gate).
-    final sharedOut = swiGluForwardRaw(hFfn, _sharedGate, _sharedUp, _sharedDown);
+    final sharedOut = swiGluForwardRaw(
+      hFfn,
+      _sharedGate,
+      _sharedUp,
+      _sharedDown,
+    );
     final sharedGateLogit = hFfn.matmul(_sharedExpertGate.transpose());
     final sharedGateScore = sharedGateLogit.sigmoid();
     final sharedGateBcast = sharedGateScore.matmul(_onesD);
@@ -359,10 +347,10 @@ class Qwen15MoEStreamingRunner {
     for (final j in decision.sortedUnion) {
       final w = moeStreaming.loadRoutedExpert(j, keepFp16: keepFp16);
       final expertOut = swiGluForward(hFfn, w);
-      final wj = Tensor.fromList(
-        [hFfn.shape[0], 1],
-        decision.weightForExpert(j),
-      );
+      final wj = Tensor.fromList([
+        hFfn.shape[0],
+        1,
+      ], decision.weightForExpert(j));
       final wjBcast = wj.matmul(_onesD);
       acc = acc + (expertOut * wjBcast);
     }
@@ -372,11 +360,7 @@ class Qwen15MoEStreamingRunner {
 
   /// Full forward through all N layers. `tokens` is `[seqLen]`
   /// float32 token ids. Returns `[seqLen, vocab]` logits.
-  Tensor forward(
-    Tensor tokens, {
-    int startPos = 0,
-    EncoderCache? cache,
-  }) {
+  Tensor forward(Tensor tokens, {int startPos = 0, EncoderCache? cache}) {
     if (tokens.shape.length != 1) {
       throw ArgumentError(
         'Qwen15MoEStreamingRunner: tokens must be 1D [seqLen]; '
@@ -410,10 +394,7 @@ class Qwen15MoEStreamingRunner {
   }
 
   /// Greedy autoregressive decode with persistent per-layer KV cache.
-  List<double> generate(
-    List<double> prompt, {
-    required int maxNewTokens,
-  }) {
+  List<double> generate(List<double> prompt, {required int maxNewTokens}) {
     if (prompt.isEmpty) {
       throw ArgumentError('generate: prompt must be non-empty');
     }
@@ -422,8 +403,7 @@ class Qwen15MoEStreamingRunner {
     final cache = EncoderCache.empty(config.numLayers, config.numKvHeads);
 
     final promptT = Tensor.fromList([prompt.length], prompt);
-    var logits =
-        forward(promptT, startPos: 0, cache: cache).toList();
+    var logits = forward(promptT, startPos: 0, cache: cache).toList();
     out.add(_argmax(logits, (prompt.length - 1) * v, v).toDouble());
 
     for (int step = 1; step < maxNewTokens; step++) {

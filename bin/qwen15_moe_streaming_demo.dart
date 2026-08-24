@@ -22,9 +22,11 @@ import 'dart:io';
 import 'package:dart_pytorch/dart_pytorch.dart';
 
 Future<void> main(List<String> args) async {
-  var indexPath = '${_defaultHome()}/models/qwen1.5-moe-a2.7b-chat/'
+  var indexPath =
+      '${_defaultHome()}/models/qwen1.5-moe-a2.7b-chat/'
       'model.safetensors.index.json';
-  var tokenizerPath = '${_defaultHome()}/models/qwen1.5-moe-a2.7b-chat/'
+  var tokenizerPath =
+      '${_defaultHome()}/models/qwen1.5-moe-a2.7b-chat/'
       'tokenizer.json';
   var prompt = 'The capital of France is';
   var maxNew = 10;
@@ -60,8 +62,10 @@ Future<void> main(List<String> args) async {
     if (!File(p).existsSync()) {
       stderr.writeln('missing: $p');
       stderr.writeln('download with:');
-      stderr.writeln('  hf download Qwen/Qwen1.5-MoE-A2.7B-Chat '
-          '--local-dir ~/models/qwen1.5-moe-a2.7b-chat');
+      stderr.writeln(
+        '  hf download Qwen/Qwen1.5-MoE-A2.7B-Chat '
+        '--local-dir ~/models/qwen1.5-moe-a2.7b-chat',
+      );
       exit(2);
     }
   }
@@ -81,14 +85,12 @@ Future<void> main(List<String> args) async {
   print('  header parse : ${swOpen.elapsedMilliseconds} ms');
 
   final swInit = Stopwatch()..start();
-  final runner = Qwen15MoEStreamingRunner(
-    cfg,
-    reader,
-    profile: profile,
-  );
+  final runner = Qwen15MoEStreamingRunner(cfg, reader, profile: profile);
   swInit.stop();
-  print('  runner init  : ${swInit.elapsedMilliseconds} ms '
-      '(persistent embed + head + rope + resident block)');
+  print(
+    '  runner init  : ${swInit.elapsedMilliseconds} ms '
+    '(persistent embed + head + rope + resident block)',
+  );
 
   final ids = tokenizer.encode(prompt);
   final promptF = ids.map((i) => i.toDouble()).toList();
@@ -104,8 +106,10 @@ Future<void> main(List<String> args) async {
   swG.stop();
   final newIds = out.skip(ids.length).map((v) => v.toInt()).toList();
   final text = tokenizer.decode(newIds);
-  print('  wall         : ${swG.elapsedMilliseconds} ms '
-      '(${(newIds.length * 1000.0 / swG.elapsedMilliseconds).toStringAsFixed(3)} tok/s)');
+  print(
+    '  wall         : ${swG.elapsedMilliseconds} ms '
+    '(${(newIds.length * 1000.0 / swG.elapsedMilliseconds).toStringAsFixed(3)} tok/s)',
+  );
   print('');
   print('== completion ==');
   print(prompt + text);
