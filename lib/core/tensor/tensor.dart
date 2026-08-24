@@ -512,6 +512,34 @@ class Tensor implements ffi.Finalizable {
     source._cpuF16Bits = null;
   }
 
+  /// Point this tensor's storage at [source]'s buffers without
+  /// taking ownership — both tensors continue to reference the same
+  /// backing arrays. Zero copy, zero allocation. Neither side may
+  /// mutate the storage afterwards; used by streaming runners to
+  /// swap resident weight slots between persistent cached views.
+  void shareCpuStorageFrom(Tensor source) {
+    if (device != Device.CPU || source.device != Device.CPU) {
+      throw StateError(
+        'shareCpuStorageFrom: both tensors must be CPU '
+        '(dst=$device, src=${source.device})',
+      );
+    }
+    if (source.length != length) {
+      throw ArgumentError(
+        'shareCpuStorageFrom: length mismatch — got ${source.length}, '
+        'expected $length',
+      );
+    }
+    _cpuData = source._cpuData;
+    _cpuF16Bits = source._cpuF16Bits;
+    dtype = source.dtype;
+    _grad?.dispose();
+    _grad = null;
+    _children = const [];
+    _backward = null;
+    requiresGrad = false;
+  }
+
   /// Extract a row-slice `[start, end)` of a rank-2 CPU tensor into a
   /// fresh CPU tensor of the same dtype. fp16 storage is preserved
   /// bit-for-bit (no fp32 round-trip), which matters when a HF

@@ -139,18 +139,27 @@ class Qwen15MoEStreamingRunner {
   late final List<Tensor> _attnNormGammas;
   late final List<Tensor> _ffnNormGammas;
 
-  /// Persistent per-layer MHA weight caches. Each entry is the full
-  /// `[H*headDim, D]` fp16 blob (biases as `[H*headDim]` fp32). Per
-  /// swap, sliceRows produces fresh per-head views (native memmove);
-  /// no disk I/O. Costs ~24 x 32 MB fp16 = 768 MB persistent for
-  /// Qwen1.5-MoE's Q/K/V/O with biases.
-  late final List<Tensor> _qWs;
-  late final List<Tensor> _kWs;
-  late final List<Tensor> _vWs;
-  late final List<Tensor> _oWs;
-  late final List<Tensor> _qBs;
-  late final List<Tensor> _kBs;
-  late final List<Tensor> _vBs;
+  /// Persistent per-layer MHA weight caches, PRE-SLICED to per-head
+  /// views at load time. Each entry `_qWHeads[i][hh]` is a fp16
+  /// `[headDim, D]` tensor with a fresh Uint16List backing — swap
+  /// points the resident head Linear's weight at it via
+  /// [Tensor.shareCpuStorageFrom], so per-layer transitions become
+  /// O(1) pointer flips with no allocation, no copy, no GC. Biases
+  /// are cached the same way: `[1, headDim]` fp32 per head.
+  /// `_oWFull[i]` is the full `[D, D]` output projection (not
+  /// per-head).
+  late final List<List<Tensor>> _qWHeads;
+  late final List<List<Tensor>> _kWHeads;
+  late final List<List<Tensor>> _vWHeads;
+  late final List<Tensor> _oWFull;
+  late final List<List<Tensor>> _qBHeads;
+  late final List<List<Tensor>> _kBHeads;
+  late final List<List<Tensor>> _vBHeads;
+
+  /// LRU-capped cache of routed expert weights, one small cache per
+  /// layer. Hit means we skip the disk read for that expert's SwiGLU
+  /// triplet on this forward. Capacity is `topK * 2` per layer.
+  late final List<_ExpertLru> _expertCaches;
 
   /// Reused across forwards for row-broadcasting `[T, 1] @ [1, D]
   /// → [T, D]`. Allocated once.
@@ -203,13 +212,20 @@ class Qwen15MoEStreamingRunner {
         3 * config.sharedHidden * d * 2 + // shared fp16
         3 * config.sharedHidden * d * 4; // shared transposes fp32
     // Per-forward transient: K experts × (fp16 read + fp32 transpose)
-    // held briefly.
+    // held briefly, plus the persistent LRU cache (2 * K per layer).
     final perLayerTransient = config.topK * 3 * config.moeHidden * d * (2 + 4);
+    final lruBytes = config.numLayers *
+        (config.topK * 2) *
+        3 *
+        config.moeHidden *
+        d *
+        2; // fp16 per expert triplet
     final peakEst =
         embedBytes +
         headBytes +
         residentBlockBytes +
         perLayerTransient +
+        lruBytes +
         300 * 1024 * 1024; // Dart runtime + activations
 
     final free = _freeRamBytes();
@@ -220,7 +236,8 @@ class Qwen15MoEStreamingRunner {
         '(embed ${_fmtBytes(embedBytes)}'
         '${headBytes > 0 ? ' + lm_head ${_fmtBytes(headBytes)}' : ''} '
         '+ resident block ${_fmtBytes(residentBlockBytes)} '
-        '+ per-forward transient ${_fmtBytes(perLayerTransient)}) '
+        '+ per-forward transient ${_fmtBytes(perLayerTransient)} '
+        '+ expert LRU ${_fmtBytes(lruBytes)}) '
         'exceeds free RAM ${_fmtBytes(free)}. Either shrink the '
         'preset, close other processes, or raise the WSL memory '
         'limit in %USERPROFILE%\\.wslconfig.',
@@ -340,51 +357,77 @@ class Qwen15MoEStreamingRunner {
       );
     }
 
-    // Cache MHA weights per layer. Bulk fp16 blobs stay on the runner;
-    // per-swap `sliceRows` creates fresh per-head views via native
-    // memmove and the resident MHA adopts them.
+    // Cache MHA weights per layer as PRE-SLICED per-head views.
+    // Full [H*headDim, D] blobs are sliced once at load time and the
+    // parents are dropped — memory footprint is the same as before.
+    // Per-swap cost becomes O(1) shareCpuStorageFrom pointer flips.
     final h = config.numHeads;
     final kvH = config.numKvHeads;
     final headDim = d ~/ h;
-    _qWs = List<Tensor>.filled(config.numLayers, Tensor.fill([1, 1], 0.0));
-    _kWs = List<Tensor>.filled(config.numLayers, Tensor.fill([1, 1], 0.0));
-    _vWs = List<Tensor>.filled(config.numLayers, Tensor.fill([1, 1], 0.0));
-    _oWs = List<Tensor>.filled(config.numLayers, Tensor.fill([1, 1], 0.0));
-    _qBs = List<Tensor>.filled(config.numLayers, Tensor.fill([1], 0.0));
-    _kBs = List<Tensor>.filled(config.numLayers, Tensor.fill([1], 0.0));
-    _vBs = List<Tensor>.filled(config.numLayers, Tensor.fill([1], 0.0));
+    _qWHeads = List<List<Tensor>>.generate(config.numLayers, (_) => []);
+    _kWHeads = List<List<Tensor>>.generate(config.numLayers, (_) => []);
+    _vWHeads = List<List<Tensor>>.generate(config.numLayers, (_) => []);
+    _oWFull = List<Tensor>.filled(config.numLayers, Tensor.fill([1, 1], 0.0));
+    _qBHeads = List<List<Tensor>>.generate(config.numLayers, (_) => []);
+    _kBHeads = List<List<Tensor>>.generate(config.numLayers, (_) => []);
+    _vBHeads = List<List<Tensor>>.generate(config.numLayers, (_) => []);
     for (int i = 0; i < config.numLayers; i++) {
       final p = 'model.layers.$i.self_attn';
-      _qWs[i] = _expectShape(
+      final qW = _expectShape(
         reader.readTensor('$p.q_proj.weight', keepFp16: keepFp16),
         [h * headDim, d],
         '$p.q_proj.weight',
       );
-      _kWs[i] = _expectShape(
+      final kW = _expectShape(
         reader.readTensor('$p.k_proj.weight', keepFp16: keepFp16),
         [kvH * headDim, d],
         '$p.k_proj.weight',
       );
-      _vWs[i] = _expectShape(
+      final vW = _expectShape(
         reader.readTensor('$p.v_proj.weight', keepFp16: keepFp16),
         [kvH * headDim, d],
         '$p.v_proj.weight',
       );
-      _oWs[i] = _expectShape(
+      _oWFull[i] = _expectShape(
         reader.readTensor('$p.o_proj.weight', keepFp16: keepFp16),
         [d, d],
         '$p.o_proj.weight',
       );
-      _qBs[i] = _expectShape(reader.readTensor('$p.q_proj.bias'), [
+      final qB = _expectShape(reader.readTensor('$p.q_proj.bias'), [
         h * headDim,
       ], '$p.q_proj.bias');
-      _kBs[i] = _expectShape(reader.readTensor('$p.k_proj.bias'), [
+      final kB = _expectShape(reader.readTensor('$p.k_proj.bias'), [
         kvH * headDim,
       ], '$p.k_proj.bias');
-      _vBs[i] = _expectShape(reader.readTensor('$p.v_proj.bias'), [
+      final vB = _expectShape(reader.readTensor('$p.v_proj.bias'), [
         kvH * headDim,
       ], '$p.v_proj.bias');
+      for (int hh = 0; hh < h; hh++) {
+        _qWHeads[i].add(qW.sliceRows(hh * headDim, (hh + 1) * headDim));
+        _qBHeads[i].add(
+          _reshape1xN(_sliceVector(qB, hh * headDim, (hh + 1) * headDim)),
+        );
+      }
+      for (int hh = 0; hh < kvH; hh++) {
+        _kWHeads[i].add(kW.sliceRows(hh * headDim, (hh + 1) * headDim));
+        _vWHeads[i].add(vW.sliceRows(hh * headDim, (hh + 1) * headDim));
+        _kBHeads[i].add(
+          _reshape1xN(_sliceVector(kB, hh * headDim, (hh + 1) * headDim)),
+        );
+        _vBHeads[i].add(
+          _reshape1xN(_sliceVector(vB, hh * headDim, (hh + 1) * headDim)),
+        );
+      }
+      // qW / kW / vW / qB / kB / vB unreferenced — GC'd next cycle.
     }
+
+    // LRU cache of routed expert weights (SwiGLU triplet) per layer.
+    // Cap at 2x topK; a warm run reuses experts that recur across
+    // tokens without paying disk I/O twice.
+    _expertCaches = List<_ExpertLru>.generate(
+      config.numLayers,
+      (_) => _ExpertLru(capacity: config.topK * 2),
+    );
   }
 
   /// Swap layer [i]'s non-expert weights (MHA + norms + router +
@@ -392,14 +435,11 @@ class Qwen15MoEStreamingRunner {
   /// streamed on-demand inside `forward` after routing.
   void _swapLayerNonExperts(int i) {
     final sw = profile ? (Stopwatch()..start()) : null;
-    final cfg = config;
-    final d = cfg.dim;
-    final h = cfg.numHeads;
-    final kvH = cfg.numKvHeads;
-    final headDim = d ~/ h;
+    final h = config.numHeads;
+    final kvH = config.numKvHeads;
 
     // All non-expert weights come from per-layer caches populated at
-    // construction. No disk I/O in this method.
+    // construction. Norms are tiny — do the fp16-safe adopt/copy.
     _copy(attnNorm.gamma, _attnNormGammas[i]);
     _copy(ffnNorm.gamma, _ffnNormGammas[i]);
     _routerW = _routerWs[i];
@@ -408,45 +448,25 @@ class Qwen15MoEStreamingRunner {
     _sharedDownT = _sharedDownTs[i];
     _sharedExpertGateT = _sharedExpertGateTs[i];
 
-    // Q / K / V per-head from cached full weight blobs. sliceRows
-    // creates a fresh fp16 buffer (native memmove) so the cache
-    // survives the adopt.
-    final qW = _qWs[i];
+    // MHA: point resident head Linears at the pre-sliced persistent
+    // per-head caches. Zero-copy, zero-alloc pointer flips.
+    final qWH = _qWHeads[i];
+    final kWH = _kWHeads[i];
+    final vWH = _vWHeads[i];
+    final qBH = _qBHeads[i];
+    final kBH = _kBHeads[i];
+    final vBH = _vBHeads[i];
     for (int hh = 0; hh < h; hh++) {
-      _copy(attn.wq[hh].weight, qW.sliceRows(hh * headDim, (hh + 1) * headDim));
+      attn.wq[hh].weight.shareCpuStorageFrom(qWH[hh]);
+      attn.wq[hh].bias!.shareCpuStorageFrom(qBH[hh]);
     }
-    final kW = _kWs[i];
     for (int hh = 0; hh < kvH; hh++) {
-      _copy(attn.wk[hh].weight, kW.sliceRows(hh * headDim, (hh + 1) * headDim));
+      attn.wk[hh].weight.shareCpuStorageFrom(kWH[hh]);
+      attn.wv[hh].weight.shareCpuStorageFrom(vWH[hh]);
+      attn.wk[hh].bias!.shareCpuStorageFrom(kBH[hh]);
+      attn.wv[hh].bias!.shareCpuStorageFrom(vBH[hh]);
     }
-    final vW = _vWs[i];
-    for (int hh = 0; hh < kvH; hh++) {
-      _copy(attn.wv[hh].weight, vW.sliceRows(hh * headDim, (hh + 1) * headDim));
-    }
-
-    final qB = _qBs[i];
-    for (int hh = 0; hh < h; hh++) {
-      _copy(
-        attn.wq[hh].bias!,
-        _reshape1xN(_sliceVector(qB, hh * headDim, (hh + 1) * headDim)),
-      );
-    }
-    final kB = _kBs[i];
-    for (int hh = 0; hh < kvH; hh++) {
-      _copy(
-        attn.wk[hh].bias!,
-        _reshape1xN(_sliceVector(kB, hh * headDim, (hh + 1) * headDim)),
-      );
-    }
-    final vB = _vBs[i];
-    for (int hh = 0; hh < kvH; hh++) {
-      _copy(
-        attn.wv[hh].bias!,
-        _reshape1xN(_sliceVector(vB, hh * headDim, (hh + 1) * headDim)),
-      );
-    }
-
-    _copy(attn.wo.weight, _oWs[i].sliceRows(0, _oWs[i].shape[0]));
+    attn.wo.weight.shareCpuStorageFrom(_oWFull[i]);
 
     if (sw != null) {
       sw.stop();
@@ -509,11 +529,20 @@ class Qwen15MoEStreamingRunner {
       _prof.sharedExpert += sw.elapsedMicroseconds;
     }
 
-    // Routed experts — stream only the union of top-K.
+    // Routed experts — stream only the union of top-K. LRU cache
+    // per layer skips disk reads on repeat picks across tokens.
+    final lru = _expertCaches[layerIdx];
     for (final j in decision.sortedUnion) {
       sw?.reset();
       sw?.start();
-      final w = moeStreaming.loadRoutedExpert(j, keepFp16: keepFp16);
+      var w = lru.get(j);
+      if (w == null) {
+        w = moeStreaming.loadRoutedExpert(j, keepFp16: keepFp16);
+        lru.put(j, w);
+        _prof.expertMisses++;
+      } else {
+        _prof.expertHits++;
+      }
       if (sw != null) {
         sw.stop();
         _prof.expertStream += sw.elapsedMicroseconds;
@@ -709,6 +738,8 @@ class _StageProfile {
   int expertCompute = 0;
   int head = 0;
   int expertsCounted = 0;
+  int expertHits = 0;
+  int expertMisses = 0;
 
   void reset() {
     embed = 0;
@@ -720,6 +751,8 @@ class _StageProfile {
     expertCompute = 0;
     head = 0;
     expertsCounted = 0;
+    expertHits = 0;
+    expertMisses = 0;
   }
 
   void report(int numLayers) {
@@ -759,6 +792,36 @@ class _StageProfile {
     // ignore: avoid_print
     print(row('head projection', head));
     // ignore: avoid_print
-    print('  ---- $expertsCounted routed experts fired total ----');
+    print(
+      '  ---- $expertsCounted experts fired  '
+      '(hit=$expertHits miss=$expertMisses '
+      '${expertsCounted > 0 ? (100 * expertHits / expertsCounted).toStringAsFixed(1) : '0.0'}% cache) ----',
+    );
+  }
+}
+
+/// Fixed-capacity LRU cache of routed expert weights, one per MoE
+/// layer. Keys are expert indices `[0, numExperts)`; values are the
+/// SwiGLU triplet. On a hit the entry is bumped to the MRU end.
+class _ExpertLru {
+  final int capacity;
+  final Map<int, RoutedExpertWeights> _map = <int, RoutedExpertWeights>{};
+
+  _ExpertLru({required this.capacity});
+
+  RoutedExpertWeights? get(int j) {
+    final v = _map.remove(j);
+    if (v == null) return null;
+    _map[j] = v;
+    return v;
+  }
+
+  void put(int j, RoutedExpertWeights w) {
+    if (_map.containsKey(j)) {
+      _map.remove(j);
+    } else if (_map.length >= capacity) {
+      _map.remove(_map.keys.first);
+    }
+    _map[j] = w;
   }
 }

@@ -100,7 +100,8 @@ class Blas {
           try {
             final setNumThreads = lib
                 .lookup<NativeFunction<Void Function(Int32)>>(
-                    'openblas_set_num_threads')
+                  'openblas_set_num_threads',
+                )
                 .asFunction<void Function(int)>();
             final cpus = Platform.numberOfProcessors;
             final want = cpus >= 8 ? 4 : (cpus >= 4 ? 2 : 1);
