@@ -92,22 +92,31 @@ void main() {
         final feats = encodeFen(fen);
         final rf = net.evaluate(feats);
         final ri = net.evaluateInt(feats);
-        expect(rf.cp * ri.cp, greaterThan(0),
-            reason: 'float=${rf.cp}, int=${ri.cp} disagree on $fen');
+        expect(
+          rf.cp * ri.cp,
+          greaterThan(0),
+          reason: 'float=${rf.cp}, int=${ri.cp} disagree on $fen',
+        );
       }
     });
 
-    test('int backend material-monotone: -black queen gives >+500 cp uplift', () {
-      if (!present) return;
-      const startpos =
-          'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
-      const blackNoQueen =
-          'rnb1kbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
-      final rBase = net.evaluateInt(encodeFen(startpos));
-      final rBetter = net.evaluateInt(encodeFen(blackNoQueen));
-      expect(rBetter.cp - rBase.cp, greaterThan(500),
-          reason: 'delta=${rBetter.cp - rBase.cp} should be >500 cp');
-    });
+    test(
+      'int backend material-monotone: -black queen gives >+500 cp uplift',
+      () {
+        if (!present) return;
+        const startpos =
+            'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+        const blackNoQueen =
+            'rnb1kbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+        final rBase = net.evaluateInt(encodeFen(startpos));
+        final rBetter = net.evaluateInt(encodeFen(blackNoQueen));
+        expect(
+          rBetter.cp - rBase.cp,
+          greaterThan(500),
+          reason: 'delta=${rBetter.cp - rBase.cp} should be >500 cp',
+        );
+      },
+    );
   });
 
   if (!present) {
