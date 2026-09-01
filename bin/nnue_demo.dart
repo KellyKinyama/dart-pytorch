@@ -34,8 +34,10 @@ Future<void> main(List<String> args) async {
     stderr.writeln('missing $netPath — download with:');
     stderr.writeln('  mkdir -p models/stockfish');
     stderr.writeln('  curl -sL -o $netPath \\');
-    stderr.writeln('    '
-        'https://tests.stockfishchess.org/api/nn/nn-5af11540bbfe.nnue');
+    stderr.writeln(
+      '    '
+      'https://tests.stockfishchess.org/api/nn/nn-5af11540bbfe.nnue',
+    );
     exit(64);
   }
 
@@ -43,9 +45,11 @@ Future<void> main(List<String> args) async {
   final loadStart = DateTime.now();
   final raw = NnueReader.loadFile(netPath);
   stdout.writeln('  ${raw.header}');
-  stdout.writeln('  FT: numInputs=${raw.featureTransformer.numInputs}, '
-      'ftDim=${raw.featureTransformer.ftDim}, '
-      'psqtBuckets=${raw.featureTransformer.psqtBuckets}');
+  stdout.writeln(
+    '  FT: numInputs=${raw.featureTransformer.numInputs}, '
+    'ftDim=${raw.featureTransformer.ftDim}, '
+    'psqtBuckets=${raw.featureTransformer.psqtBuckets}',
+  );
   stdout.writeln('  ${raw.network.buckets.length} network buckets');
 
   final net = NnueNet.fromRaw(raw);
@@ -57,20 +61,41 @@ Future<void> main(List<String> args) async {
   stdout.writeln('  $fen');
   final features = encodeFen(fen);
   stdout.writeln('  side to move: ${features.stm.name}');
-  stdout.writeln('  active features: white=${features.whiteActive.length}, '
-      'black=${features.blackActive.length}');
-  stdout.writeln('  piece count: ${features.pieceCount} '
-      '(bucket ${(features.pieceCount - 1) >> 2})');
+  stdout.writeln(
+    '  active features: white=${features.whiteActive.length}, '
+    'black=${features.blackActive.length}',
+  );
+  stdout.writeln(
+    '  piece count: ${features.pieceCount} '
+    '(bucket ${(features.pieceCount - 1) >> 2})',
+  );
 
   final r = net.evaluate(features);
   stdout.writeln('');
-  stdout.writeln('Evaluation:');
-  stdout.writeln('  ${r.cp.toStringAsFixed(1)} cp '
-      '(${_cpBar(r.cp)} for ${features.stm.name})');
+  stdout.writeln('Evaluation (float port):');
+  stdout.writeln(
+    '  ${r.cp.toStringAsFixed(1)} cp '
+    '(${_cpBar(r.cp)} for ${features.stm.name})',
+  );
   stdout.writeln('  bucket ......... ${r.bucket}');
   stdout.writeln('  L3 output ...... ${r.rawL3Output.toStringAsFixed(2)} cp');
-  stdout.writeln('  PSQT ........... '
-      '${r.psqtContribution.toStringAsFixed(2)} cp');
+  stdout.writeln(
+    '  PSQT ........... '
+    '${r.psqtContribution.toStringAsFixed(2)} cp',
+  );
+
+  final ri = net.evaluateInt(features);
+  stdout.writeln('');
+  stdout.writeln('Evaluation (int backend, Stockfish-matched math):');
+  stdout.writeln(
+    '  ${ri.cp.toStringAsFixed(1)} cp '
+    '(${_cpBar(ri.cp)} for ${features.stm.name})',
+  );
+  stdout.writeln('  L3 output ...... ${ri.rawL3Output.toStringAsFixed(2)} cp');
+  stdout.writeln(
+    '  PSQT ........... '
+    '${ri.psqtContribution.toStringAsFixed(2)} cp',
+  );
 }
 
 String _cpBar(double cp) {

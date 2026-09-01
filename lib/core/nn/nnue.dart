@@ -71,6 +71,7 @@ class NnueNet {
     required this.ftWeights,
     required this.ftPsqt,
     required this.buckets,
+    required this.raw,
   });
 
   final int ftDim;
@@ -82,6 +83,11 @@ class NnueNet {
   final Float32List ftPsqt; // [numInputs, psqtBuckets] row-major
 
   final List<_BucketFloat> buckets;
+
+  /// Raw quantised weights kept alongside the floats so [evaluateInt]
+  /// can run Stockfish's exact int8×int8 arithmetic without a second
+  /// file parse.
+  final NnueRaw raw;
 
   /// Dequantise the raw file into floats. See top-of-file for the
   /// scale factors used; they follow Stockfish's canonical quant
@@ -148,6 +154,7 @@ class NnueNet {
       ftWeights: ftWeights,
       ftPsqt: ftPsqt,
       buckets: buckets,
+      raw: raw,
     );
   }
 
@@ -246,7 +253,148 @@ class NnueNet {
       rawL3Output: l3 * _kOutputScale,
     );
   }
+
+  /// Stockfish-matched integer forward pass.
+  ///
+  /// Mirrors Stockfish's SIMD kernels bit-for-bit: int16 FT accumulator,
+  /// int8 hidden weights, int32 biases, shifts by `WeightScaleBits = 6`
+  /// between layers, ClippedReLU / SqrClippedReLU on uint8 outputs. The
+  /// returned cp is the **raw network + PSQT output** in centipawn
+  /// units. Stockfish's UCI cp is further scaled by phase, material
+  /// drawishness, optimism and contempt — none of which are part of
+  /// NNUE itself — so this value can be 2–5× larger than what a live
+  /// Stockfish `d` command would print for the same position.
+  NnueEvalResult evaluateInt(NnueFeatures features) {
+    final ft = raw.featureTransformer;
+    final ftDim = ft.ftDim;
+
+    final accStm = Int32List(ftDim);
+    final accNstm = Int32List(ftDim);
+    for (int i = 0; i < ftDim; i++) {
+      accStm[i] = ft.biasesI16[i];
+      accNstm[i] = ft.biasesI16[i];
+    }
+
+    final stmActive = features.stm == NnuePerspective.white
+        ? features.whiteActive
+        : features.blackActive;
+    final nstmActive = features.stm == NnuePerspective.white
+        ? features.blackActive
+        : features.whiteActive;
+
+    for (final idx in stmActive) {
+      final rowBase = idx * ftDim;
+      for (int j = 0; j < ftDim; j++) {
+        accStm[j] += ft.weightsI16[rowBase + j];
+      }
+    }
+    for (final idx in nstmActive) {
+      final rowBase = idx * ftDim;
+      for (int j = 0; j < ftDim; j++) {
+        accNstm[j] += ft.weightsI16[rowBase + j];
+      }
+    }
+
+    final bucket = ((features.pieceCount - 1) >> 2).clamp(0, psqtBuckets - 1);
+    int psqtStm = 0;
+    int psqtNstm = 0;
+    for (final idx in stmActive) {
+      psqtStm += ft.psqtI32[idx * psqtBuckets + bucket];
+    }
+    for (final idx in nstmActive) {
+      psqtNstm += ft.psqtI32[idx * psqtBuckets + bucket];
+    }
+    final psqtRaw = (psqtStm - psqtNstm) ~/ 2;
+
+    // Combined uint8 vector (SFNNv5 pair-product).
+    final combined = Uint8List(ftDim);
+    for (int i = 0; i < ftDim; i++) {
+      var a = accStm[i];
+      if (a < 0) {
+        a = 0;
+      } else if (a > 127) {
+        a = 127;
+      }
+      var b = accNstm[i];
+      if (b < 0) {
+        b = 0;
+      } else if (b > 127) {
+        b = 127;
+      }
+      combined[i] = (a * b) >> 7;
+    }
+
+    final rb = raw.network.buckets[bucket];
+
+    // L1: [ftDim] uint8 → [16] int32 → shift → int8-clipped.
+    final l1OutRaw = Int32List(16);
+    for (int j = 0; j < 16; j++) {
+      int s = rb.l1BiasesI32[j];
+      final rowBase = j * ftDim;
+      for (int i = 0; i < ftDim; i++) {
+        s += rb.l1WeightsI8[rowBase + i] * combined[i];
+      }
+      l1OutRaw[j] = s >> _kWeightShift;
+    }
+
+    // Split into ClippedReLU + SqrClippedReLU branches, concat → 32 uint8.
+    final l2In = Uint8List(32);
+    for (int j = 0; j < 16; j++) {
+      var c = l1OutRaw[j];
+      if (c < 0) {
+        c = 0;
+      } else if (c > 127) {
+        c = 127;
+      }
+      l2In[j] = c;
+      l2In[j + 16] = (c * c) >> 7;
+    }
+
+    // L2: [32] uint8 → [32] int32 → shift → int8-clipped uint8.
+    final l2Out = Uint8List(32);
+    for (int j = 0; j < 32; j++) {
+      int s = rb.l2BiasesI32[j];
+      final rowBase = j * 32;
+      for (int i = 0; i < 32; i++) {
+        s += rb.l2WeightsI8[rowBase + i] * l2In[i];
+      }
+      var v = s >> _kWeightShift;
+      if (v < 0) {
+        v = 0;
+      } else if (v > 127) {
+        v = 127;
+      }
+      l2Out[j] = v;
+    }
+
+    // L3: [32] uint8 → [1] int32 (no shift/clip; single output).
+    int l3 = rb.l3BiasesI32[0];
+    for (int i = 0; i < 32; i++) {
+      l3 += rb.l3WeightsI8[i] * l2Out[i];
+    }
+
+    // Final scaling. SF's cp = (nn_out + psqt) / OutputScale, in units of
+    // Stockfish's Value where 1 pawn = 208. Our external cp uses "1 pawn
+    // = 100", so multiply by 100/208. The returned cp is the raw NN+PSQT
+    // signal; SF's UCI cp additionally applies phase / material / draw
+    // scaling.
+    final raw32 = l3 + psqtRaw;
+    final cp = raw32 * 100.0 / (_kIntOutputScale * 208.0);
+    return NnueEvalResult(
+      cp: cp,
+      bucket: bucket,
+      psqtContribution: psqtRaw * 100.0 / (_kIntOutputScale * 208.0),
+      rawL3Output: l3 * 100.0 / (_kIntOutputScale * 208.0),
+    );
+  }
 }
+
+// Stockfish's post-multiply shift for hidden layers (`WeightScaleBits`).
+const int _kWeightShift = 6;
+
+// SF `OutputScale` for SFNNv5. Divides the final int32 output from the
+// last affine layer to normalise into Stockfish's internal Value units.
+const double _kIntOutputScale = 16.0;
 
 double _clipReLU(double x) => x < 0 ? 0 : (x > 1.0 ? 1.0 : x);
 

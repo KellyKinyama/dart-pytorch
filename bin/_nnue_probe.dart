@@ -51,13 +51,17 @@ void main(List<String> args) {
     _stats('weights (int16)', ft.weightsI16);
     _stats('psqt (int32)', ft.psqtI32);
 
-    print('FT section ended at byte ${ft.byteEnd} / ${bytes.length} '
-        '(${bytes.length - ft.byteEnd} bytes remain for network body)');
+    print(
+      'FT section ended at byte ${ft.byteEnd} / ${bytes.length} '
+      '(${bytes.length - ft.byteEnd} bytes remain for network body)',
+    );
 
     print('decoding network body …');
     final net = raw.network;
-    print('${net.buckets.length} buckets (no outer section hash — '
-        'each bucket carries its own):');
+    print(
+      '${net.buckets.length} buckets (no outer section hash — '
+      'each bucket carries its own):',
+    );
     for (int b = 0; b < net.buckets.length; b++) {
       final bk = net.buckets[b];
       final l1min = bk.l1WeightsI8.reduce((a, b) => a < b ? a : b);
@@ -65,11 +69,15 @@ void main(List<String> args) {
       final l1bMin = bk.l1BiasesI32.reduce((a, b) => a < b ? a : b);
       final l1bMax = bk.l1BiasesI32.reduce((a, b) => a > b ? a : b);
       final l3b = bk.l3BiasesI32[0];
-      print('  bucket $b: hash=0x${bk.bucketHash.toRadixString(16).padLeft(8, '0')} '
-          'L1 w∈[$l1min,$l1max] b∈[$l1bMin,$l1bMax] L3 bias=$l3b');
+      print(
+        '  bucket $b: hash=0x${bk.bucketHash.toRadixString(16).padLeft(8, '0')} '
+        'L1 w∈[$l1min,$l1max] b∈[$l1bMin,$l1bMax] L3 bias=$l3b',
+      );
     }
-    print('network body ended at byte ${net.byteEnd} / ${bytes.length} '
-        '(${bytes.length - net.byteEnd} unread)');
+    print(
+      'network body ended at byte ${net.byteEnd} / ${bytes.length} '
+      '(${bytes.length - net.byteEnd} unread)',
+    );
   } catch (e, st) {
     print('parse failed: $e');
     print(st);

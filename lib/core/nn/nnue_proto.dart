@@ -353,7 +353,8 @@ NnueNetworkBlob _parseNetworkHalfKAv2Hm(
   NnueFeatureTransformerBlob ft,
 ) {
   final l1InDim = ft.ftDim;
-  final bytesPerBucket = 4 +
+  final bytesPerBucket =
+      4 +
       _kL1OutDim * 4 +
       _kL1OutDim * l1InDim +
       _kL2OutDim * 4 +

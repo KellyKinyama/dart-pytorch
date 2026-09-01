@@ -59,8 +59,7 @@ void main() {
     });
 
     test('flipped side to move', () {
-      const black =
-          'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR b KQkq - 0 1';
+      const black = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR b KQkq - 0 1';
       expect(encodeFen(black).stm, NnuePerspective.black);
     });
 
@@ -80,7 +79,8 @@ void main() {
     });
 
     test('encoding is deterministic', () {
-      const fen = 'r1bqkb1r/pppp1ppp/2n2n2/4p3/4P3/2N2N2/PPPP1PPP/R1BQKB1R '
+      const fen =
+          'r1bqkb1r/pppp1ppp/2n2n2/4p3/4P3/2N2N2/PPPP1PPP/R1BQKB1R '
           'w KQkq - 0 4';
       final a = encodeFen(fen);
       final b = encodeFen(fen);
@@ -90,8 +90,7 @@ void main() {
   });
 
   test('startpos active index is Int32List', () {
-    const startpos =
-        'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+    const startpos = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
     final f = encodeFen(startpos);
     expect(f.whiteActive, isA<Int32List>());
     expect(f.blackActive, isA<Int32List>());
