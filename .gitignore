@@ -21,3 +21,4 @@ models/
 data/coco_val*/
 data/coco_val_prep/
 dist/
+models/stockfish/*.nnue
