@@ -50,6 +50,14 @@ fix so the CUDA driver stub is found. Drop it on native Linux.
 | F7 | facenet-vggface2 | 39M   | CPU/GPU | n/a    | [bin/facenet/enroll.dart](bin/facenet/enroll.dart) — persistent DB + query |
 | F8 | mtcnn            | 0.5M  | CPU    | n/a     | [bin/facenet/detect.dart](bin/facenet/detect.dart) — face detection + 5 landmarks |
 | F9 | mtcnn + facenet  | ~40M  | CPU/GPU | n/a    | [bin/facenet/photo_identify.dart](bin/facenet/photo_identify.dart) — raw photo → identity |
+| H1 | Hopfield associative memory (Hebb rule, discrete + continuous dynamics) | tiny (25 units) | CPU | n/a | [bin/hopfield/basic_recall.dart](bin/hopfield/basic_recall.dart) — MacKay ch. 42 fig 42.4 + fig 42.8 N/I sweep |
+| H2 | Hopfield perceptron training (MacKay algorithm 42.9) | tiny (25 units, 6 memories) | CPU | n/a | [bin/hopfield/train_perceptron.dart](bin/hopfield/train_perceptron.dart) — makes overloaded Hebb memories stable |
+| H3 | Hopfield typo correction (denoising-trained one-hot vocab) | 156 units | CPU | n/a | [bin/hopfield/typo_correction.dart](bin/hopfield/typo_correction.dart) — 8-word dict, 8/8 single- + 8/8 two-letter typos corrected |
+| H4 | Hopfield image denoising | 64 units (8×8 icons) | CPU | n/a | [bin/hopfield/image_denoise.dart](bin/hopfield/image_denoise.dart) — salt-and-pepper 10–30 % on 4 icons |
+| H5 | Hopfield partial-cue completion | 64 units | CPU | n/a | [bin/hopfield/partial_cue.dart](bin/hopfield/partial_cue.dart) — blank rectangular regions, network fills them in |
+| C1 | Stockfish NNUE (SFNNv5 / SF16 default net, `nn-5af11540bbfe.nnue`) | ~10M params, 39 MB | CPU | n/a | [bin/nnue_demo.dart](bin/nnue_demo.dart) — FEN → cp (float + int backends), HalfKAv2_hm + 8-bucket layered stack |
+| C2 | NNUE move picker (chess.dart + NNUE) | same net | CPU | n/a | [bin/nnue_play.dart](bin/nnue_play.dart) — `--top N` / `--play N` / `--depth D` (negamax + alpha-beta) |
+| C3 | Stockfish `.nnue` file inspector | any | CPU | n/a | [bin/_nnue_probe.dart](bin/_nnue_probe.dart) — header / arch hash / FT + bucket stats for any HalfKAv2_hm file |
 
 All `tokenizer.json` files are already downloaded under
 `models/<name>/`, so every command below runs fully offline — no
@@ -2276,3 +2284,234 @@ Sources: [bin/facenet/demo.dart](bin/facenet/demo.dart),
 [lib/core/nn/vision/conv_bn_fold.dart](lib/core/nn/vision/conv_bn_fold.dart),
 [lib/core/nn/vision/pool2d.dart](lib/core/nn/vision/pool2d.dart),
 [doc/facenet.md](doc/facenet.md).
+
+## H. Hopfield associative memory (MacKay ch. 42)
+
+Small, self-contained pure-Dart Hopfield network. No autograd, no GPU
+— networks are tiny (tens to hundreds of neurons) and everything
+lives in `Int8List` / `Float32List`. Ports the material in
+MacKay's *Information Theory, Inference & Learning Algorithms*
+chapter 42:
+
+- §42.2 Hebb rule (`storeHebb` — outer-product weight construction)
+- §42.3 discrete dynamics (sync + async recall, monotone energy)
+- §42.6 continuous-time relaxation `τ dx/dt = tanh(β·a) − x`
+- §42.7 capacity phase transition at `N / I = 0.138`
+- §42.8 algorithm 42.9 — logistic-perceptron training rule that
+  beats the Hebb rule on correlated memories (`trainPerceptron`)
+- extension: noise-augmented denoising training (`trainDenoise` —
+  input/target pairs, widens basins on one-hot encoded data)
+
+All ~inference (no SGD on tensors) — the perceptron rule is
+weight-only optimisation.
+
+### H1. Basic recall (MacKay fig. 42.4 + capacity sweep)
+
+```sh
+dart run bin/hopfield/basic_recall.dart
+```
+
+Stores five 5×5 shape memories (cross, frame, diag, hbars, vbars) via
+the Hebb rule on 25 neurons. Adds 3-bit noise and runs asynchronous
+recall — 3/5 memories are exactly restored, 2 drift to the higher-
+energy `frame` attractor because we're at `N/I = 0.2 > 0.138` (over
+the MacKay critical threshold, exactly as fig. 42.5 predicts).
+
+Then runs the fig. 42.8 N/I sweep on random patterns:
+
+```
+N/I = 0.050  (I=60, N=3)  exact-recall rate = 100.0%
+N/I = 0.100  (I=60, N=6)  exact-recall rate =  96.7%
+N/I = 0.138  (I=60, N=8)  exact-recall rate =  89.4%
+N/I = 0.200  (I=60, N=12) exact-recall rate =  60.4%
+N/I = 0.300  (I=60, N=18) exact-recall rate =  10.0%
+```
+
+### H2. Perceptron training (MacKay algorithm 42.9)
+
+```sh
+dart run bin/hopfield/train_perceptron.dart
+```
+
+Six correlated memories that Hebb can only partially store (5/6
+stable). Runs 4 000 gradient steps of the logistic-perceptron rule
+(cross-entropy on `y = σ(W·x)`, symmetrised gradient, zero diagonal)
+and all six become fixed points. Prints per-step loss / stable count /
+`‖W‖` progress.
+
+### H3. Typo correction (denoising training)
+
+```sh
+dart run bin/hopfield/typo_correction.dart
+```
+
+Dictionary of 8 six-letter words encoded as 6 × 26 one-hot bits per
+letter (156 neurons total, N/I = 0.05). Trains in two phases:
+
+1. Phase 1 — algorithm 42.9 on clean words (memories stable but basins
+   too narrow).
+2. Phase 2 — `trainDenoise` on `(noisy_word, clean_word)` pairs (8
+   corrupted copies per vocab entry) which widens the basins.
+
+Result: **8/8 single-letter typos and 8/8 two-letter typos corrected**.
+
+### H4. Image denoising
+
+```sh
+dart run bin/hopfield/image_denoise.dart
+```
+
+Four 8×8 icons (heart, star, smiley, arrow) stored via Hebb rule.
+Adds 10 %, 20 %, and 30 % salt-and-pepper noise and denoises each.
+Pixel-accuracy at 20 % noise ≈ 97 %.
+
+### H5. Partial-cue completion
+
+```sh
+dart run bin/hopfield/partial_cue.dart
+```
+
+Same 8×8 icons, but instead of noise we blank out a rectangular
+region (right half, bottom half, or centre 4×4) with random bits and
+let the network fill it in — the classic "give me half a picture,
+get back the whole thing" mode of associative memory.
+
+### Tests
+
+```sh
+dart test test/hopfield_test.dart   # 9 tests: Hebb symmetry, fixed points,
+                                    # async energy monotone, capacity sanity,
+                                    # perceptron training convergence
+```
+
+Sources: [lib/core/nn/hopfield.dart](lib/core/nn/hopfield.dart),
+[bin/hopfield/basic_recall.dart](bin/hopfield/basic_recall.dart),
+[bin/hopfield/train_perceptron.dart](bin/hopfield/train_perceptron.dart),
+[bin/hopfield/typo_correction.dart](bin/hopfield/typo_correction.dart),
+[bin/hopfield/image_denoise.dart](bin/hopfield/image_denoise.dart),
+[bin/hopfield/partial_cue.dart](bin/hopfield/partial_cue.dart),
+[test/hopfield_test.dart](test/hopfield_test.dart).
+
+## C. Stockfish NNUE (SFNNv5 / SF16 default net)
+
+End-to-end port of Stockfish's NNUE evaluator for the SFNNv5 arch
+(HalfKAv2_hm features, 22528 sparse inputs per POV, ftDim = 1536,
+8 material buckets). Reads the official `.nnue` binary directly:
+LEB128-compressed FT weights, per-bucket int8 hidden stack. Runs
+either as float (for pedagogy) or int8×int8 (Stockfish-matched
+arithmetic). No GPU — NNUE is designed for CPU SIMD and the tiny
+matrices don't reward launch overhead.
+
+### One-time weights download (~40 MB)
+
+```sh
+mkdir -p models/stockfish
+curl -sL -o models/stockfish/nn-5af11540bbfe.nnue \
+  https://tests.stockfishchess.org/api/nn/nn-5af11540bbfe.nnue
+```
+
+The `.nnue` is NOT bundled with the repo — same pattern as lc0.
+
+### C1. Position evaluation (`bin/nnue_demo.dart`)
+
+```sh
+# startpos
+dart run bin/nnue_demo.dart
+
+# any FEN
+dart run bin/nnue_demo.dart \
+  'rnbqkbnr/pp1ppppp/8/2p5/4P3/8/PPPP1PPP/RNBQKBNR w KQkq c6 0 2'
+```
+
+Loads the net, encodes the FEN as HalfKAv2_hm sparse features, runs
+both the float and int backends, and prints:
+
+```
+Loading models/stockfish/nn-5af11540bbfe.nnue …
+  NnueHeader(version=0x7af32f20, arch=NnueArchitecture.halfKAv2Hm, ...)
+  FT: numInputs=22528, ftDim=1536, psqtBuckets=8
+  8 network buckets
+Dequantised → floats in 900 ms
+
+Evaluation (float port):        67.8 cp (+68 STM for white)
+Evaluation (int backend):      254.0 cp (+254 STM for white)
+```
+
+**Note**: `evaluateInt` returns the **raw NN + PSQT signal**, not
+Stockfish's UCI cp. SF additionally applies phase, material
+drawishness, optimism and contempt on top — none of which are part
+of NNUE itself. Expect the reported cp to be ~2-5× SF's UCI cp
+(startpos 254 vs SF ~25, ±queen 1500/-950 vs SF ~±900).
+
+### C2. Move picker + shallow search (`bin/nnue_play.dart`)
+
+```sh
+# top 5 moves from startpos (depth 1, ~80 ms)
+dart run bin/nnue_play.dart
+
+# top N from any FEN, at any depth
+dart run bin/nnue_play.dart --depth 2 --top 5 \
+  'r1bqkbnr/pppp1ppp/2n5/4p3/2B1P3/8/PPPP1PPP/RNBQK1NR w KQkq - 2 3'
+
+# greedy self-play for N half-moves
+dart run bin/nnue_play.dart --depth 2 --play 20
+
+# deeper analysis (~15 s at depth 3)
+dart run bin/nnue_play.dart --depth 3 --top 3 '<fen>'
+```
+
+Uses the `chess: ^0.8.1` pub.dev package for legal-move generation,
+board state, and SAN. Search modes:
+
+- **`--depth 1`**: rank each legal move by the NNUE eval of the
+  resulting position. Cheap (`~20 nodes / 80 ms` from startpos) but
+  ignores tactics beyond one half-move.
+- **`--depth ≥ 2`**: negamax with alpha-beta pruning, moves ordered
+  best-first by their depth-1 NNUE score. Nodes/wall at startpos:
+  `d1: 20 / 80 ms`, `d2: ~400 / 850 ms`, `d3: ~6 k / 15 s`.
+- Mates score `±1e9` with a depth penalty so faster mates rank
+  higher. Verified: depth 1 finds `Re8#` from
+  `6k1/5ppp/8/8/8/8/8/4R2K`.
+
+Depth 1 vs depth 2 on the Italian position
+`r1bqkbnr/pppp1ppp/2n5/4p3/2B1P3/8/PPPP1PPP/RNBQK1NR w`:
+
+```
+depth 1: Ne2, Qh5, Ke2, Nf3, Qe2      (Ke2 loses castling!)
+depth 2: Nc3, Qf3, Qg4, Qe2, Bd3      (Ne2/Ke2 gone; developing wins)
+```
+
+### C3. Raw `.nnue` file inspector
+
+```sh
+dart run bin/_nnue_probe.dart \
+  models/stockfish/nn-5af11540bbfe.nnue
+```
+
+Dumps the header, architecture hash, description string, LEB128
+decode of the FT block, and per-bucket L1/L2/L3 stats. Useful when
+adding support for a new arch (SFNNv9 dual-net, etc.).
+
+### Tests
+
+```sh
+# full NNUE suite (25 tests: proto:4, input:8, forward:7, play:6)
+dart test test/nnue_proto_test.dart \
+          test/nnue_input_test.dart \
+          test/nnue_forward_test.dart \
+          test/nnue_play_test.dart
+```
+
+Sources: [lib/core/nn/nnue_proto.dart](lib/core/nn/nnue_proto.dart)
+(binary reader + LEB128 decode),
+[lib/core/nn/nnue_input.dart](lib/core/nn/nnue_input.dart)
+(FEN → HalfKAv2_hm sparse features),
+[lib/core/nn/nnue.dart](lib/core/nn/nnue.dart)
+(float and int forward passes),
+[bin/nnue_demo.dart](bin/nnue_demo.dart),
+[bin/nnue_play.dart](bin/nnue_play.dart),
+[bin/_nnue_probe.dart](bin/_nnue_probe.dart),
+[test/nnue_proto_test.dart](test/nnue_proto_test.dart),
+[test/nnue_input_test.dart](test/nnue_input_test.dart),
+[test/nnue_forward_test.dart](test/nnue_forward_test.dart),
+[test/nnue_play_test.dart](test/nnue_play_test.dart).
