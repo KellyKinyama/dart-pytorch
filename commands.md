@@ -32,6 +32,9 @@ fix so the CUDA driver stub is found. Drop it on native Linux.
 | T4 | opus-mt-en-zh / zh-en | 74M each | CPU/GPU | ✅ local | [bin/marian_translate.dart](bin/marian_translate.dart) — generic runner, `--pair en-de/en-zh/zh-en` |
 | T5 | opus-mt Zambian (Bemba, Chichewa, Tonga, Lozi) | 74M each | CPU/GPU | ✅ local | [bin/marian_translate.dart](bin/marian_translate.dart) — `--pair en-{bem,ny,toi,loz}` and reverse |
 | E1 | bge-small-en-v1.5 | 33M | CPU/GPU | ✅ local | [bin/bge_demo.dart](bin/bge_demo.dart) — SOTA sentence embeddings (CLS-pool + L2) |
+| E2 | all-MiniLM-L6-v2 | 23M | CPU/GPU | ✅ local | [bin/qa.dart](bin/qa.dart), [bin/rag_demo.dart](bin/rag_demo.dart), [bin/rag_gpu_demo.dart](bin/rag_gpu_demo.dart), [bin/rag_learn.dart](bin/rag_learn.dart), [bin/db_rag_demo.dart](bin/db_rag_demo.dart) — the workhorse 384-d text encoder (mean-pool + L2). Reused by every RAG demo. |
+| E3 | word2vec skip-gram | 0.3M | CPU/GPU | n/a | [bin/word2vec_demo.dart](bin/word2vec_demo.dart) — trained from scratch on tiny-Shakespeare; two `Embedding(V, D)` tables, negative sampling, `IndexFlatIP` over L2-normalised targets |
+| E4 | CLIP-ViT-B/32 (dual encoder) | 151M | CPU/GPU | ✅ local | [bin/clip_zero_shot_demo.dart](bin/clip_zero_shot_demo.dart) — joint image+text embeddings in a shared 512-d space; used for zero-shot classification and the LLaVA / image-RAG stacks (R11, R12) |
 | V4 | dinov2-small | 22M | CPU/GPU | n/a | [bin/dinov2_demo.dart](bin/dinov2_demo.dart) — self-supervised ViT-S/14 image features |
 | S1 | whisper tiny.en  | 39M   | CPU    | ✅ local | [bin/whisper_demo.dart](bin/whisper_demo.dart) |
 | S2 | whisper tiny.en  | 39M   | GPU    | ✅ local | [bin/whisper_gpu_demo.dart](bin/whisper_gpu_demo.dart) |
@@ -721,6 +724,104 @@ the SOTA-vs-legacy story. Same `SentenceEncoder` + `WordPieceTokenizer`
 plumbing as the RAG stack — swap `BertHFLoader.miniLmL6V2Config` for
 `BertHFLoader.bgeSmallEnConfig` and change `pooling` to
 `PoolingMode.cls`.
+
+## E2. all-MiniLM-L6-v2 (23M, workhorse sentence encoder)
+
+`sentence-transformers/all-MiniLM-L6-v2` — 6-layer BERT (hidden=384,
+heads=12, ffn=1536, vocab=30522). Mean-pool + L2, 384-d output.
+The default encoder every RAG demo in this repo builds on:
+
+* [bin/qa.dart](bin/qa.dart) — general-purpose semantic-QA REPL
+  (chunk a `.txt`/`.md` corpus, persist to a local index or to a
+  dart-db-server table, answer questions with top-k passages).
+* [bin/rag_demo.dart](bin/rag_demo.dart) — minimum-viable RAG:
+  hardcoded corpus, `IndexFlatIP.search(k=3)`, print top matches.
+* [bin/rag_gpu_demo.dart](bin/rag_gpu_demo.dart) — same encoder on
+  CPU vs GPU, apples-to-apples timing.
+* [bin/rag_learn.dart](bin/rag_learn.dart) — fine-tune the encoder
+  with contrastive triplets to lift retrieval accuracy on your own
+  domain corpus.
+* [bin/db_rag_demo.dart](bin/db_rag_demo.dart) — in-process
+  `dart-db-server` vector store (see R13 below).
+
+Weights + vocab (one-time, ~87 MB):
+
+```sh
+mkdir -p models/minilm && cd models/minilm
+for f in config.json tokenizer_config.json vocab.txt \
+         model.safetensors; do
+  curl -sSL -O \
+    "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/$f"
+done
+```
+
+Smoke test:
+
+```sh
+dart run bin/rag_demo.dart
+```
+
+## E3. word2vec skip-gram (trained-from-scratch, tiny-Shakespeare)
+
+[bin/word2vec_demo.dart](bin/word2vec_demo.dart) — pure-Dart port of
+the TensorFlow word2vec tutorial. Two `Embedding(V, D)` tables
+(target + context), skip-gram windows with Mikolov subsampling,
+fused softmax + NLL over `1 + numNs` slots. After training we pull
+the target matrix to host, L2-normalise, and add it to
+`IndexFlatIP` — nearest-neighbour queries print top-k by cosine.
+
+Run (defaults ~2 min on CPU):
+
+```sh
+dart run bin/word2vec_demo.dart
+# GPU
+LD_LIBRARY_PATH=/usr/lib/wsl/lib \
+  dart run bin/word2vec_demo.dart --device=gpu
+# custom queries
+dart run bin/word2vec_demo.dart --queries=king,love,death,night
+```
+
+Unlike E1/E2 there is no pretrained checkpoint — the demo trains
+the embeddings from scratch on `data/tiny_shakespeare.txt`. Useful
+as a first-principles walkthrough of what "embedding" actually
+means before you reach for a transformer.
+
+## E4. CLIP-ViT-B/32 dual encoder (151M, image + text → shared 512-d)
+
+`openai/clip-vit-base-patch32` — joint image and text encoders
+trained contrastively so an image of a dog and the string "a photo
+of a dog" land near each other in a shared 512-d space. This repo
+uses it for:
+
+* Zero-shot classification —
+  [bin/clip_zero_shot_demo.dart](bin/clip_zero_shot_demo.dart).
+* Image-RAG for Llama chat (R11) — pre-compute image embeddings
+  offline, retrieve by cosine at chat time.
+* LLaVA-style vision-language chat (R12) — CLIP's `[CLS]` feature
+  is projected into Llama's embedding space by
+  `train_llava_projector.dart` and prepended to the text tokens.
+
+Weights (one-time, ~350 MB fp32):
+
+```sh
+mkdir -p models/clip-vit-base-patch32
+for f in model.safetensors tokenizer.json; do
+  curl -L -o "models/clip-vit-base-patch32/$f" \
+    "https://huggingface.co/openai/clip-vit-base-patch32/resolve/main/$f"
+done
+```
+
+Run:
+
+```sh
+dart run bin/clip_zero_shot_demo.dart \
+  --image path/to/photo.jpg \
+  --labels "dog,cat,car,plane,face,sunset"
+```
+
+Both towers L2-normalise and project into the 512-d contrastive
+space, so the same cosine-based `IndexFlatIP` toolkit used for
+sentence embeddings works for images out of the box.
 
 ## V4. dinov2-small (22M, self-supervised ViT-S/14)
 
@@ -1553,6 +1654,334 @@ arbitrary poison-pill embeddings — instructive to run once,
 useless as a chat.
 Source: [bin/llama_llava_demo.dart](bin/llama_llava_demo.dart),
 [bin/train_llava_projector.dart](bin/train_llava_projector.dart).
+
+## R13. db_rag_demo — dart-db-server native vector store
+
+**Deep dive**: [doc/db_vector_rag.md](doc/db_vector_rag.md) — the
+architecture, split of responsibilities, and why this pairing is
+the biggest asset of this repo.
+
+End-to-end RAG against the sibling
+[dart-db-server](https://github.com/KellyKinyama/dart-db-server)
+vector database, running **in-process** (no separate server). MiniLM
+(E2) computes 384-d embeddings; the DB owns the index, filters, BM25
+fusion, and admin surface. Mirrors the recipe at
+`dart-db-server/doc/rag-semantic-search.md` and exercises every
+retrieval mode the engine exposes on the same corpus so the
+differences are obvious:
+
+1. Inline vector DDL — `CREATE TABLE chunks (... embedding BLOB
+   VECTOR(dim=384, kind=hnsw, metric=cosine, filter_cols='topic'))`.
+2. Ingest via `VEC('[...]')` casts.
+3. Admin — `PRAGMA vector_index_list` / `_stats`.
+4. Plain semantic k-NN — `vec_search(...)`.
+5. Payload-filtered k-NN — `vec_search_filtered(..., filter_json)`.
+6. Hybrid vector + BM25 via Reciprocal Rank Fusion —
+   `vec_hybrid_search(...)` (the marquee RAG retrieval mode).
+7. Range / near-duplicate detection — `vec_range_search(...)`.
+
+Run:
+
+```sh
+dart run bin/db_rag_demo.dart
+dart run bin/db_rag_demo.dart --query "how do I turn on 2FA?"
+dart run bin/db_rag_demo.dart --db-file /tmp/rag.json   # persist
+```
+
+Source: [bin/db_rag_demo.dart](bin/db_rag_demo.dart).
+
+### R13.1 One-time setup
+
+MiniLM weights under `models/minilm/` (see E2), plus `dart_db_server`
+resolved as a `path:` dependency in [pubspec.yaml](pubspec.yaml)
+pointing at a sibling checkout of the repo:
+
+```yaml
+dependencies:
+  # ...
+  dart_db_server:
+    path: ../../../www/dart/dart-db-server   # adjust for your layout
+```
+
+Then `dart pub get`. All SQL below runs against an in-process
+`Database` — no TCP, no separate binary.
+
+### R13.2 Opening the store
+
+```dart
+import 'package:dart_db_server/dart_db_server.dart';
+
+// Persisted store — same file across runs; JSON on disk.
+final db = await Database.open('data/rag.json');
+
+// Ephemeral store — delete the file after close for a clean rerun.
+final tmp = '${Directory.systemTemp.path}/rag.json';
+try { File(tmp).deleteSync(); } catch (_) {}
+final db = await Database.open(tmp);
+```
+
+Always close with `await db.close()` — this flushes pending writes.
+Use a `try / finally` around the whole session.
+
+### R13.3 Schema — inline vector index
+
+The `BLOB VECTOR(...)` column type declares the vector index alongside
+the column. The engine builds and maintains it on `INSERT` / `UPDATE`
+/ `DELETE`:
+
+```sql
+CREATE TABLE chunks (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  source       TEXT    NOT NULL,     -- filename / URL
+  topic        TEXT    NOT NULL,     -- payload-filter column
+  chunk_text   TEXT    NOT NULL,     -- passage the LLM will see
+  embedding    BLOB VECTOR(
+    dim=384,                         -- MUST match your embedder
+    kind=hnsw,                       -- flat | hnsw | ivfflat | lsh | pq | ivfpq
+    metric=cosine,                   -- cosine | l2 | l2sq | ip
+    m=16,                            -- HNSW: neighbours per node
+    ef_construction=64,              -- HNSW: build-time search width
+    filter_cols='topic'              -- comma list — enables filtered k-NN
+  )
+);
+```
+
+Rules of thumb:
+
+* `dim` **must** match your embedder's output dimension. MiniLM = 384,
+  BGE-small = 384, `text-embedding-3-small` = 1536.
+* `metric=cosine` is the safe default for modern text embedders that
+  L2-normalise their output (MiniLM, BGE, OpenAI, Cohere).
+* `kind=flat` gives exact 100 %-recall search — fine up to ~100 k rows.
+  `kind=hnsw` is the default RAG choice from ~100 k up to ~1 M rows.
+* `filter_cols='a,b,c'` opts into O(1) payload-filter pruning — only
+  declare columns you actually filter on.
+
+### R13.4 Ingest — the two supported paths
+
+**One row at a time** — for streaming ingest / low-throughput writes:
+
+```dart
+final vec = encoder.embed(chunkText);         // Float32List, length=dim
+final vecJson = '[${vec.join(",")}]';
+await db.execute(
+  'INSERT INTO chunks (source, topic, chunk_text, embedding) '
+  "VALUES (?, ?, ?, VEC(?))",                 // VEC casts JSON→BLOB
+  // If your build doesn't support ? params, inline via _sqlEscape:
+  //   \"'\${s.replaceAll(\"'\", \"''\")}'\"
+);
+```
+
+**Bulk insert** — bypasses per-row SQL parsing, thousands of rows/sec:
+
+```sql
+SELECT * FROM vec_batch_insert(
+  'chunks', 'id', 'embedding',
+  '[{"id":1,  "vec":[0.01, 0.02, ...]},
+    {"id":2,  "vec":[0.03, 0.04, ...]}, ...]'
+);
+```
+
+After a bulk load (or any time you want to eagerly build the index
+before serving queries), warm it:
+
+```dart
+await db.warmVectorIndexes();
+// or per-column:
+// await db.execute("PRAGMA vector_index_warm('chunks.embedding')");
+```
+
+HNSW is otherwise built lazily on the first query.
+
+### R13.5 Plain semantic k-NN — `vec_search`
+
+The table-valued form is composable with `JOIN`s so you can pull any
+columns you want back with the hits:
+
+```sql
+SELECT c.topic, c.chunk_text, s.distance
+FROM vec_search(
+       'chunks', 'embedding',
+       VEC('[0.11, -0.03, ...]'),      -- embed(user_question)
+       8                                -- k
+     ) AS s
+JOIN chunks c ON c.id = s.rowid
+ORDER BY s.distance;                    -- lower = closer for cosine/l2
+```
+
+`s.rowid` is the primary key of the matched row when the table has
+one, otherwise a positional row index.
+
+### R13.6 Payload-filtered k-NN — `vec_search_filtered`
+
+Filter first (via the O(1) payload index), *then* run k-NN over the
+survivors. The filter is a JSON object of `{column: value}` pairs;
+every column named must have been declared in `filter_cols=` on the
+DDL:
+
+```sql
+SELECT c.topic, c.chunk_text, s.distance
+FROM vec_search_filtered(
+       'chunks', 'embedding',
+       VEC('[0.11, -0.03, ...]'),
+       8,                               -- k
+       '{"topic":"security"}'           -- filter_json
+     ) AS s
+JOIN chunks c ON c.id = s.rowid
+ORDER BY s.distance;
+```
+
+Use this for multi-tenant RAG (`{"tenant":42}`), source-restricted
+search (`{"source":"handbook.md"}`), or any other pre-filter you can
+express as an equality on a declared filter column.
+
+### R13.7 Hybrid vector + BM25 — `vec_hybrid_search`  (marquee RAG mode)
+
+Fuses vector rank and BM25 rank via Reciprocal Rank Fusion. Nearly
+always strictly better than either signal alone — vector recall picks
+up paraphrases, BM25 nails exact hits ("SKU-1234", "AWS Lambda",
+proper names):
+
+```sql
+SELECT c.topic, c.chunk_text,
+       s.distance, s.bm25, s.rrf_score
+FROM vec_hybrid_search(
+       'chunks', 'embedding', 'chunk_text',   -- table, vec col, text col
+       VEC('[0.11, -0.03, ...]'),             -- vector side
+       'multi factor OR authentication OR 2fa', -- text side
+       8,                                     -- k
+       60                                     -- RRF constant (default)
+     ) AS s
+JOIN chunks c ON c.id = s.rowid
+ORDER BY s.rrf_score DESC;
+```
+
+Two gotchas the demo already handles for you (see `_fts5Sanitize` in
+[bin/db_rag_demo.dart](bin/db_rag_demo.dart)):
+
+1. FTS5's query grammar only accepts bareword tokens — punctuation
+   like `?`, `!`, `-` inside a raw user question throws. Strip to
+   alphanumeric.
+2. FTS5 defaults to **AND** semantics — any missing word zeroes the
+   BM25 side of the fusion. Drop stopwords and OR the rest so partial
+   keyword overlap still contributes.
+
+### R13.8 Range / near-duplicate search — `vec_range_search`
+
+Every row within a distance threshold of the query — handy for
+deduplication, plagiarism, clustering pre-passes:
+
+```sql
+SELECT c.id, c.chunk_text, s.distance
+FROM vec_range_search(
+       'chunks', 'embedding',
+       VEC('[0.11, -0.03, ...]'),
+       0.35                             -- threshold (cosine distance here)
+     ) AS s
+JOIN chunks c ON c.id = s.rowid
+ORDER BY s.distance;
+```
+
+Distances are in the same units as `metric=` on the DDL:
+`cosine` → `1 - cos_sim`, `l2` → euclidean, `ip` → negated dot product.
+
+### R13.9 Update / delete — no manual rebuild
+
+The engine keeps the index incrementally consistent for regular DML:
+
+```sql
+UPDATE chunks
+   SET chunk_text = ?, embedding = VEC(?)
+ WHERE id = ?;
+
+DELETE FROM chunks WHERE source = ?;
+```
+
+HNSW writes tombstones on `DELETE` / `UPDATE`; when tombstones exceed
+30 % the engine auto-rebuilds on the next query. You can also force
+a clean rebuild:
+
+```sql
+PRAGMA vector_index_rebuild('chunks.embedding');
+```
+
+### R13.10 Admin surface
+
+```sql
+PRAGMA vector_index_list;                                -- every vector column
+PRAGMA vector_index_stats('chunks.embedding');           -- kind / metric / n / live / tombstones / bytes
+PRAGMA vector_index_verify('chunks.embedding');          -- integrity check
+PRAGMA vector_index_verify_all;
+PRAGMA vector_index_warm('chunks.embedding');            -- build now, don't wait for first query
+PRAGMA vector_index_warm_all;
+PRAGMA vector_index_rebuild('chunks.embedding');
+PRAGMA vector_analyze('chunks.embedding');               -- measure recall of chosen kind
+```
+
+Bake `vector_verify_all` into a health check, and `vector_warm_all`
+into your app's startup path when using paged / persisted stores so
+first-query latency doesn't include the build cost.
+
+### R13.11 End-to-end Dart retriever
+
+Copy-paste starting point (lifted straight from
+[bin/db_rag_demo.dart](bin/db_rag_demo.dart)):
+
+```dart
+Future<List<Passage>> retrieve(
+  Database db,
+  _Encoder encoder,
+  String question, {
+  int k = 8,
+  String? topicFilter,
+}) async {
+  final qv = encoder.embed(question);
+  final vecJson = '[${qv.join(",")}]';
+  final bm25 = _fts5Sanitize(question);   // drop punctuation + stopwords, OR
+  final filter = topicFilter == null
+      ? "NULL"
+      : "'{\"topic\":\"$topicFilter\"}'";
+
+  final r = await db.execute('''
+    SELECT c.id, c.source, c.topic, c.chunk_text,
+           s.distance, s.bm25, s.rrf_score
+    FROM vec_hybrid_search(
+           'chunks', 'embedding', 'chunk_text',
+           VEC('$vecJson'), '$bm25', $k, 60
+         ) AS s
+    JOIN chunks c ON c.id = s.rowid
+    ORDER BY s.rrf_score DESC
+  ''');
+
+  return [
+    for (final row in r.rows)
+      Passage(
+        id: row[0] as int,
+        source: row[1] as String,
+        topic: row[2] as String,
+        text: row[3] as String,
+        rrf: (row[6] as num).toDouble(),
+      ),
+  ];
+}
+```
+
+Feed the returned `Passage.text` list into your LLM's prompt as
+grounding context and you have a working RAG loop.
+
+### R13.12 Choosing an index kind
+
+| Corpus size | `kind=` | Notes |
+| --- | --- | --- |
+| < 100 k    | `flat`   | 100 % recall, no build cost |
+| 100 k – 1 M | `hnsw`   | Default RAG choice; tune `m`, `ef_construction` |
+| > 1 M      | `ivfpq`  | Add `filter_cols=` for tenant / category pre-pruning |
+| Corpus > RAM | `USING paged` table + `PRAGMA vector_index_warm_all` at startup |
+
+For a runnable comparison of the built-in index kinds on synthetic
+data, see R7 — [bin/vector_index_benchmark_demo.dart](bin/vector_index_benchmark_demo.dart).
+
+
 
 ## S1 / S2. Whisper tiny.en — speech-to-text (39M, CPU or GPU)
 

@@ -35,6 +35,23 @@ end-to-end (`dart run bin/gpt_demo.dart`); `bin/gpt_train.dart` shows
 the full pipeline: BPE + `GPT` + `Adam` + warmup/cosine schedule +
 gradient accumulation + checkpoint save/load + sampling.
 
+## Featured: production-shape RAG in pure Dart
+
+`dart_pytorch` (this repo) + [`dart_db_server`](https://github.com/KellyKinyama/dart-db-server)
+give you a self-contained RAG stack — embeddings, HNSW / IVFPQ vector
+index, payload filters, vector + BM25 hybrid retrieval via
+Reciprocal Rank Fusion, admin surface, persistence — in **one Dart
+process**. No FAISS, no Python, no separate embedding service.
+
+- **[PITCH.md](PITCH.md)** — the 60-second showcase: why this pairing
+  matters, how it compares to pgvector / Qdrant / Weaviate / FAISS,
+  who it's for.
+- **[doc/db_vector_rag.md](doc/db_vector_rag.md)** — architecture
+  write-up, split of responsibilities, the five roles of the DB in
+  the reference demo.
+- **[bin/db_rag_demo.dart](bin/db_rag_demo.dart)** (R13 in
+  [commands.md](commands.md)) — the runnable end-to-end demo.
+
 ## Layout
 
 ```
