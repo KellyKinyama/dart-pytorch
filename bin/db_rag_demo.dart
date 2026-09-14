@@ -69,9 +69,11 @@ Future<void> main(List<String> args) async {
     }
   }
 
-  _banner('load MiniLM-L6-v2');
+  _banner(
+    'load MiniLM-L6-v2 (${opts.containsKey('embed-gpu') ? "GPU" : "CPU"})',
+  );
   final swLoad = Stopwatch()..start();
-  final encoder = _Encoder.load();
+  final encoder = _Encoder.load(useGpu: opts.containsKey('embed-gpu'));
   swLoad.stop();
   stdout.writeln('  ${swLoad.elapsedMilliseconds} ms  (dim=$_embedDim)');
 
@@ -282,23 +284,26 @@ Future<void> _rangeSearchDemo(Database db, _Encoder encoder) async {
 class _Encoder {
   final WordPieceTokenizer tok;
   final SentenceEncoder enc;
-  _Encoder(this.tok, this.enc);
+  final Device device;
+  _Encoder(this.tok, this.enc, this.device);
 
-  static _Encoder load() {
+  static _Encoder load({bool useGpu = false}) {
+    final device = useGpu ? Device.GPU : Device.CPU;
     final tok = WordPieceTokenizer.fromVocabFile(_vocabPath);
-    final bert = BertModel(BertHFLoader.miniLmL6V2Config());
+    final bert = BertModel(BertHFLoader.miniLmL6V2Config(device: device));
     BertHFLoader.loadFile(bert, _weightsPath);
     final enc = SentenceEncoder.wrap(bert);
     enc.eval();
-    return _Encoder(tok, enc);
+    return _Encoder(tok, enc, device);
   }
 
   Float32List embed(String text, {int maxLength = 256}) {
     final ids = tok.encode(text, maxLength: maxLength);
-    final t = Tensor.fromList(
+    final cpuT = Tensor.fromList(
       [ids.length],
       [for (final i in ids) i.toDouble()],
     );
+    final t = device == Device.CPU ? cpuT : cpuT.to(device);
     return Tensor.noGrad(() => Float32List.fromList(enc(t).toList()));
   }
 }

@@ -22,3 +22,7 @@ data/coco_val*/
 data/coco_val_prep/
 dist/
 models/stockfish/*.nnue
+
+# Local dart_db_server JSON stores + lock files (regenerated per run).
+data/*.json
+data/*.json.lock

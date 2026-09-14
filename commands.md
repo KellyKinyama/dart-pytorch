@@ -1982,6 +1982,386 @@ For a runnable comparison of the built-in index kinds on synthetic
 data, see R7 — [bin/vector_index_benchmark_demo.dart](bin/vector_index_benchmark_demo.dart).
 
 
+## R14. db_rag_http_demo — retrieve (SQL) + generate (HTTP LLM)
+
+Closes the RAG loop from R13. R13 stops at the retrieved passages;
+R14 pipes them into an LLM served over HTTP by any of the
+`bin/*_api.dart` runners and prints the grounded answer.
+
+### R14.1 Architecture
+
+```
+┌─ shell A: any *_api.dart runner ────────────────────────────────┐
+│  distilgpt2 | gpt2-medium | pythia-* | gpt-j-6b                 │
+│  --serve --port 8080                                            │
+│  exposes:  GET /health, GET /info, POST /generate               │
+└─────────────────────────────────────────────────────────────────┘
+                              ▲
+                              │ POST /generate {"text": prompt, ...}
+                              │
+┌─ shell B: bin/db_rag_http_demo.dart ────────────────────────────┐
+│  MiniLM (in-process)          → embed(question)                 │
+│  dart_db_server (in-process)  → vec_hybrid_search(k=3)          │
+│  build prompt with retrieved passages                           │
+│  HTTP POST to shell A         → grounded answer                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### R14.2 Two-shell run
+
+```sh
+# shell A — start any *_api.dart runner
+LD_LIBRARY_PATH=/usr/lib/wsl/lib \
+  dart run bin/distilgpt2/run_gpu_api.dart --serve --port 8080
+
+# shell B — retrieve + generate
+dart run bin/db_rag_http_demo.dart \
+    --llm http://127.0.0.1:8080 \
+    --query "how do I turn on 2FA?"
+```
+
+Swap the runner in shell A for any bigger model — the wire
+protocol is identical:
+
+```sh
+# gpt2-medium (355M) instead of distilgpt2 (82M)
+LD_LIBRARY_PATH=/usr/lib/wsl/lib \
+  dart run bin/gpt2/medium/run_gpu_api.dart --serve --port 8080
+
+# pythia-1b, hosted separately
+LD_LIBRARY_PATH=/usr/lib/wsl/lib \
+  dart run bin/pythia/run_1b_gpu_api.dart --serve --port 8080
+```
+
+### R14.3 Flags
+
+```
+--llm URL             LLM base URL (default: http://127.0.0.1:8080)
+--query "..."         one-shot question; omit for the default battery
+--k N                 passages retrieved per question (default: 3)
+--max-new N           generation length in tokens (default: 60)
+--temperature T       sampling temperature (default: 0.7)
+--seed S              deterministic sampling (default: 42)
+```
+
+Fails fast (exit code 69) if `GET /health` on the LLM URL doesn't
+return 200 — no point ingesting the corpus into HNSW just to hit a
+connection-refused later.
+
+### R14.4 Prompt shape
+
+The demo assembles a compact grounding prompt out of the top-`k`
+`vec_hybrid_search` hits:
+
+```
+Answer the question using only the passages below.
+If the passages do not contain the answer, say so.
+
+Passages:
+  1. Multi-factor authentication is available via authenticator apps ...
+  2. Single Sign-On (SSO) via SAML or OIDC is available on the Enterprise ...
+  3. Our support hours are Monday through Friday, 9am to 6pm Pacific ...
+
+Question: how do I turn on 2FA?
+Answer:
+```
+
+Because the LLM's `/generate` returns `prompt + generation`, the
+demo strips the prompt prefix before printing — you only see what
+the model actually added.
+
+### R14.5 What each package owns
+
+| Concern | Package | Where |
+| --- | --- | --- |
+| Tokenize + embed the query | `dart_pytorch` | MiniLM in-process |
+| Store + index corpus vectors | `dart_db_server` | `BLOB VECTOR(dim=384, kind=hnsw)` |
+| Hybrid vec+BM25 retrieval | `dart_db_server` | `vec_hybrid_search` TVF |
+| Serve the LLM | `dart_pytorch` `bin/*_api.dart` | HTTP `POST /generate` |
+| Tokenize + decode inside the LLM | `dart_pytorch` (server side) | HFBpe / vocab.json |
+| Glue: retrieve → build prompt → call | `bin/db_rag_http_demo.dart` | HTTP `HttpClient` |
+
+Same clean split as R13 — the vector store never sees text
+generation, the LLM never sees embeddings, and no component knows
+about the corpus schema except `dart_db_server`.
+
+Source: [bin/db_rag_http_demo.dart](bin/db_rag_http_demo.dart).
+
+## R15. db_rag_chat_server — browser chat UI over R14
+
+Everything from R14, plus a browser front-end and a persistent
+document store. Type in the browser, get grounded answers back,
+drop .txt / .md files onto the page to extend the corpus. The
+LLM still lives in a separate process — this is the R14 pipeline
+turned into an HTTP service with a chat UI.
+
+### R15.1 Architecture
+
+```
+┌─ browser ──────────────────────────────────────────────────────┐
+│  chat page served by GET /                                     │
+│  posts to /chat, /upload, /reset; polls /status                │
+└───────────────────────┬────────────────────────────────────────┘
+                        │ HTTP (localhost)
+┌───────────────────────▼────────────────────────────────────────┐
+│  bin/db_rag_chat_server.dart                                   │
+│  • MiniLM (in-process)                    → embed(query|chunk) │
+│  • dart_db_server (in-process, persisted) → vec_hybrid_search  │
+│  • conversation history (bounded)                              │
+│  • builds prompt, POSTs to /generate below                     │
+└───────────────────────┬────────────────────────────────────────┘
+                        │ HTTP
+┌───────────────────────▼────────────────────────────────────────┐
+│  any bin/*_api.dart --serve --port 8080                        │
+│  distilgpt2 | gpt2-medium | pythia-* | gpt-j-6b                │
+└────────────────────────────────────────────────────────────────┘
+```
+
+### R15.2 Two-shell run
+
+```sh
+# shell A — the LLM
+LD_LIBRARY_PATH=/usr/lib/wsl/lib \
+  dart run bin/distilgpt2/run_gpu_api.dart --serve --port 8080
+
+# shell B — the chat server + browser UI
+dart run bin/db_rag_chat_server.dart \
+    --llm  http://127.0.0.1:8080 \
+    --port 8090 \
+    --corpus data/support_faq.txt
+```
+
+Then open <http://127.0.0.1:8090/> in a browser and chat. Every
+answer expands into a `▸ retrieved N passage(s)` section showing
+which chunks the LLM was grounded on and their RRF scores.
+
+### R15.3 Flags
+
+```
+--llm URL             LLM base URL (default: http://127.0.0.1:8080)
+--port N              HTTP port to serve the chat UI (default: 8090)
+--db-file PATH        vector store file (default: data/rag_chat.json)
+--corpus PATH         optional startup ingest (.txt / .md)
+--k N                 passages retrieved per turn (default: 3)
+--max-new N           generation length in tokens (default: 80)
+--temperature T       sampling temperature (default: 0.7)
+--history-turns N     conversation pairs kept in the prompt (default: 3)
+```
+
+The DB file is **persistent** across restarts — uploads survive
+process bounces. Delete the file (or hit **Reset** in the UI) for
+a clean slate.
+
+### R15.4 HTTP endpoints
+
+Same JSON conventions as the other `*_api.dart` runners so you can
+drive the server from `curl` too:
+
+```sh
+# health check
+curl -sS http://127.0.0.1:8090/health
+# → {"status":"ok","llm":"http://127.0.0.1:8080","db":"…","chunks":20}
+
+# chat one turn
+curl -sS -X POST http://127.0.0.1:8090/chat \
+  -H 'content-type: application/json' \
+  -d '{"message":"how do I turn on 2FA?"}'
+# → {"reply":"…","retrieved":[{"topic":"security","text":"…","rrf":0.03}],"ms":…}
+
+# upload a new document
+curl -sS -X POST http://127.0.0.1:8090/upload \
+  -H 'x-filename: mydoc.md' \
+  --data-binary @path/to/mydoc.md
+# → {"ok":true,"filename":"mydoc.md","chunks_added":42,"chunks_total":62}
+
+# clear conversation + drop the table
+curl -sS -X POST http://127.0.0.1:8090/reset
+```
+
+Full endpoint list:
+
+| Method | Path | Body / Header | Returns |
+| --- | --- | --- | --- |
+| `GET`  | `/`        | — | single-file chat HTML |
+| `GET`  | `/health`  | — | `{status, llm, db, chunks}` |
+| `GET`  | `/status`  | — | `{chunks, sources, history_len}` |
+| `POST` | `/chat`    | `{message}` | `{reply, retrieved, ms}` |
+| `POST` | `/upload`  | `text/plain` body + `X-Filename` header | `{ok, filename, chunks_added, chunks_total}` |
+| `POST` | `/reset`   | — | `{ok:true}` |
+
+### R15.5 Prompt shape
+
+Same skeleton as R14, extended with a bounded conversation history
+so follow-up questions have context:
+
+```
+Answer the question using only the passages below.
+If the passages do not contain the answer, say so plainly.
+
+Passages:
+  1. Multi-factor authentication is available via authenticator apps ...
+  2. Single Sign-On (SSO) via SAML or OIDC is available on the Enterprise ...
+  3. …
+
+Recent conversation:
+  User: what payment methods do you support?
+  Assistant: We accept Visa, Mastercard, American Express, Discover, ...
+
+User: how do I turn on 2FA?
+Assistant:
+```
+
+The LLM's continuation gets sliced off at `\nUser:` / `\nAssistant:`
+so small models don't leak the transcript.
+
+### R15.6 vs R9 (`rag_chat_server.dart`)
+
+Both serve a browser chat UI. Different backends:
+
+| | R9 `rag_chat_server.dart` | R15 `db_rag_chat_server.dart` |
+| --- | --- | --- |
+| Embedder | GPT-2 last-token hidden | MiniLM-L6-v2 |
+| Vector store | `IndexFlatIP` in memory | `dart_db_server` (persisted) |
+| Retrieval mode | vector only | **vector + BM25 hybrid (RRF)** |
+| Payload filters | ❌ | ✅ via `filter_cols` |
+| LLM | in-process | **separate `bin/*_api.dart` process** |
+| Survives restart | ❌ (rebuild on startup) | ✅ (JSON store) |
+| Corpus size ceiling | RAM-limited | disk-limited, indexed |
+| Multi-tenant ready | ❌ | ✅ (payload filter on `tenant` column) |
+
+Use R9 for a self-contained one-binary demo. Use R15 when you want
+the production shape — vector DB as the source of truth, LLM as a
+swappable HTTP service.
+
+Source: [bin/db_rag_chat_server.dart](bin/db_rag_chat_server.dart).
+
+## R16. llama_serve — HTTP server for Llama-3 (instruction-tuned LLM for R15)
+
+**Deep dive**: [doc/llama_serve.md](doc/llama_serve.md) — architecture,
+wire protocol, chat-template details, sizing, troubleshooting.
+
+Drop-in replacement for the GPT-2 `bin/*_api.dart` runners that
+speaks the same `/generate` wire protocol, but wraps
+`llama-3.2-1b-instruct` (or any `LlamaHFLoader` preset) instead of
+GPT-2. **This is the LLM you actually want behind R15** — Meta's
+post-trained Llama-3.2 with real instruction following, so
+"answer only from the context" is honoured instead of pattern-
+matched away.
+
+### R16.1 Why this matters
+
+The R14 / R15 pipeline is only as good as the LLM in shell A. On
+6 GB VRAM the on-disk candidates rank like this:
+
+| Model | Weights | Runner | Instruction-tuned? |
+| --- | --- | --- | --- |
+| **`llama-3.2-1b-instruct`** | 2.4 GB | **`bin/llama_serve.dart`** (new) | **✅ RLHF** |
+| `pythia-1b` | 2.0 GB | [bin/pythia/run_1b_gpu_api.dart](bin/pythia/run_1b_gpu_api.dart) | ❌ base LM |
+| `gpt2-medium` | 1.5 GB | [bin/gpt2/medium/run_gpu_api.dart](bin/gpt2/medium/run_gpu_api.dart) | ❌ base LM |
+| `pythia-410m` | 872 MB | [bin/pythia/run_410m_gpu_api.dart](bin/pythia/run_410m_gpu_api.dart) | ❌ base LM |
+| `distilgpt2` | 339 MB | [bin/distilgpt2/run_gpu_api.dart](bin/distilgpt2/run_gpu_api.dart) | ❌ base LM |
+
+Base LMs continue the input pattern regardless of instructions —
+they will happily reproduce the retrieved passages verbatim or
+loop the transcript. Only Llama-instruct actually behaves like a
+chatbot.
+
+### R16.2 Two-shell run (drop-in replacement for R15's shell A)
+
+```sh
+# shell A — swap distilgpt2 for Llama-3.2-1B-Instruct on GPU
+LD_LIBRARY_PATH=/usr/lib/wsl/lib \
+  dart run bin/llama_serve.dart --gpu --port 8080
+
+# shell B — the RAG chat server is unchanged
+dart run bin/db_rag_chat_server.dart \
+    --llm http://127.0.0.1:8080 --port 8090 \
+    --corpus data/support_faq.txt
+```
+
+Then open <http://127.0.0.1:8090/>.
+
+### R16.3 Flags
+
+```
+--path PATH        weights (default: models/llama-3.2-1b-instruct/model.safetensors)
+--vocab PATH       tokenizer.json (default: models/llama-3.2-1b-instruct/tokenizer.json)
+--preset NAME      llama-3.2-1b | llama-3.2-3b | llama-3.1-8b (default: llama-3.2-1b)
+--gpu              run on CUDA (default: CPU)
+--host H           HTTP bind host (default 127.0.0.1)
+--port P           HTTP port (default 8080)
+--system "..."     default system prompt injected into the chat template
+--raw              disable chat-template wrapping (send `text` verbatim)
+--max-new N        (default 128)
+--temperature F    (default 0.7)
+--top-k K          (default 40; 0 disables)
+--seed S           deterministic sampling
+--text "..."       one-shot smoke test — generate one reply, print, exit
+```
+
+### R16.4 Wire protocol
+
+Same three endpoints as `bin/*_api.dart`, plus a `messages` field on
+`/generate` for callers that want to hand over structured chat turns:
+
+```sh
+curl -sS http://127.0.0.1:8080/health
+# → {"status":"ok","model":"llama-3.2-1b","device":"gpu",
+#    "weights":"models/llama-3.2-1b-instruct/model.safetensors",
+#    "chat_template":true}
+
+curl -sS http://127.0.0.1:8080/info
+# → {"model":"llama-3.2-1b","embedDim":2048,"numLayers":16,
+#    "numHeads":32,"numKvHeads":8,"vocabSize":128256,"maxCtx":131072,
+#    "eot_id":128009}
+
+# Text form — what db_rag_chat_server sends
+curl -sS -X POST http://127.0.0.1:8080/generate \
+  -H 'content-type: application/json' \
+  -d '{"text":"Explain BM25 in one sentence.","maxNewTokens":80}'
+
+# Structured messages form — bypass the chat wrapper's user-turn assumption
+curl -sS -X POST http://127.0.0.1:8080/generate \
+  -H 'content-type: application/json' \
+  -d '{
+    "messages":[
+      {"role":"system","content":"You are a concise DB expert."},
+      {"role":"user","content":"When would I use HNSW over IVFPQ?"}
+    ],
+    "maxNewTokens":128
+  }'
+```
+
+The returned `text` field is `clientPrompt + assistantReply` for text
+callers (so the `startsWith(prompt)` strip in
+[bin/db_rag_chat_server.dart](bin/db_rag_chat_server.dart) still works)
+and just the assistant reply for `messages` callers.
+
+### R16.5 Chat-template wrapping
+
+Default ON. Every text prompt gets wrapped like:
+
+```
+<|begin_of_text|>
+<|start_header_id|>system<|end_header_id|>
+
+<system prompt>
+<|eot_id|>
+<|start_header_id|>user<|end_header_id|>
+
+<client_text>
+<|eot_id|>
+<|start_header_id|>assistant<|end_header_id|>
+
+```
+
+Generation stops at the first `<|eot_id|>` in the assistant reply
+so the model doesn't drift into a synthetic user turn.
+
+Pass `--raw` if your caller is already emitting Llama chat markers
+in the `text` field itself.
+
+Source: [bin/llama_serve.dart](bin/llama_serve.dart).
 
 ## S1 / S2. Whisper tiny.en — speech-to-text (39M, CPU or GPU)
 

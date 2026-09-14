@@ -49,6 +49,9 @@ process**. No FAISS, no Python, no separate embedding service.
 - **[doc/db_vector_rag.md](doc/db_vector_rag.md)** — architecture
   write-up, split of responsibilities, the five roles of the DB in
   the reference demo.
+- **[doc/llama_serve.md](doc/llama_serve.md)** — HTTP wrapper for
+  Llama-3.2-1B-Instruct that plugs into the chat server, plus a
+  deep dive on why retriever and generator embeddings never collide.
 - **[bin/db_rag_demo.dart](bin/db_rag_demo.dart)** (R13 in
   [commands.md](commands.md)) — the runnable end-to-end demo.
 
