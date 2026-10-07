@@ -1,3 +1,14 @@
+## 0.1.3
+
+- CPU pipeline no longer requires the native CUDA library: GPU op
+  pointers are resolved lazily, so `Device.CPU` tensors never touch
+  `mat_mul`. Added `Tensor.disableAutoGpu` to force size-based
+  auto-placement to stay on CPU.
+- `dart_db_server` is now a hosted dependency (`^0.1.5`) instead of a
+  path dependency, so the package can be published.
+- `ensureNativeLib()` fetches `v0.1.3/...` native binaries from GitHub
+  Releases.
+
 ## 0.1.2
 
 - Formatter reflow of `native_lib_download.dart` — no API change.

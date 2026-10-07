@@ -4,7 +4,7 @@ description: >-
   autograd, hand-written CUDA kernels via dart:ffi, and an nn.Module
   scaffolding for Transformers, GPT, MoE, ViT, and LC0 chess-network
   inference.
-version: 0.1.2
+version: 0.1.3
 homepage: https://github.com/KellyKinyama/dart-pytorch
 repository: https://github.com/KellyKinyama/dart-pytorch
 issue_tracker: https://github.com/KellyKinyama/dart-pytorch/issues
@@ -25,9 +25,8 @@ dependencies:
   fftea: ^1.5.0
   wav: ^1.5.0
   chess: ^0.8.1
-  # In-process vector DB used by bin/db_rag_demo.dart. Sibling repo checkout.
-  dart_db_server:
-    path: ../../../www/dart/dart-db-server
+  # In-process vector DB used by bin/db_rag_demo.dart.
+  dart_db_server: ^0.1.5
 
 dev_dependencies:
   lints: ^6.0.0

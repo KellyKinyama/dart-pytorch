@@ -100,10 +100,11 @@ packages:
   dart_db_server:
     dependency: "direct main"
     description:
-      path: "../../../www/dart/dart-db-server"
-      relative: true
-    source: path
-    version: "0.1.4"
+      name: dart_db_server
+      sha256: "0d3ec59954979846a568b75b5472b4ffd074e94ff74e5d63eb5fe4b0e7572d36"
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.1.5"
   ffi:
     dependency: "direct main"
     description:
