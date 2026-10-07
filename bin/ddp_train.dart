@@ -121,6 +121,10 @@ Future<void> main() async {
   final xBuf = List<double>.filled(microBatch * maxCtx, 0.0);
   final yBuf = List<double>.filled(microBatch * maxCtx, 0.0);
   final sw = Stopwatch()..start();
+  final swC = Stopwatch();
+  final swK = Stopwatch();
+  var computeUs = 0;
+  var commUs = 0;
 
   var step = 0;
   for (var epoch = 0; epoch < epochs; epoch++) {
@@ -147,21 +151,36 @@ Future<void> main() async {
       final x = Tensor.fromList([microBatch, maxCtx], List<double>.from(xBuf));
       final y = Tensor.fromList([microBatch, maxCtx], List<double>.from(yBuf));
 
+      swC
+        ..reset()
+        ..start();
       final loss = gpt(x).crossEntropy(y).mean();
       loss.backward();
       final localLoss = loss.toList()[0];
+      swC.stop();
+      computeUs += swC.elapsedMicroseconds;
 
       // --- DDP gradient all-reduce: average grads across all ranks ---
+      swK
+        ..reset()
+        ..start();
       _gather(params, flat, grads: true);
       for (var off = 0; off < flat.length; off += bucketScalars) {
         final end = math.min(off + bucketScalars, flat.length);
         await dist.allReduceMean(Float32List.sublistView(flat, off, end));
       }
       _scatter(params, flat, grads: true);
+      swK.stop();
+      commUs += swK.elapsedMicroseconds;
 
+      swC
+        ..reset()
+        ..start();
       clipGradNorm(params, 1.0);
       opt.step();
       sched.step();
+      swC.stop();
+      computeUs += swC.elapsedMicroseconds;
 
       if (dist.isMaster && (step == 1 || step % 40 == 0 || step == totalSteps)) {
         log('  step ${step.toString().padLeft(3)}/$totalSteps  '
@@ -172,6 +191,17 @@ Future<void> main() async {
     await dist.barrier(); // all ranks finish the epoch together
   }
   sw.stop();
+
+  // ---- benchmark summary ----
+  final tokens = totalSteps * microBatch * maxCtx;
+  final tokPerSec = tokens / (sw.elapsedMilliseconds / 1000.0);
+  final commPct = 100.0 * commUs / (computeUs + commUs);
+  log('bench: compute=${(computeUs / 1000 / totalSteps).toStringAsFixed(2)}ms/step  '
+      'comm=${(commUs / 1000 / totalSteps).toStringAsFixed(2)}ms/step  '
+      'comm=${commPct.toStringAsFixed(1)}%');
+  log('bench: tokens/s/rank=${tokPerSec.toStringAsFixed(0)}  '
+      'global~${(tokPerSec * dist.worldSize).toStringAsFixed(0)} tokens/s '
+      '(world=${dist.worldSize})');
 
   // Optional checkpoint: rank 0 saves after everyone is done.
   await dist.barrier();

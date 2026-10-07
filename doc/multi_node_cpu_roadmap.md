@@ -179,10 +179,12 @@ Goal: use all cores on each box, since GPU is off the table.
       BLAS backing. This multiplies per-node throughput independently of the
       distributed layer.
 - [ ] **Thread/affinity controls:** env knobs for compute threads per process;
-      guidance on `nproc_per_node` vs cores and NUMA pinning.
-- [ ] **Benchmark harness:** report tokens/sec per node, all-reduce time per
-      step, and scaling efficiency (ideal vs actual) to locate comms-vs-compute
-      bottlenecks.
+      guidance on `nproc_per_node` vs cores and NUMA pinning (e.g. wrap children
+      in `taskset -c <core>` on Linux).
+- [x] **Benchmark harness:** the trainer reports per-step compute vs comm time,
+      comm %, and tokens/s per rank + global, so scaling efficiency is visible.
+      Measured on the loopback demo: world 1 → 4.7k tok/s, world 2 → 8.9k
+      (94%), world 3 → 12.9k (91%); comm held ~14% via ring all-reduce.
 
 Exit criteria: near-linear speedup from 1→C cores per node on a fixed model.
 
