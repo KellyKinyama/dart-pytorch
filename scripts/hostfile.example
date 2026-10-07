@@ -1,0 +1,12 @@
+# Cluster hostfile for bin/ddp_cluster.dart
+#
+# One node per line:  <host>  [slots]
+#   host  = SSH target (optionally user@host)
+#   slots = ranks (processes) to run on that node  [default: 1]
+#
+# Line order is the node rank. The FIRST line is node 0 and, by default, the
+# rendezvous master (override with --master-addr). Blank lines and lines
+# starting with # are ignored.
+
+10.0.0.1   2
+10.0.0.2   2

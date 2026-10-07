@@ -27,6 +27,9 @@ Data-parallel training with a pure-Dart TCP all-reduce:
   each node runs it with its own `--node-rank`; computes global
   `RANK = node_rank * nproc_per_node + local_rank` and rendezvouses at
   `--master-addr:--master-port`.
+- [`bin/ddp_cluster.dart`](../bin/ddp_cluster.dart) — **cluster** launcher
+  (Phase 1): reads a hostfile and SSHes into every node to start `ddp_run.dart`
+  with the correct `--node-rank`. One command brings up the whole run.
 
 **Verified:** 2 and 3 ranks (single host), and a **2-node × 2-proc simulation**
 (world_size 4 over loopback) all finish with *identical* parameter checksums —
@@ -71,15 +74,47 @@ Goal: run the *existing* master-gather DDP across real machines, reliably.
 - [ ] **Hostfile + SSH helper** (`scripts/`): read a `hostfile` (one host per
       line, optional slots), SSH into each, and invoke `ddp_run.dart` with the
       correct `--node-rank`. One command brings up the whole cluster.
+      — **done:** [`bin/ddp_cluster.dart`](../bin/ddp_cluster.dart) +
+      [`scripts/hostfile.example`](../scripts/hostfile.example) (verified via
+      `--dry-run`).
 - [x] **Connectivity hardening:** bounded connect retry with backoff and a
       configurable budget (`DDP_CONNECT_TIMEOUT_MS`); master rendezvous timeout
       (`DDP_INIT_TIMEOUT_MS`) that fails with how many of N connected; errors
       name the unreachable peer `addr:port`.
-- [ ] **Operational docs:** firewall/port notes, binding to a routable
-      interface, and a 2-machine smoke-test recipe.
+- [x] **Operational docs:** see “Running on a cluster” below.
 
 Exit criteria: a 2-host × 2-proc run (world_size 4) converges with identical
 checksums across all four ranks.
+
+### Running on a cluster
+
+Prereqs on **every** node: the Dart SDK and a copy of this repo at the same
+path, plus passwordless SSH from the launch host to each node.
+
+1. Write a hostfile (see [`scripts/hostfile.example`](../scripts/hostfile.example)):
+   ```
+   10.0.0.1   2      # node 0 — also the rendezvous master by default
+   10.0.0.2   2      # node 1
+   ```
+2. Preview the exact commands, then launch:
+   ```
+   dart run bin/ddp_cluster.dart --hostfile scripts/hostfile \
+     --workdir /opt/dart-pytorch --master-port 29500 --dry-run
+   dart run bin/ddp_cluster.dart --hostfile scripts/hostfile \
+     --workdir /opt/dart-pytorch --master-port 29500
+   ```
+   Per node it runs `ddp_run.dart --node-rank <i> --nproc-per-node <slots>`.
+
+**Networking notes**
+- The master binds `0.0.0.0:<MASTER_PORT>`; open that TCP port between nodes.
+- `--master-addr` must be an interface on node 0 that the other nodes can
+  route to (not `127.0.0.1` for real multi-host).
+- Tunables: `DDP_CONNECT_TIMEOUT_MS` (worker connect budget) and
+  `DDP_INIT_TIMEOUT_MS` (master rendezvous wait).
+
+**Single-host smoke test** (no SSH; simulates 2 nodes over loopback): run
+`ddp_run.dart` twice, `--node-rank 0` and `--node-rank 1`, with
+`--master-addr 127.0.0.1` — all ranks should print the same `param_checksum`.
 
 ---
 
