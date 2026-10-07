@@ -23,8 +23,13 @@ Data-parallel training with a pure-Dart TCP all-reduce:
   shard, gradients are averaged every step, then the optimizer steps.
 - [`bin/ddp_launch.dart`](../bin/ddp_launch.dart) — single-host launcher that
   spawns N ranks (stand-in for `torchrun`).
+- [`bin/ddp_run.dart`](../bin/ddp_run.dart) — **per-node** launcher (Phase 1):
+  each node runs it with its own `--node-rank`; computes global
+  `RANK = node_rank * nproc_per_node + local_rank` and rendezvouses at
+  `--master-addr:--master-port`.
 
-**Verified:** 2 and 3 ranks finish with *identical* parameter checksums, i.e.
+**Verified:** 2 and 3 ranks (single host), and a **2-node × 2-proc simulation**
+(world_size 4 over loopback) all finish with *identical* parameter checksums —
 the replicas stay bit-for-bit in sync. Loss decreases with the larger effective
 batch.
 
@@ -57,17 +62,19 @@ batch.
 
 Goal: run the *existing* master-gather DDP across real machines, reliably.
 
-- [ ] **Per-node launcher** `bin/ddp_run.dart` (torchrun equivalent): takes
-      `--nnodes`, `--node-rank`, `--nproc-per-node`, `--master-addr`,
-      `--master-port`; computes global `RANK = node_rank * nproc_per_node +
-      local_rank` and `WORLD_SIZE = nnodes * nproc_per_node`, then spawns the
-      local processes with the right env.
+- [x] **Per-node launcher** [`bin/ddp_run.dart`](../bin/ddp_run.dart) (torchrun
+      equivalent): takes `--nnodes`, `--node-rank`, `--nproc-per-node`,
+      `--master-addr`, `--master-port`; computes global `RANK = node_rank *
+      nproc_per_node + local_rank` and `WORLD_SIZE = nnodes * nproc_per_node`,
+      then spawns the local processes with the right env. Verified via a
+      2-node × 2-proc loopback run (world_size 4, all checksums identical).
 - [ ] **Hostfile + SSH helper** (`scripts/`): read a `hostfile` (one host per
       line, optional slots), SSH into each, and invoke `ddp_run.dart` with the
       correct `--node-rank`. One command brings up the whole cluster.
-- [ ] **Connectivity hardening:** bounded connect retry with backoff (exists,
-      make the limit/timeout configurable); master `accept` timeout; clear,
-      actionable errors naming the unreachable peer.
+- [x] **Connectivity hardening:** bounded connect retry with backoff and a
+      configurable budget (`DDP_CONNECT_TIMEOUT_MS`); master rendezvous timeout
+      (`DDP_INIT_TIMEOUT_MS`) that fails with how many of N connected; errors
+      name the unreachable peer `addr:port`.
 - [ ] **Operational docs:** firewall/port notes, binding to a routable
       interface, and a 2-machine smoke-test recipe.
 

@@ -66,23 +66,40 @@ class Dist {
           }
         });
       });
-      await allConnected.future;
+      // Fail with a useful message if not everyone shows up in time.
+      final initTimeoutMs =
+          int.parse(env['DDP_INIT_TIMEOUT_MS'] ?? '120000');
+      try {
+        await allConnected.future
+            .timeout(Duration(milliseconds: initTimeoutMs));
+      } on TimeoutException {
+        await sub.cancel();
+        await server.close();
+        throw StateError('rendezvous timed out: only $got/$needed worker(s) '
+            'connected to master :$port within ${initTimeoutMs}ms');
+      }
       await sub.cancel();
       await server.close();
       return Dist._(rank, worldSize, localRank, conns, null);
     }
 
     // Worker: connect to master (retry while it comes up).
+    final connectTimeoutMs =
+        int.parse(env['DDP_CONNECT_TIMEOUT_MS'] ?? '60000');
+    final deadline = DateTime.now().add(Duration(milliseconds: connectTimeoutMs));
     Socket? sock;
-    for (var i = 0; i < 200 && sock == null; i++) {
+    Object? lastErr;
+    while (sock == null && DateTime.now().isBefore(deadline)) {
       try {
         sock = await Socket.connect(addr, port);
-      } catch (_) {
-        await Future<void>.delayed(const Duration(milliseconds: 100));
+      } catch (e) {
+        lastErr = e;
+        await Future<void>.delayed(const Duration(milliseconds: 200));
       }
     }
     if (sock == null) {
-      throw StateError('rank $rank could not reach master at $addr:$port');
+      throw StateError('rank $rank could not reach master at $addr:$port '
+          'within ${connectTimeoutMs}ms (last error: $lastErr)');
     }
     sock.setOption(SocketOption.tcpNoDelay, true);
     final c = _Conn(sock);
