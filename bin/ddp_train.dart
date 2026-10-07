@@ -1,0 +1,170 @@
+/// Distributed data-parallel (DDP) training for `dart_pytorch`, ported from
+/// nanoGPT's `train.py`. Each rank trains the same model on a different data
+/// shard; gradients are averaged across ranks every step (see [Dist]), so all
+/// replicas stay in lock-step — the exact mechanic `torch.nn.parallel.DDP`
+/// provides, minus NCCL.
+///
+/// Single process (no DDP):
+///   dart run bin/ddp_train.dart
+///
+/// Multiple local ranks (one process each) via the launcher:
+///   dart run bin/ddp_launch.dart 4
+///
+/// Across servers (run on each host, like torchrun's multi-node example):
+///   RANK=0 WORLD_SIZE=8 LOCAL_RANK=0 MASTER_ADDR=10.0.0.1 MASTER_PORT=29500 \
+///     dart run bin/ddp_train.dart           # ... node 0 ranks ...
+///   RANK=4 WORLD_SIZE=8 LOCAL_RANK=0 MASTER_ADDR=10.0.0.1 MASTER_PORT=29500 \
+///     dart run bin/ddp_train.dart           # ... node 1 ranks ...
+///
+/// GPU pinning: set CUDA_VISIBLE_DEVICES=`<LOCAL_RANK>` per process so each rank's
+/// default CUDA device maps to a distinct physical GPU. This demo forces CPU so
+/// it runs anywhere; the DDP logic is identical on GPU.
+library;
+
+import 'dart:math' as math;
+import 'dart:typed_data';
+
+import 'package:dart_pytorch/dart_pytorch.dart';
+
+import 'ddp_dist.dart';
+
+const _corpus =
+    'to every thing there is a season and a time to every purpose under the heaven. '
+    'a time to be born and a time to die. a time to plant and a time to pluck up '
+    'that which is planted. a time to kill and a time to heal. a time to break down '
+    'and a time to build up. a time to weep and a time to laugh. a time to mourn '
+    'and a time to dance. a time to cast away stones and a time to gather stones '
+    'together. a time to embrace and a time to refrain from embracing. a time to '
+    'get and a time to lose. a time to keep and a time to cast away. a time to '
+    'rend and a time to sew. a time to keep silence and a time to speak. ';
+
+Future<void> main() async {
+  // Keep the demo CPU-only and deterministic across ranks.
+  Tensor.disableAutoGpu = true;
+
+  final dist = await Dist.init();
+  void log(String m) {
+    if (dist.isMaster) print(m);
+  }
+
+  log('=== dart-pytorch DDP training (world_size=${dist.worldSize}) ===');
+
+  // ---- tokenizer (identical on every rank: same corpus + deterministic BPE) ----
+  final tok = BpeTokenizer.train(_corpus, targetVocabSize: 320);
+  final ids = tok.encode(_corpus);
+
+  // ---- model (same seed → identical init on every rank) ----
+  const maxCtx = 32;
+  final gpt = GPT(GPTConfig(
+    vocabSize: tok.vocabSize,
+    maxCtx: maxCtx,
+    embedDim: 32,
+    numLayers: 2,
+    numHeads: 4,
+    dropoutP: 0.0,
+    tieWeights: true,
+    seed: 1,
+  ));
+  final params = gpt.parameters();
+  final totalScalars = params.fold<int>(0, (a, p) => a + p.length);
+
+  // Belt-and-suspenders: broadcast rank 0's weights so every replica starts
+  // byte-identical even if init were nondeterministic.
+  final flat = Float32List(totalScalars);
+  _gather(params, flat, grads: false);
+  await dist.broadcastFromMaster(flat);
+  _scatter(params, flat, grads: false);
+
+  // ---- optimizer + schedule ----
+  const totalSteps = 200;
+  const warmupSteps = 20;
+  const microBatch = 4; // per-rank micro-batch; effective batch scales with world
+  final opt = Adam(params, lr: 0.0);
+  final sched = LinearWarmupCosineDecay(
+    opt,
+    warmupSteps: warmupSteps,
+    totalSteps: totalSteps,
+    maxLr: 3e-3,
+    minLr: 3e-4,
+  );
+  log('params: ${params.length} tensors / $totalScalars scalars  '
+      'effective batch: ${microBatch * dist.worldSize}');
+
+  // Each rank samples a different slice of the data → data parallelism.
+  final rng = math.Random(1234 + dist.rank);
+  final trainable = ids.length - maxCtx - 1;
+  final xBuf = List<double>.filled(microBatch * maxCtx, 0.0);
+  final yBuf = List<double>.filled(microBatch * maxCtx, 0.0);
+  final sw = Stopwatch()..start();
+
+  for (var step = 1; step <= totalSteps; step++) {
+    opt.zeroGrad();
+
+    for (var b = 0; b < microBatch; b++) {
+      final start = rng.nextInt(trainable);
+      for (var t = 0; t < maxCtx; t++) {
+        xBuf[b * maxCtx + t] = ids[start + t].toDouble();
+        yBuf[b * maxCtx + t] = ids[start + t + 1].toDouble();
+      }
+    }
+    final x = Tensor.fromList([microBatch, maxCtx], List<double>.from(xBuf));
+    final y = Tensor.fromList([microBatch, maxCtx], List<double>.from(yBuf));
+
+    final loss = gpt(x).crossEntropy(y).mean();
+    loss.backward();
+    final localLoss = loss.toList()[0];
+
+    // --- DDP gradient all-reduce: average grads across all ranks ---
+    _gather(params, flat, grads: true);
+    await dist.allReduceMean(flat);
+    _scatter(params, flat, grads: true);
+
+    clipGradNorm(params, 1.0);
+    opt.step();
+    sched.step();
+
+    if (dist.isMaster && (step == 1 || step % 20 == 0 || step == totalSteps)) {
+      log('  step ${step.toString().padLeft(3)}  '
+          'loss=${localLoss.toStringAsFixed(4)}  '
+          'lr=${opt.lr.toStringAsExponential(2)}');
+    }
+  }
+  sw.stop();
+
+  // Every rank now holds identical weights; print a checksum to prove it.
+  _gather(params, flat, grads: false);
+  final checksum = flat.fold<double>(0.0, (a, v) => a + v);
+  print('[rank ${dist.rank}] done in ${sw.elapsedMilliseconds} ms  '
+      'param_checksum=${checksum.toStringAsFixed(6)}');
+
+  await dist.close();
+}
+
+/// Flattens each param's data (or `.grad`) into [flat].
+void _gather(List<Tensor> params, Float32List flat, {required bool grads}) {
+  var off = 0;
+  for (final p in params) {
+    final src = grads ? p.grad : p;
+    if (src != null) {
+      flat.setAll(off, src.toFloat32List());
+    } else {
+      flat.fillRange(off, off + p.length, 0.0);
+    }
+    off += p.length;
+  }
+}
+
+/// Writes [flat] back into each param's data (or `.grad`) via in-place assign.
+void _scatter(List<Tensor> params, Float32List flat, {required bool grads}) {
+  var off = 0;
+  for (final p in params) {
+    final n = p.length;
+    final slice = Float32List.sublistView(flat, off, off + n);
+    if (grads) {
+      p.grad?.assign(Tensor.fromFloat32List(p.shape, slice));
+    } else {
+      p.assign(Tensor.fromFloat32List(p.shape, slice));
+    }
+    off += n;
+  }
+}
