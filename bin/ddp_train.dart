@@ -21,6 +21,7 @@
 /// it runs anywhere; the DDP logic is identical on GPU.
 library;
 
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
@@ -50,21 +51,26 @@ Future<void> main() async {
 
   log('=== dart-pytorch DDP training (world_size=${dist.worldSize}) ===');
 
+  // Resolved run config: defaults <- optional DDP_CONFIG json <- env overrides.
+  final cfg = _loadConfig();
+  final seed = cfg['seed']!.toInt();
+  log('config: ${jsonEncode(cfg)}');
+
   // ---- tokenizer (identical on every rank: same corpus + deterministic BPE) ----
-  final tok = BpeTokenizer.train(_corpus, targetVocabSize: 320);
+  final tok = BpeTokenizer.train(_corpus, targetVocabSize: cfg['vocab']!.toInt());
   final ids = tok.encode(_corpus);
 
   // ---- model (same seed → identical init on every rank) ----
-  const maxCtx = 32;
+  final maxCtx = cfg['maxCtx']!.toInt();
   final gpt = GPT(GPTConfig(
     vocabSize: tok.vocabSize,
     maxCtx: maxCtx,
-    embedDim: 32,
-    numLayers: 2,
-    numHeads: 4,
+    embedDim: cfg['embedDim']!.toInt(),
+    numLayers: cfg['numLayers']!.toInt(),
+    numHeads: cfg['numHeads']!.toInt(),
     dropoutP: 0.0,
     tieWeights: true,
-    seed: 1,
+    seed: seed,
   ));
   final params = gpt.parameters();
   final totalScalars = params.fold<int>(0, (a, p) => a + p.length);
@@ -86,15 +92,14 @@ Future<void> main() async {
 
   // ---- data sharding: each rank gets a disjoint shard of a shared shuffle ----
   final trainable = ids.length - maxCtx - 1;
-  const microBatch = 4; // per-rank micro-batch; effective batch scales with world
+  final microBatch = cfg['microBatch']!.toInt();
   final perRank = trainable ~/ dist.worldSize; // disjoint, equal-size shards
   final batchesPerEpoch = perRank ~/ microBatch; // identical on every rank
   if (batchesPerEpoch == 0) {
     throw StateError('corpus too small for world_size=${dist.worldSize} '
         '(trainable=$trainable, microBatch=$microBatch)');
   }
-  const targetSteps = 160;
-  final epochs = math.max(1, targetSteps ~/ batchesPerEpoch);
+  final epochs = math.max(1, cfg['targetSteps']!.toInt() ~/ batchesPerEpoch);
   final totalSteps = epochs * batchesPerEpoch;
 
   // Gradient all-reduce bucket size (scalars). Bounds per-message size for
@@ -110,13 +115,16 @@ Future<void> main() async {
     opt,
     warmupSteps: warmupSteps,
     totalSteps: totalSteps,
-    maxLr: 3e-3,
-    minLr: 3e-4,
+    maxLr: cfg['maxLr']!.toDouble(),
+    minLr: cfg['minLr']!.toDouble(),
   );
   log('params: ${params.length} tensors / $totalScalars scalars  '
       'effective batch: ${microBatch * dist.worldSize}');
   log('data: trainable=$trainable  perRank=$perRank  '
       'epochs=$epochs x $batchesPerEpoch batches = $totalSteps steps');
+
+  // ---- per-rank metrics (JSONL), opt-in via DDP_METRICS_DIR ----
+  final metrics = _openMetrics(dist.rank);
 
   final xBuf = List<double>.filled(microBatch * maxCtx, 0.0);
   final yBuf = List<double>.filled(microBatch * maxCtx, 0.0);
@@ -131,7 +139,7 @@ Future<void> main() async {
     // Deterministic, identical shuffle on every rank, then disjoint stride
     // selection — rank r takes positions r, r+W, r+2W, ... (trimmed equal).
     final order = List<int>.generate(trainable, (i) => i)
-      ..shuffle(math.Random(1234 + epoch));
+      ..shuffle(math.Random(seed + epoch));
     final shard = <int>[];
     for (var i = dist.rank; i < order.length && shard.length < perRank; i += dist.worldSize) {
       shard.add(order[i]);
@@ -186,6 +194,13 @@ Future<void> main() async {
         log('  step ${step.toString().padLeft(3)}/$totalSteps  '
             'epoch $epoch  loss=${localLoss.toStringAsFixed(4)}  '
             'lr=${opt.lr.toStringAsExponential(2)}');
+        metrics?.writeln(jsonEncode({
+          'rank': dist.rank,
+          'step': step,
+          'epoch': epoch,
+          'loss': localLoss,
+          'lr': opt.lr,
+        }));
       }
     }
     await dist.barrier(); // all ranks finish the epoch together
@@ -203,21 +218,82 @@ Future<void> main() async {
       'global~${(tokPerSec * dist.worldSize).toStringAsFixed(0)} tokens/s '
       '(world=${dist.worldSize})');
 
-  // Optional checkpoint: rank 0 saves after everyone is done.
+  // Optional checkpoint: rank 0 saves after everyone is done, with a sidecar
+  // recording the seed + config so a resume is reproducible.
   await dist.barrier();
   final savePath = Platform.environment['DDP_SAVE'];
   if (savePath != null && dist.isMaster) {
     Checkpoint.saveFile(gpt, savePath);
-    log('saved checkpoint to $savePath');
+    File('$savePath.meta.json').writeAsStringSync(
+        jsonEncode({'seed': seed, 'config': cfg, 'steps': totalSteps}));
+    log('saved checkpoint to $savePath (+ .meta.json)');
   }
 
   // Every rank now holds identical weights; print a checksum to prove it.
   _gather(params, flat, grads: false);
   final checksum = flat.fold<double>(0.0, (a, v) => a + v);
+  metrics?.writeln(jsonEncode({
+    'rank': dist.rank,
+    'summary': true,
+    'tokens_per_sec': tokPerSec,
+    'comm_pct': commPct,
+    'param_checksum': checksum,
+  }));
+  await metrics?.close();
   print('[rank ${dist.rank}] done in ${sw.elapsedMilliseconds} ms  '
       'param_checksum=${checksum.toStringAsFixed(6)}');
 
   await dist.close();
+}
+
+/// Resolves run config: built-in defaults <- optional DDP_CONFIG json file
+/// <- DDP_* env overrides. Returns a flat `num` map for easy logging.
+Map<String, num> _loadConfig() {
+  final m = <String, num>{
+    'embedDim': 32,
+    'numLayers': 2,
+    'numHeads': 4,
+    'maxCtx': 32,
+    'microBatch': 4,
+    'targetSteps': 160,
+    'maxLr': 3e-3,
+    'minLr': 3e-4,
+    'seed': 1,
+    'vocab': 320,
+  };
+  final path = Platform.environment['DDP_CONFIG'];
+  if (path != null && File(path).existsSync()) {
+    final j = jsonDecode(File(path).readAsStringSync()) as Map<String, dynamic>;
+    for (final e in j.entries) {
+      if (m.containsKey(e.key) && e.value is num) m[e.key] = e.value as num;
+    }
+  }
+  const envKeys = {
+    'embedDim': 'DDP_EMBED_DIM',
+    'numLayers': 'DDP_NUM_LAYERS',
+    'numHeads': 'DDP_NUM_HEADS',
+    'maxCtx': 'DDP_MAX_CTX',
+    'microBatch': 'DDP_MICRO_BATCH',
+    'targetSteps': 'DDP_TARGET_STEPS',
+    'maxLr': 'DDP_MAX_LR',
+    'minLr': 'DDP_MIN_LR',
+    'seed': 'DDP_SEED',
+    'vocab': 'DDP_VOCAB',
+  };
+  for (final e in envKeys.entries) {
+    final v = Platform.environment[e.value];
+    if (v != null) m[e.key] = num.parse(v);
+  }
+  return m;
+}
+
+/// Opens a per-rank JSONL metrics sink when DDP_METRICS_DIR is set.
+IOSink? _openMetrics(int rank) {
+  final dir = Platform.environment['DDP_METRICS_DIR'];
+  if (dir == null) return null;
+  Directory(dir).createSync(recursive: true);
+  return File('$dir${Platform.pathSeparator}rank$rank.jsonl')
+      .openWrite();
 }
 
 /// Flattens each param's data (or `.grad`) into [flat].

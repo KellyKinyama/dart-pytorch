@@ -194,12 +194,16 @@ Exit criteria: near-linear speedup from 1→C cores per node on a fixed model.
 
 Goal: make real runs reproducible and observable.
 
-- [ ] **Run config:** a single config (file + env overrides) capturing model,
-      data, optimizer, schedule, and cluster topology; logged at startup.
-- [ ] **Metrics & logging:** rank-0 structured logs; per-rank metrics to files;
-      optional periodic throughput summary.
-- [ ] **Reproducibility:** explicit global seed derived per rank; record it in
-      the checkpoint so resume is deterministic.
+- [x] **Run config:** built-in defaults <- optional `DDP_CONFIG` JSON file <-
+      `DDP_*` env overrides (embedDim, numLayers, numHeads, maxCtx, microBatch,
+      targetSteps, maxLr, minLr, seed, vocab); the resolved config is logged at
+      startup.
+- [x] **Metrics & logging:** rank-0 structured step logs; opt-in per-rank JSONL
+      metrics to `DDP_METRICS_DIR/rank{r}.jsonl` (per-step loss/lr + a final
+      tokens/s + comm% + checksum summary).
+- [x] **Reproducibility:** `DDP_SEED` drives both model init and the per-epoch
+      data shuffle; it (plus the full config) is written to `<ckpt>.meta.json`
+      on save, so a resume is deterministic.
 
 ---
 
