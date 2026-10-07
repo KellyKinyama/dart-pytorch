@@ -16,6 +16,7 @@
 library;
 
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -32,6 +33,12 @@ class Dist {
 
   /// Workers only: the single connection to the master.
   final _Conn? _master;
+
+  // Ring links (set up lazily when ring all-reduce is enabled): we send to our
+  // successor and receive from our predecessor.
+  _Conn? _ringNext;
+  _Conn? _ringPrev;
+  bool _useRing = true;
 
   bool get isMaster => rank == 0;
 
@@ -80,7 +87,9 @@ class Dist {
       }
       await sub.cancel();
       await server.close();
-      return Dist._(rank, worldSize, localRank, conns, null);
+      final d = Dist._(rank, worldSize, localRank, conns, null);
+      await d._maybeSetupRing(env, addr);
+      return d;
     }
 
     // Worker: connect to master (retry while it comes up).
@@ -105,12 +114,83 @@ class Dist {
     final c = _Conn(sock);
     final hdr = ByteData(4)..setInt32(0, rank, Endian.little);
     sock.add(hdr.buffer.asUint8List());
-    return Dist._(rank, worldSize, localRank, const [], c);
+    final d = Dist._(rank, worldSize, localRank, const [], c);
+    await d._maybeSetupRing(env, addr);
+    return d;
+  }
+
+  /// Builds ring neighbor links (successor + predecessor) when ring all-reduce
+  /// is enabled. Addresses are exchanged through the existing star: each rank
+  /// advertises a ring port; the master pairs it with the IP it saw the worker
+  /// connect from, assembles the table, and broadcasts it.
+  Future<void> _maybeSetupRing(Map<String, String> env, String masterHost) async {
+    _useRing = env['DDP_ALLREDUCE'] != 'star';
+    if (!_useRing || worldSize <= 1) return;
+
+    final ringServer = await ServerSocket.bind(InternetAddress.anyIPv4, 0);
+    final ringPort = ringServer.port;
+
+    late List<(String, int)> table;
+    if (isMaster) {
+      table = List<(String, int)>.filled(worldSize, (masterHost, ringPort));
+      for (var r = 1; r < worldSize; r++) {
+        final b = await _workers[r]!.recvFrame();
+        final p = ByteData.sublistView(b).getInt32(0, Endian.little);
+        final host = _workers[r]!.socket.remoteAddress.address;
+        table[r] = (host, p);
+      }
+      final payload = Uint8List.fromList(utf8.encode(
+          jsonEncode([for (final a in table) {'h': a.$1, 'p': a.$2}])));
+      for (var r = 1; r < worldSize; r++) {
+        _workers[r]!.sendFrame(payload);
+      }
+    } else {
+      final hdr = ByteData(4)..setInt32(0, ringPort, Endian.little);
+      _master!.sendFrame(hdr.buffer.asUint8List());
+      final b = await _master.recvFrame();
+      final list = jsonDecode(utf8.decode(b)) as List;
+      table = [
+        for (final e in list) ((e as Map)['h'] as String, e['p'] as int),
+      ];
+    }
+
+    // Connect to successor while accepting from predecessor (concurrently, so
+    // there's no ordering deadlock).
+    final nextIdx = (rank + 1) % worldSize;
+    final connectNext = () async {
+      Socket? s;
+      for (var i = 0; i < 600 && s == null; i++) {
+        try {
+          s = await Socket.connect(table[nextIdx].$1, table[nextIdx].$2);
+        } catch (_) {
+          await Future<void>.delayed(const Duration(milliseconds: 100));
+        }
+      }
+      if (s == null) {
+        throw StateError('ring: rank $rank could not connect to successor '
+            '$nextIdx at ${table[nextIdx].$1}:${table[nextIdx].$2}');
+      }
+      s.setOption(SocketOption.tcpNoDelay, true);
+      return _Conn(s);
+    }();
+    final acceptPrev = ringServer.first.then((s) {
+      s.setOption(SocketOption.tcpNoDelay, true);
+      return _Conn(s);
+    });
+    final links = await Future.wait([connectNext, acceptPrev]);
+    _ringNext = links[0];
+    _ringPrev = links[1];
+    await ringServer.close();
   }
 
   /// Averages [buf] in place across all ranks (the DDP gradient all-reduce).
+  /// Uses ring reduce-scatter + all-gather when enabled (bandwidth-optimal),
+  /// otherwise the reduce-to-master + broadcast path.
   Future<void> allReduceMean(Float32List buf) async {
     if (worldSize <= 1) return;
+    if (_useRing && _ringNext != null) {
+      return _allReduceMeanRing(buf);
+    }
     if (isMaster) {
       for (var r = 1; r < worldSize; r++) {
         final bytes = await _workers[r]!.recvFrame();
@@ -133,6 +213,55 @@ class Dist {
       final bytes = await _master.recvFrame();
       final reduced = bytes.buffer.asFloat32List(bytes.offsetInBytes, buf.length);
       buf.setAll(0, reduced);
+    }
+  }
+
+  /// Bandwidth-optimal ring all-reduce: split [buf] into `worldSize` chunks,
+  /// do a reduce-scatter around the ring (each rank ends owning one fully
+  /// summed chunk), then an all-gather, then divide by `worldSize`. Each rank
+  /// only ever talks to its two neighbors, so no single node is a bottleneck.
+  Future<void> _allReduceMeanRing(Float32List buf) async {
+    final w = worldSize;
+    final n = buf.length;
+    final base = n ~/ w;
+    final rem = n % w;
+    final starts = List<int>.filled(w + 1, 0);
+    for (var i = 0; i < w; i++) {
+      starts[i + 1] = starts[i] + base + (i < rem ? 1 : 0);
+    }
+    int mod(int x) => ((x % w) + w) % w;
+
+    Future<void> exchange(int sendIdx, int recvIdx, bool add) async {
+      final s0 = starts[sendIdx];
+      final send = Float32List.sublistView(buf, s0, starts[sendIdx + 1]);
+      _ringNext!.sendFrame(
+          send.buffer.asUint8List(send.offsetInBytes, send.lengthInBytes));
+      final got = await _ringPrev!.recvFrame();
+      final r0 = starts[recvIdx];
+      final rf = got.buffer.asFloat32List(got.offsetInBytes, starts[recvIdx + 1] - r0);
+      if (add) {
+        for (var i = 0; i < rf.length; i++) {
+          buf[r0 + i] += rf[i];
+        }
+      } else {
+        for (var i = 0; i < rf.length; i++) {
+          buf[r0 + i] = rf[i];
+        }
+      }
+    }
+
+    // Reduce-scatter: after w-1 steps, chunk (rank+1) is fully summed here.
+    for (var step = 0; step < w - 1; step++) {
+      await exchange(mod(rank - step), mod(rank - step - 1), true);
+    }
+    // All-gather: propagate each rank's owned chunk around the ring.
+    for (var step = 0; step < w - 1; step++) {
+      await exchange(mod(rank - step + 1), mod(rank - step), false);
+    }
+
+    final inv = 1.0 / w;
+    for (var i = 0; i < n; i++) {
+      buf[i] *= inv;
     }
   }
 
@@ -170,6 +299,8 @@ class Dist {
   }
 
   Future<void> close() async {
+    await _ringNext?.close();
+    await _ringPrev?.close();
     for (final c in _workers) {
       await c?.close();
     }

@@ -150,11 +150,14 @@ loss trajectory; the parity test runs in CI.
 
 Goal: remove the rank-0 bottleneck so throughput holds as nodes grow.
 
-- [ ] **Ring all-reduce** behind the same `allReduceMean` API: arrange ranks in
-      a ring, each talks only to its two neighbors; `2·(worldSize−1)`
-      reduce-scatter + all-gather steps move bandwidth-optimal data. Pure
-      sockets, no master funnel. This is the single highest-value change for
-      scaling and is the natural successor to master-gather.
+- [x] **Ring all-reduce** behind the same `allReduceMean` API: ranks form a ring
+      (each talks only to its two neighbors); a reduce-scatter + all-gather moves
+      bandwidth-optimal data with no master funnel. Enabled by default; set
+      `DDP_ALLREDUCE=star` to force the old path. Ring links bootstrap over the
+      star (address table exchanged via the master using each worker's observed
+      IP). Verified: ring and star produce the same average (checksums match to
+      float rounding) and ring is faster (2 ranks 5s vs 16.8s; 3 ranks 5.8s vs
+      8.8s on the loopback demo).
 - [ ] **Gradient bucketing:** we already all-reduce one flat buffer; split into
       fixed-size buckets so comms can **overlap** with backward as each bucket
       fills (reduces wall-clock by hiding comm under compute).
