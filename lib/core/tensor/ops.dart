@@ -27,9 +27,9 @@ extension TensorOps on Tensor {
     final out = _binaryFwd(
       o,
       cpuFn: (a, b) => a + b,
-      gpuExact: engine.addTensors,
-      gpuScalar: engine.addTensorScalar,
-      gpuRowBroadcast: engine.addTensorRowBroadcast,
+      gpuExact: () => engine.addTensors,
+      gpuScalar: () => engine.addTensorScalar,
+      gpuRowBroadcast: () => engine.addTensorRowBroadcast,
       opName: '+',
     );
     if (o is num) {
@@ -63,8 +63,8 @@ extension TensorOps on Tensor {
     final out = _binaryFwd(
       o,
       cpuFn: (a, b) => a - b,
-      gpuExact: engine.subTensors,
-      gpuScalar: engine.subTensorScalar,
+      gpuExact: () => engine.subTensors,
+      gpuScalar: () => engine.subTensorScalar,
       opName: '-',
     );
     if (o is num) {
@@ -97,8 +97,8 @@ extension TensorOps on Tensor {
     final out = _binaryFwd(
       o,
       cpuFn: (a, b) => a * b,
-      gpuExact: engine.mulTensors,
-      gpuScalar: engine.mulTensorScalar,
+      gpuExact: () => engine.mulTensors,
+      gpuScalar: () => engine.mulTensorScalar,
       opName: '*',
     );
     if (o is num) {
@@ -129,8 +129,8 @@ extension TensorOps on Tensor {
     final out = _binaryFwd(
       o,
       cpuFn: (a, b) => a / b,
-      gpuExact: engine.divTensors,
-      gpuScalar: engine.divTensorScalar,
+      gpuExact: () => engine.divTensors,
+      gpuScalar: () => engine.divTensorScalar,
       opName: '/',
     );
     if (o is num) {
@@ -167,9 +167,9 @@ extension TensorOps on Tensor {
   Tensor _binaryFwd(
     dynamic other, {
     required double Function(double, double) cpuFn,
-    required _GpuOp2 gpuExact,
-    required _GpuOp2 gpuScalar,
-    _GpuOp2? gpuRowBroadcast,
+    required _GpuOp2 Function() gpuExact,
+    required _GpuOp2 Function() gpuScalar,
+    _GpuOp2 Function()? gpuRowBroadcast,
     required String opName,
   }) {
     if (other is num) {
@@ -183,7 +183,7 @@ extension TensorOps on Tensor {
         return Tensor._cpu(shape, out);
       }
       final scalarT = Tensor.fill([1, 1], s, device: Device.GPU);
-      final h = gpuScalar(_handle!, scalarT._handle!);
+      final h = gpuScalar()(_handle!, scalarT._handle!);
       scalarT.dispose();
       return Tensor._gpu(shape, h);
     }
@@ -201,7 +201,13 @@ extension TensorOps on Tensor {
     if (device == Device.CPU) {
       return _binaryCpu(other, cpuFn, opName);
     }
-    return _binaryGpu(other, gpuExact, gpuScalar, gpuRowBroadcast, opName);
+    return _binaryGpu(
+      other,
+      gpuExact(),
+      gpuScalar(),
+      gpuRowBroadcast?.call(),
+      opName,
+    );
   }
 
   Tensor _binaryCpu(
@@ -287,7 +293,7 @@ extension TensorOps on Tensor {
   Tensor relu() {
     final out = _unaryFwd(
       cpuFn: (x) => x < 0 ? 0.0 : x,
-      gpu: engine.reluTensor,
+      gpu: () => engine.reluTensor,
     );
     if (requiresGrad) {
       final x = this;
@@ -309,7 +315,7 @@ extension TensorOps on Tensor {
   Tensor sigmoid() {
     final out = _unaryFwd(
       cpuFn: (x) => 1.0 / (1.0 + math.exp(-x)),
-      gpu: engine.sigmoidTensor,
+      gpu: () => engine.sigmoidTensor,
     );
     if (requiresGrad) {
       final x = this;
@@ -339,7 +345,7 @@ extension TensorOps on Tensor {
         final t = 1.0 - 2.0 / (math.exp(2.0 * ax) + 1.0);
         return x >= 0 ? t : -t;
       },
-      gpu: engine.tanhTensor,
+      gpu: () => engine.tanhTensor,
     );
     if (requiresGrad) {
       final x = this;
@@ -354,7 +360,7 @@ extension TensorOps on Tensor {
 
   /// Absolute value. Backward: `dX = dOut * sign(X)` (with sign(0)=0).
   Tensor abs() {
-    final out = _unaryFwd(cpuFn: (x) => x.abs(), gpu: engine.absTensor);
+    final out = _unaryFwd(cpuFn: (x) => x.abs(), gpu: () => engine.absTensor);
     if (requiresGrad) {
       final x = this;
       out._setBackward([x], () {
@@ -373,7 +379,7 @@ extension TensorOps on Tensor {
 
   /// Natural log. Backward: `dY = dOut / x`.
   Tensor log() {
-    final out = _unaryFwd(cpuFn: (x) => math.log(x), gpu: engine.logTensor);
+    final out = _unaryFwd(cpuFn: (x) => math.log(x), gpu: () => engine.logTensor);
     if (requiresGrad) {
       final x = this;
       out._setBackward([x], () {
@@ -410,7 +416,7 @@ extension TensorOps on Tensor {
 
   Tensor _unaryFwd({
     required double Function(double) cpuFn,
-    required _GpuOp1 gpu,
+    required _GpuOp1 Function() gpu,
   }) {
     if (device == Device.CPU) {
       final d = _cpuData!;
@@ -420,7 +426,7 @@ extension TensorOps on Tensor {
       }
       return Tensor._cpu(shape, out);
     }
-    return Tensor._gpu(shape, gpu(_handle!));
+    return Tensor._gpu(shape, gpu()(_handle!));
   }
 
   Tensor _reluMaskCpu() {

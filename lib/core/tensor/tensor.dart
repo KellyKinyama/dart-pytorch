@@ -84,8 +84,14 @@ class Tensor implements ffi.Finalizable {
   /// at or above, they default to GPU. See `doc/device-placement.md`.
   static const int autoDeviceThreshold = 4096;
 
+  /// When true, size-based auto-placement never selects GPU — set this on
+  /// hosts without a CUDA device so the pipeline stays pure-Dart CPU.
+  /// Explicit `device:` arguments are always honoured regardless.
+  static bool disableAutoGpu = false;
+
   static Device _pickDevice(int length, Device? explicit) {
     if (explicit != null) return explicit;
+    if (disableAutoGpu) return Device.CPU;
     return length >= autoDeviceThreshold ? Device.GPU : Device.CPU;
   }
 

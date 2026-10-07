@@ -26,3 +26,6 @@ models/stockfish/*.nnue
 # Local dart_db_server JSON stores + lock files (regenerated per run).
 data/*.json
 data/*.json.lock
+
+# Local dev dependency override (machine-specific paths)
+pubspec_overrides.yaml
