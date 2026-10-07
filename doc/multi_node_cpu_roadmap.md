@@ -122,20 +122,24 @@ path, plus passwordless SSH from the launch host to each node.
 
 Goal: make distributed results *correct and resumable*, not just in-sync.
 
-- [ ] **Distributed data sharding** (a `DistributedSampler` equivalent): shard
-      the dataset by global rank so shards are disjoint and cover the data once
-      per epoch; reshuffle deterministically per epoch with a shared seed.
-- [ ] **Barriers:** a `Dist.barrier()` collective for epoch boundaries and
-      before/after checkpointing.
-- [ ] **Checkpoint save/resume:** rank 0 writes `Checkpoint` + optimizer state;
-      on resume, rank 0 loads and `broadcastFromMaster` syncs weights (and Adam
-      moments) to all ranks so everyone restarts identically.
-- [ ] **Uneven/last-batch handling:** pad or drop-last consistently so every
-      rank performs the same number of all-reduces (a mismatch deadlocks).
+- [x] **Distributed data sharding** (a `DistributedSampler` equivalent): each
+      epoch does an identical shared shuffle, then rank `r` takes the disjoint
+      stride `r, r+W, r+2W, …` (trimmed to an equal per-rank size) so shards
+      don't overlap and cover the data once per epoch.
+- [x] **Barriers:** `Dist.barrier()` (gather-at-master + release), used at each
+      epoch boundary and around checkpointing.
+- [x] **Checkpoint save/resume:** `DDP_SAVE` — rank 0 writes a `Checkpoint`
+      after a barrier; `DDP_RESUME` — rank 0 loads, then `broadcastFromMaster`
+      syncs weights to all ranks so everyone restarts identically. (Optimizer
+      moment state resume is a future add; weights resume today.)
+- [x] **Uneven/last-batch handling:** every rank runs exactly
+      `perRank // microBatch` batches per epoch, so all ranks perform the same
+      number of all-reduces (a mismatch would deadlock).
 - [ ] **Failure handling:** per-collective timeout; if a rank drops, fail fast
-      on all ranks with a diagnostic instead of hanging.
-- [ ] **Parity test:** a loopback integration test (world_size ≥ 2 on one host)
-      asserting checksum parity after N steps — formalizes the manual check.
+      on all ranks with a diagnostic instead of hanging. (Connect/rendezvous
+      timeouts exist from Phase 1; mid-run collective timeouts are still TODO.)
+- [x] **Parity test:** [`test/ddp_parity_test.dart`](../test/ddp_parity_test.dart)
+      launches a loopback multi-rank run and asserts identical checksums.
 
 Exit criteria: kill a run mid-epoch, resume from checkpoint, and reach the same
 loss trajectory; the parity test runs in CI.

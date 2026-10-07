@@ -151,6 +151,24 @@ class Dist {
     }
   }
 
+  /// Blocks until every rank reaches this point (e.g. an epoch boundary or
+  /// around checkpointing). Implemented as gather-at-master + release.
+  Future<void> barrier() async {
+    if (worldSize <= 1) return;
+    final token = Uint8List(1);
+    if (isMaster) {
+      for (var r = 1; r < worldSize; r++) {
+        await _workers[r]!.recvFrame();
+      }
+      for (var r = 1; r < worldSize; r++) {
+        _workers[r]!.sendFrame(token);
+      }
+    } else {
+      _master!.sendFrame(token);
+      await _master.recvFrame();
+    }
+  }
+
   Future<void> close() async {
     for (final c in _workers) {
       await c?.close();

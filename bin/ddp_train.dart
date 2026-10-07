@@ -21,6 +21,7 @@
 /// it runs anywhere; the DDP logic is identical on GPU.
 library;
 
+import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
@@ -67,18 +68,37 @@ Future<void> main() async {
   ));
   final params = gpt.parameters();
   final totalScalars = params.fold<int>(0, (a, p) => a + p.length);
-
-  // Belt-and-suspenders: broadcast rank 0's weights so every replica starts
-  // byte-identical even if init were nondeterministic.
   final flat = Float32List(totalScalars);
+
+  // Optional resume: rank 0 loads weights from a checkpoint; the broadcast
+  // below then propagates them to every rank.
+  final resumePath = Platform.environment['DDP_RESUME'];
+  if (resumePath != null && dist.isMaster && File(resumePath).existsSync()) {
+    Checkpoint.loadIntoFile(gpt, resumePath);
+    log('resumed weights from $resumePath');
+  }
+
+  // Broadcast rank 0's weights so every replica starts byte-identical
+  // (whether freshly initialized or just resumed).
   _gather(params, flat, grads: false);
   await dist.broadcastFromMaster(flat);
   _scatter(params, flat, grads: false);
 
-  // ---- optimizer + schedule ----
-  const totalSteps = 200;
-  const warmupSteps = 20;
+  // ---- data sharding: each rank gets a disjoint shard of a shared shuffle ----
+  final trainable = ids.length - maxCtx - 1;
   const microBatch = 4; // per-rank micro-batch; effective batch scales with world
+  final perRank = trainable ~/ dist.worldSize; // disjoint, equal-size shards
+  final batchesPerEpoch = perRank ~/ microBatch; // identical on every rank
+  if (batchesPerEpoch == 0) {
+    throw StateError('corpus too small for world_size=${dist.worldSize} '
+        '(trainable=$trainable, microBatch=$microBatch)');
+  }
+  const targetSteps = 160;
+  final epochs = math.max(1, targetSteps ~/ batchesPerEpoch);
+  final totalSteps = epochs * batchesPerEpoch;
+
+  // ---- optimizer + schedule ----
+  final warmupSteps = math.max(1, (totalSteps * 0.1).round());
   final opt = Adam(params, lr: 0.0);
   final sched = LinearWarmupCosineDecay(
     opt,
@@ -89,47 +109,68 @@ Future<void> main() async {
   );
   log('params: ${params.length} tensors / $totalScalars scalars  '
       'effective batch: ${microBatch * dist.worldSize}');
+  log('data: trainable=$trainable  perRank=$perRank  '
+      'epochs=$epochs x $batchesPerEpoch batches = $totalSteps steps');
 
-  // Each rank samples a different slice of the data → data parallelism.
-  final rng = math.Random(1234 + dist.rank);
-  final trainable = ids.length - maxCtx - 1;
   final xBuf = List<double>.filled(microBatch * maxCtx, 0.0);
   final yBuf = List<double>.filled(microBatch * maxCtx, 0.0);
   final sw = Stopwatch()..start();
 
-  for (var step = 1; step <= totalSteps; step++) {
-    opt.zeroGrad();
+  var step = 0;
+  for (var epoch = 0; epoch < epochs; epoch++) {
+    // Deterministic, identical shuffle on every rank, then disjoint stride
+    // selection — rank r takes positions r, r+W, r+2W, ... (trimmed equal).
+    final order = List<int>.generate(trainable, (i) => i)
+      ..shuffle(math.Random(1234 + epoch));
+    final shard = <int>[];
+    for (var i = dist.rank; i < order.length && shard.length < perRank; i += dist.worldSize) {
+      shard.add(order[i]);
+    }
 
-    for (var b = 0; b < microBatch; b++) {
-      final start = rng.nextInt(trainable);
-      for (var t = 0; t < maxCtx; t++) {
-        xBuf[b * maxCtx + t] = ids[start + t].toDouble();
-        yBuf[b * maxCtx + t] = ids[start + t + 1].toDouble();
+    for (var bIdx = 0; bIdx < batchesPerEpoch; bIdx++) {
+      step++;
+      opt.zeroGrad();
+
+      for (var b = 0; b < microBatch; b++) {
+        final start = shard[bIdx * microBatch + b];
+        for (var t = 0; t < maxCtx; t++) {
+          xBuf[b * maxCtx + t] = ids[start + t].toDouble();
+          yBuf[b * maxCtx + t] = ids[start + t + 1].toDouble();
+        }
+      }
+      final x = Tensor.fromList([microBatch, maxCtx], List<double>.from(xBuf));
+      final y = Tensor.fromList([microBatch, maxCtx], List<double>.from(yBuf));
+
+      final loss = gpt(x).crossEntropy(y).mean();
+      loss.backward();
+      final localLoss = loss.toList()[0];
+
+      // --- DDP gradient all-reduce: average grads across all ranks ---
+      _gather(params, flat, grads: true);
+      await dist.allReduceMean(flat);
+      _scatter(params, flat, grads: true);
+
+      clipGradNorm(params, 1.0);
+      opt.step();
+      sched.step();
+
+      if (dist.isMaster && (step == 1 || step % 40 == 0 || step == totalSteps)) {
+        log('  step ${step.toString().padLeft(3)}/$totalSteps  '
+            'epoch $epoch  loss=${localLoss.toStringAsFixed(4)}  '
+            'lr=${opt.lr.toStringAsExponential(2)}');
       }
     }
-    final x = Tensor.fromList([microBatch, maxCtx], List<double>.from(xBuf));
-    final y = Tensor.fromList([microBatch, maxCtx], List<double>.from(yBuf));
-
-    final loss = gpt(x).crossEntropy(y).mean();
-    loss.backward();
-    final localLoss = loss.toList()[0];
-
-    // --- DDP gradient all-reduce: average grads across all ranks ---
-    _gather(params, flat, grads: true);
-    await dist.allReduceMean(flat);
-    _scatter(params, flat, grads: true);
-
-    clipGradNorm(params, 1.0);
-    opt.step();
-    sched.step();
-
-    if (dist.isMaster && (step == 1 || step % 20 == 0 || step == totalSteps)) {
-      log('  step ${step.toString().padLeft(3)}  '
-          'loss=${localLoss.toStringAsFixed(4)}  '
-          'lr=${opt.lr.toStringAsExponential(2)}');
-    }
+    await dist.barrier(); // all ranks finish the epoch together
   }
   sw.stop();
+
+  // Optional checkpoint: rank 0 saves after everyone is done.
+  await dist.barrier();
+  final savePath = Platform.environment['DDP_SAVE'];
+  if (savePath != null && dist.isMaster) {
+    Checkpoint.saveFile(gpt, savePath);
+    log('saved checkpoint to $savePath');
+  }
 
   // Every rank now holds identical weights; print a checksum to prove it.
   _gather(params, flat, grads: false);

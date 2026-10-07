@@ -17,7 +17,7 @@ import 'dart:io';
 Future<void> main(List<String> args) async {
   final world = args.isNotEmpty ? int.parse(args.first) : 2;
   const masterAddr = '127.0.0.1';
-  const masterPort = '29500';
+  final masterPort = Platform.environment['MASTER_PORT'] ?? '29500';
   final script = '${Directory.current.path}/bin/ddp_train.dart';
 
   stdout.writeln('launching $world ranks...');
