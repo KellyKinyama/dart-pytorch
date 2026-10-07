@@ -158,12 +158,12 @@ Goal: remove the rank-0 bottleneck so throughput holds as nodes grow.
       IP). Verified: ring and star produce the same average (checksums match to
       float rounding) and ring is faster (2 ranks 5s vs 16.8s; 3 ranks 5.8s vs
       8.8s on the loopback demo).
-- [ ] **Gradient bucketing:** we already all-reduce one flat buffer; split into
-      fixed-size buckets so comms can **overlap** with backward as each bucket
-      fills (reduces wall-clock by hiding comm under compute).
-- [ ] **fp16 payload compression:** send gradients as fp16 over the wire
-      (`dart_pytorch` already has fp16 encode/decode), ~halving bandwidth; sum
-      in fp32 on receipt. Guard with a tolerance test vs the fp32 path.
+- [x] **Gradient bucketing:** the all-reduce runs over fixed-size buckets
+      (`DDP_BUCKET_SCALARS`, default = whole buffer), bounding per-message size
+      for large models. Verified identical checksums vs a single bucket. (True
+      comm/backward *overlap* needs per-bucket "grad ready" hooks in the
+      autograd engine — deferred until the engine exposes them.)
+- [ ] **fp16 payload compression:** deferred (not pursued for now).
 
 Exit criteria: measured scaling efficiency with ring all-reduce beats
 master-gather at world_size ≥ 8, and improves with bucket overlap.

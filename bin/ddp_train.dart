@@ -97,6 +97,12 @@ Future<void> main() async {
   final epochs = math.max(1, targetSteps ~/ batchesPerEpoch);
   final totalSteps = epochs * batchesPerEpoch;
 
+  // Gradient all-reduce bucket size (scalars). Bounds per-message size for
+  // large models; defaults to one bucket (the whole gradient buffer).
+  final bucketScalars =
+      int.tryParse(Platform.environment['DDP_BUCKET_SCALARS'] ?? '') ??
+          totalScalars;
+
   // ---- optimizer + schedule ----
   final warmupSteps = math.max(1, (totalSteps * 0.1).round());
   final opt = Adam(params, lr: 0.0);
@@ -147,7 +153,10 @@ Future<void> main() async {
 
       // --- DDP gradient all-reduce: average grads across all ranks ---
       _gather(params, flat, grads: true);
-      await dist.allReduceMean(flat);
+      for (var off = 0; off < flat.length; off += bucketScalars) {
+        final end = math.min(off + bucketScalars, flat.length);
+        await dist.allReduceMean(Float32List.sublistView(flat, off, end));
+      }
       _scatter(params, flat, grads: true);
 
       clipGradNorm(params, 1.0);
