@@ -183,6 +183,18 @@ dart run bin/tensor_parallel_gpt2_demo.dart --model path/to/model.safetensors
 dart run bin/tensor_parallel_gpt2_demo.dart --model ... --config distilgpt2
 ```
 
+### Shard a real Llama / SmolLM2 — [../bin/tensor_parallel_llama_demo.dart](../bin/tensor_parallel_llama_demo.dart)
+Exercises the full Llama path — **GQA + RoPE + SwiGLU + RMSNorm** — across
+GPUs. Loads a SmolLM2 checkpoint, shards its decoder blocks
+(`TensorParallelLlamaStack`), and matches logits + next-token argmax
+against the single-GPU reference. SwiGLU's wide hidden dim is split
+across cards (gate/up column-wise, down row-wise).
+
+```bash
+dart run bin/tensor_parallel_llama_demo.dart --model path/to/model.safetensors
+dart run bin/tensor_parallel_llama_demo.dart --model ... --config smollm2-360m
+```
+
 ### Scaling benchmark — [../bin/_tp_bench.dart](../bin/_tp_bench.dart)
 Times a tensor-parallel transformer stack's forward across every GPU
 count (1..N) and both gather modes (GPU-native peer copy vs host-staged),
@@ -263,7 +275,6 @@ Rules of thumb:
 
 ## What's next
 
-See [multi_gpu_roadmap.md](multi_gpu_roadmap.md) for the phased plan:
-tensor-parallel **attention**, **distributed backward** for training,
+See [multi_gpu_roadmap.md](multi_gpu_roadmap.md) for the phased plan:tensor-parallel **attention**, **distributed backward** for training,
 GPU-native collectives, a full TP transformer layer, and 3D
 (data × tensor × pipeline) parallelism.

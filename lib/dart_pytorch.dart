@@ -80,6 +80,7 @@ export 'core/nn/pythia.dart';
 export 'core/nn/pythia_hf_loader.dart';
 export 'core/nn/llama.dart';
 export 'core/nn/llama_hf_loader.dart';
+export 'core/nn/tensor_parallel_llama.dart';
 export 'core/nn/llama_streaming.dart';
 export 'core/nn/skyreels_v2.dart';
 export 'core/nn/skyreels_v2_streaming.dart';
