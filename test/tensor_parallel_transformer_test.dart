@@ -168,4 +168,66 @@ void main() {
       skip: gpu ? false : 'no CUDA GPU available',
     );
   });
+
+  group('TensorParallelTransformerBlock training', () {
+    test(
+      'full block trains: grads reach all shards and loss decreases',
+      () {
+        const embedDim = 48;
+        const numHeads = 6;
+        const n = 5;
+        const steps = 40;
+        final rng = math.Random(3);
+
+        final block = TransformerBlock(
+          embedDim,
+          numHeads,
+          attnBias: true,
+          device: Device.GPU,
+          seed: 17,
+        );
+        final tp = TensorParallelTransformerBlock.fromBlock(
+          block,
+          trainable: true,
+        );
+        expect(tp.parameters().length, greaterThan(0));
+
+        final outDev = tp.outputDevice;
+        final x = Tensor.fromList(
+          [n, embedDim],
+          _rand(rng, n * embedDim, 0.5),
+          device: Device.GPU,
+        ).toGpu(outDev);
+        final target = Tensor.fromList(
+          [n, embedDim],
+          _rand(rng, n * embedDim, 0.5),
+          device: Device.GPU,
+        ).toGpu(outDev);
+
+        final opt = SGD(tp.parameters(), lr: 0.02, momentum: 0.9);
+
+        double? first;
+        var last = double.infinity;
+        for (var s = 0; s < steps; s++) {
+          final out = tp(x);
+          final diff = out - target;
+          final loss = (diff * diff).mean();
+          final v = loss.toList().first;
+          first ??= v;
+          last = v;
+
+          opt.zeroGrad();
+          loss.backward();
+          for (final p in tp.parameters()) {
+            expect(p.grad, isNotNull);
+          }
+          opt.step();
+        }
+
+        expect(last < first! * 0.8, isTrue,
+            reason: 'loss $first -> $last did not drop enough');
+      },
+      skip: gpu ? false : 'no CUDA GPU available',
+    );
+  });
 }

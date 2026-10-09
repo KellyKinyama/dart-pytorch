@@ -85,14 +85,17 @@ and N GPUs; GQA config validated.
 
 ## Phase 2 — Tensor-parallel training (distributed backward)
 
-**Status: done for the MLP.** `Tensor.toGpu` is now a differentiable
-cross-device transfer (grad moves back to the source card), the parallel
-linears take `trainable: true` to expose their shards as autograd leaves,
-and Adam allocates moment buffers on each shard's GPU (`Tensor.zerosLike`).
-Validated by overfitting a sharded MLP
+**Status: done (MLP, attention, block).** `Tensor.toGpu` is now a
+differentiable cross-device transfer (grad moves back to the source
+card), the parallel linears, attention, and transformer block/stack all
+take `trainable: true` to expose their shards as autograd leaves, and
+Adam allocates moment buffers on each shard's GPU (`Tensor.zerosLike`).
+Validated by overfitting a sharded MLP, attention layer, and full block
 ([../test/tensor_parallel_train_test.dart](../test/tensor_parallel_train_test.dart),
+[../test/tensor_parallel_attention_test.dart](../test/tensor_parallel_attention_test.dart),
+[../test/tensor_parallel_transformer_test.dart](../test/tensor_parallel_transformer_test.dart),
 [../bin/tensor_parallel_train_demo.dart](../bin/tensor_parallel_train_demo.dart)).
-Follow-ups: apply the same `trainable` wiring to attention; flow input
+Follow-up: flow input
 gradients through the row-parallel host feature-split.
 
 **Objective.** Make the tensor-parallel layers (Phases 1 + the MLP)
@@ -190,8 +193,8 @@ Inference-only, 2D, ReLU FFN. `TensorParallelTransformerStack` stacks
 blocks with optional pipeline parallelism (`pipelineStages > 1` splits
 devices + blocks into stages; TP within a stage, PP across stages) and is
 validated end to end ([../bin/tensor_parallel_stack_demo.dart](../bin/tensor_parallel_stack_demo.dart)).
-Remaining: a real-weights (HF) loader path, and training (needs
-TP-attention backward).
+The block and stack are also **trainable** (`trainable: true`) end to end.
+Remaining: a real-weights (HF) loader path.
 
 **Objective.** Compose Phases 1–2 into a drop-in parallel block and a
 runnable model.

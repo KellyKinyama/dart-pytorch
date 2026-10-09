@@ -137,4 +137,66 @@ void main() {
       skip: gpu ? false : 'no CUDA GPU available',
     );
   });
+
+  group('TensorParallelMultiHeadAttention training', () {
+    test(
+      'gradients reach every sharded weight and loss decreases',
+      () {
+        const embedDim = 48;
+        const numHeads = 6;
+        const n = 5;
+        const steps = 50;
+        final rng = math.Random(0);
+
+        final mha = MultiHeadAttention(
+          embedDim,
+          numHeads,
+          bias: true,
+          device: Device.GPU,
+          seed: 9,
+        );
+        final tp = TensorParallelMultiHeadAttention.fromAttention(
+          mha,
+          trainable: true,
+        );
+        expect(tp.parameters().length, greaterThan(0));
+
+        final outDev = tp.outputDevice;
+        final x = Tensor.fromList(
+          [n, embedDim],
+          _rand(rng, n * embedDim, 0.5),
+          device: Device.GPU,
+        ).toGpu(outDev);
+        final target = Tensor.fromList(
+          [n, embedDim],
+          _rand(rng, n * embedDim, 0.5),
+          device: Device.GPU,
+        ).toGpu(outDev);
+
+        final opt = SGD(tp.parameters(), lr: 0.05, momentum: 0.9);
+
+        double? first;
+        var last = double.infinity;
+        for (var s = 0; s < steps; s++) {
+          final out = tp(x);
+          final diff = out - target;
+          final loss = (diff * diff).mean();
+          final v = loss.toList().first;
+          first ??= v;
+          last = v;
+
+          opt.zeroGrad();
+          loss.backward();
+          for (final p in tp.parameters()) {
+            expect(p.grad, isNotNull);
+          }
+          opt.step();
+        }
+
+        expect(last < first! * 0.7, isTrue,
+            reason: 'loss $first -> $last did not drop enough');
+      },
+      skip: gpu ? false : 'no CUDA GPU available',
+    );
+  });
 }

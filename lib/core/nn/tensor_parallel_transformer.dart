@@ -39,6 +39,9 @@ class TensorParallelTransformerBlock extends Module {
   final TensorParallelMultiHeadAttention mha;
   final TensorParallelMLP mlp;
 
+  /// Whether the sharded sublayers + LayerNorms are trainable leaves.
+  final bool trainable;
+
   TensorParallelTransformerBlock._(
     this.embedDim,
     this.numHeads,
@@ -51,15 +54,18 @@ class TensorParallelTransformerBlock extends Module {
     this.ln2Beta,
     this.mha,
     this.mlp,
+    this.trainable,
   );
 
   /// Shard a reference [block] across [devices] (defaults to all visible
-  /// GPUs). The FFN activation must be ReLU (the default). The result is
-  /// a detached, inference-only block numerically equivalent to [block].
+  /// GPUs). The FFN activation must be ReLU (the default). Pass
+  /// `trainable: true` to make the sharded sublayers and LayerNorms
+  /// autograd leaves.
   factory TensorParallelTransformerBlock.fromBlock(
     TransformerBlock block, {
     List<int>? devices,
     int? outputDevice,
+    bool trainable = false,
   }) {
     if (block.activation != Activation.relu) {
       throw ArgumentError(
@@ -74,6 +80,7 @@ class TensorParallelTransformerBlock extends Module {
       block.mha,
       devices: devs,
       outputDevice: outDev,
+      trainable: trainable,
     );
     final mlp = TensorParallelMLP.fromWeights(
       upWeight: block.ffn1.weight,
@@ -82,9 +89,15 @@ class TensorParallelTransformerBlock extends Module {
       downBias: block.ffn2.bias,
       devices: devs,
       outputDevice: outDev,
+      trainable: trainable,
     );
 
-    Tensor onOut(Tensor t) => t.detach().toGpu(outDev);
+    Tensor onOut(Tensor t) {
+      final r = t.detach().toGpu(outDev);
+      if (trainable) r.requiresGrad = true;
+      return r;
+    }
+
     return TensorParallelTransformerBlock._(
       block.embedDim,
       block.numHeads,
@@ -97,6 +110,7 @@ class TensorParallelTransformerBlock extends Module {
       onOut(block.ln2.beta),
       mha,
       mlp,
+      trainable,
     );
   }
 
@@ -123,7 +137,16 @@ class TensorParallelTransformerBlock extends Module {
   List<Module> submodules() => [mha, mlp];
 
   @override
-  List<Tensor> parameters() => const [];
+  List<Tensor> parameters() => trainable
+      ? [
+          ...mha.parameters(),
+          ...mlp.parameters(),
+          ln1Gamma,
+          ln1Beta,
+          ln2Gamma,
+          ln2Beta,
+        ]
+      : const [];
 }
 
 /// Even split of `total` into `parts` contiguous chunks; earlier chunks
@@ -164,11 +187,13 @@ class TensorParallelTransformerStack extends Module {
 
   /// Shard a list of reference [blocks] across [devices] (defaults to all
   /// visible GPUs). With [pipelineStages] > 1, partition devices + blocks
-  /// into that many pipeline stages (clamped to the device count).
+  /// into that many pipeline stages (clamped to the device count). Pass
+  /// `trainable: true` to make every block's sharded weights trainable.
   factory TensorParallelTransformerStack.fromBlocks(
     List<TransformerBlock> blocks, {
     List<int>? devices,
     int pipelineStages = 1,
+    bool trainable = false,
   }) {
     if (blocks.isEmpty) {
       throw ArgumentError('TensorParallelTransformerStack: no blocks');
@@ -187,6 +212,7 @@ class TensorParallelTransformerStack extends Module {
             b,
             devices: devs,
             outputDevice: devs.first,
+            trainable: trainable,
           ),
       ]);
     }
@@ -204,6 +230,7 @@ class TensorParallelTransformerStack extends Module {
             blocks[bi],
             devices: groupDevs,
             outputDevice: groupDevs.first,
+            trainable: trainable,
           ),
         );
       }
@@ -227,6 +254,7 @@ class TensorParallelTransformerStack extends Module {
   List<Module> submodules() => blocks;
 
   @override
-  List<Tensor> parameters() => const [];
+  List<Tensor> parameters() =>
+      [for (final b in blocks) ...b.parameters()];
 }
 

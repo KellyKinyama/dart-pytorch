@@ -104,6 +104,9 @@ class TensorParallelMultiHeadAttention extends Module {
   final Tensor? woBias;
   final int outputDevice;
 
+  /// Whether the sharded weights/biases are autograd leaves (trainable).
+  final bool trainable;
+
   TensorParallelMultiHeadAttention._(
     this.embedDim,
     this.numHeads,
@@ -113,15 +116,18 @@ class TensorParallelMultiHeadAttention extends Module {
     this.shards,
     this.woBias,
     this.outputDevice,
+    this.trainable,
   );
 
   /// Build a tensor-parallel copy of [mha], slicing its per-head weights
-  /// onto [devices] (defaults to all visible GPUs). The result is a
-  /// detached, inference-only layer numerically equivalent to [mha].
+  /// onto [devices] (defaults to all visible GPUs). Pass `trainable: true`
+  /// to make the shards autograd leaves (weight grads stay local to each
+  /// card; only the activation grad crosses GPUs).
   factory TensorParallelMultiHeadAttention.fromAttention(
     MultiHeadAttention mha, {
     List<int>? devices,
     int? outputDevice,
+    bool trainable = false,
   }) {
     final devs = devices ?? List<int>.generate(Tensor.gpuCount, (i) => i);
     if (devs.isEmpty) {
@@ -161,21 +167,38 @@ class TensorParallelMultiHeadAttention extends Module {
       final wqW = <Tensor>[];
       final wqB = <Tensor?>[];
       for (var h = q0; h < q1; h++) {
-        wqW.add(wqWcpu[h].toGpu(dev));
-        wqB.add(wqBcpu[h]?.toGpu(dev));
+        final w = wqWcpu[h].toGpu(dev);
+        if (trainable) w.requiresGrad = true;
+        wqW.add(w);
+        final b = wqBcpu[h]?.toGpu(dev);
+        if (trainable && b != null) b.requiresGrad = true;
+        wqB.add(b);
       }
       final wkW = <Tensor>[];
       final wkB = <Tensor?>[];
       final wvW = <Tensor>[];
       final wvB = <Tensor?>[];
       for (var kh = kv0; kh < kv1; kh++) {
-        wkW.add(wkWcpu[kh].toGpu(dev));
-        wkB.add(wkBcpu[kh]?.toGpu(dev));
-        wvW.add(wvWcpu[kh].toGpu(dev));
-        wvB.add(wvBcpu[kh]?.toGpu(dev));
+        final kw = wkWcpu[kh].toGpu(dev);
+        final vw = wvWcpu[kh].toGpu(dev);
+        if (trainable) {
+          kw.requiresGrad = true;
+          vw.requiresGrad = true;
+        }
+        wkW.add(kw);
+        wvW.add(vw);
+        final kb = wkBcpu[kh]?.toGpu(dev);
+        final vb = wvBcpu[kh]?.toGpu(dev);
+        if (trainable) {
+          if (kb != null) kb.requiresGrad = true;
+          if (vb != null) vb.requiresGrad = true;
+        }
+        wkB.add(kb);
+        wvB.add(vb);
       }
       // Output-projection columns for this shard's Q heads.
       final woShard = _sliceCols(woWcpu, q0 * headDim, q1 * headDim).toGpu(dev);
+      if (trainable) woShard.requiresGrad = true;
 
       shards.add(
         _AttnShard(
@@ -195,6 +218,7 @@ class TensorParallelMultiHeadAttention extends Module {
     }
 
     final woBias = mha.wo.bias == null ? null : cpu(mha.wo.bias!).toGpu(outDev);
+    if (trainable && woBias != null) woBias.requiresGrad = true;
     return TensorParallelMultiHeadAttention._(
       embedDim,
       numHeads,
@@ -204,6 +228,7 @@ class TensorParallelMultiHeadAttention extends Module {
       shards,
       woBias,
       outDev,
+      trainable,
     );
   }
 
@@ -262,5 +287,25 @@ class TensorParallelMultiHeadAttention extends Module {
   }
 
   @override
-  List<Tensor> parameters() => const [];
+  List<Tensor> parameters() {
+    if (!trainable) return const [];
+    final ps = <Tensor>[];
+    for (final s in shards) {
+      ps.addAll(s.wqW);
+      ps.addAll(s.wkW);
+      ps.addAll(s.wvW);
+      ps.add(s.woShard);
+      for (final b in s.wqB) {
+        if (b != null) ps.add(b);
+      }
+      for (final b in s.wkB) {
+        if (b != null) ps.add(b);
+      }
+      for (final b in s.wvB) {
+        if (b != null) ps.add(b);
+      }
+    }
+    if (woBias != null) ps.add(woBias!);
+    return ps;
+  }
 }
