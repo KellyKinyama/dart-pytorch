@@ -78,7 +78,7 @@ Future<void> main(List<String> args) async {
   }
 
   print('');
-  print('GPUs  gather   tokens/s   speedup   per-GPU weights');
+  print('GPUs  gather   tokens/s   speedup   PCIe/iter   per-GPU weights');
   double? baseline;
   for (var g = 1; g <= gpus; g++) {
     final devs = List<int>.generate(g, (i) => i);
@@ -87,15 +87,24 @@ Future<void> main(List<String> args) async {
       Tensor.useGpuCollectives = native;
       final stack =
           TensorParallelTransformerStack.fromBlocks(blocks, devices: devs);
+      // Actual resident memory on each shard's card (built, pre-forward).
+      final mem = [for (final d in devs) _mb(Tensor.gpuMemUsed(d))];
+      Tensor.resetPcieBytes();
       final secs = timeForward(stack);
       final tps = tokens * iters / secs;
+      final pcie = _mb((Tensor.pcieBytesMoved / iters).round());
       baseline ??= tps;
       final speedup = tps / baseline!;
       print('${g.toString().padLeft(4)}  '
           '${(native ? 'peer' : 'host').padRight(6)}  '
           '${tps.toStringAsFixed(1).padLeft(9)}  '
           '${speedup.toStringAsFixed(2).padLeft(6)}x  '
+          '${pcie.padLeft(7)} MB  '
           '~$perGpu MB');
+      if (g == 1 && native) {
+        // Single GPU: report measured residency once.
+        print('       measured GPU memory used: ${mem.join(', ')} MB');
+      }
       // Single GPU: the two gather modes are identical, skip the dup row.
       if (g == 1) break;
     }
@@ -103,7 +112,7 @@ Future<void> main(List<String> args) async {
   Tensor.useGpuCollectives = true; // restore default
   print('');
   print('note: per-GPU weights ~ total/GPUs confirms tensor sharding; '
-      'peer vs host shows the collective cost.');
+      'PCIe/iter + peer-vs-host tokens/s show the collective cost.');
 }
 
 String _mb(int bytes) => (bytes / (1024 * 1024)).toStringAsFixed(1);

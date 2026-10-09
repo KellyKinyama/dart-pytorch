@@ -156,6 +156,20 @@ extern "C"
         }
     }
 
+    // Bytes currently in use on device `d` (total - free), for memory
+    // residency reporting. Returns 0 on error.
+    DLLEXPORT long long dp_device_mem_used(int d)
+    {
+        int prev = 0;
+        cudaGetDevice(&prev);
+        if (cudaSetDevice(d) != cudaSuccess) return 0;
+        size_t freeB = 0, totalB = 0;
+        cudaError_t e = cudaMemGetInfo(&freeB, &totalB);
+        cudaSetDevice(prev);
+        if (e != cudaSuccess) return 0;
+        return (long long)(totalB - freeB);
+    }
+
     // Allocate a copy of `h`'s data on device `dst` and return the new
     // handle. Uses cudaMemcpyPeer, which transfers GPU->GPU directly when
     // peer access is available and otherwise stages through the host, so

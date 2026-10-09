@@ -182,6 +182,45 @@ void main() {
     );
   });
 
+  group('TensorParallelMultiHeadAttention batched', () {
+    test(
+      'batched [B, N, D] input matches the single-GPU MHA',
+      () {
+        const embedDim = 48;
+        const numHeads = 6;
+        const b = 3;
+        const s = 4;
+        final rng = math.Random(8);
+
+        final mha = MultiHeadAttention(
+          embedDim,
+          numHeads,
+          bias: true,
+          device: Device.GPU,
+          seed: 19,
+        );
+        final x = Tensor.fromList(
+          [b, s, embedDim],
+          _rand(rng, b * s * embedDim, 0.5),
+          device: Device.GPU,
+        );
+
+        final ref = mha(x).to(Device.CPU).toFloat32List();
+        final tp = TensorParallelMultiHeadAttention.fromAttention(mha);
+        final got = tp(x).to(Device.CPU).toFloat32List();
+
+        expect(got.length, ref.length);
+        var maxDiff = 0.0;
+        for (var i = 0; i < ref.length; i++) {
+          final d = (got[i] - ref[i]).abs();
+          if (d > maxDiff) maxDiff = d;
+        }
+        expect(maxDiff < 1e-3, isTrue, reason: 'max abs diff $maxDiff');
+      },
+      skip: gpu ? false : 'no CUDA GPU available',
+    );
+  });
+
   group('TensorParallelMultiHeadAttention KV cache', () {
     test(
       'incremental decoding with cache matches the full causal forward',

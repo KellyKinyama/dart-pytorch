@@ -38,10 +38,10 @@ on-card, and row-parallelises the output projection. Validated against
 single-GPU `MultiHeadAttention` for plain MHA, GQA, and a causal mask
 ([../test/tensor_parallel_attention_test.dart](../test/tensor_parallel_attention_test.dart),
 [../bin/tensor_parallel_attention_demo.dart](../bin/tensor_parallel_attention_demo.dart)).
-Remaining for a later pass: dropout, batched 3D path. (RoPE and a
-per-shard KV cache are supported: each shard gets a device-local
-`RopeCache` and `MHACache`; `call` takes `startPos`/`cache`, and the
-block/stack expose `newCache()` for autoregressive decoding.)
+Remaining for a later pass: none — RoPE, a per-shard KV cache, attention
+dropout (training-mode), and a batched 3D `[B, N, embedDim]` path are all
+supported (`call` takes `startPos`/`cache`; the block/stack expose
+`newCache()`).
 
 **Objective.** A `ColumnParallel`/`RowParallel` multi-head attention so
 one attention layer's QKV and output projection span all GPUs, matching
@@ -224,12 +224,13 @@ multi-block TP transformer matching a reference within tolerance.
 
 ## Phase 5 — Benchmarks, tests, tooling (cross-cutting)
 
-**Status: in progress.** `bin/_tp_bench.dart` times the TP transformer
+**Status: done.** `bin/_tp_bench.dart` times the TP transformer
 stack's forward across GPU counts (1..N) and both gather modes (peer vs
-host-staged), reporting tokens/s, speedup, and per-GPU weight footprint.
-GPU-guarded equivalence + training tests exist for the linears, MLP,
-attention, block, and stack. Remaining: a PCIe-bytes counter and a
-memory-residency assertion.
+host-staged), reporting tokens/s, speedup, **per-GPU resident memory**
+(`Tensor.gpuMemUsed`, from `cudaMemGetInfo`), and **PCIe bytes per
+iteration** (`Tensor.pcieBytesMoved`, counting peer copies). GPU-guarded
+equivalence + training tests exist for the linears, MLP, attention,
+block, and stack.
 
 **Tasks.**
 - Equivalence tests under `test/`: extend

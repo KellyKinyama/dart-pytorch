@@ -124,6 +124,10 @@ class TensorParallelMultiHeadAttention extends Module {
   /// Whether the sharded weights/biases are autograd leaves (trainable).
   final bool trainable;
 
+  /// Attention-output dropout probability (0 disables). Applied only when
+  /// the layer is in training mode.
+  final double dropoutP;
+
   TensorParallelMultiHeadAttention._(
     this.embedDim,
     this.numHeads,
@@ -134,6 +138,7 @@ class TensorParallelMultiHeadAttention extends Module {
     this.woBias,
     this.outputDevice,
     this.trainable,
+    this.dropoutP,
   );
 
   /// Build a tensor-parallel copy of [mha], slicing its per-head weights
@@ -247,6 +252,7 @@ class TensorParallelMultiHeadAttention extends Module {
       woBias,
       outDev,
       trainable,
+      mha.attnDropout?.p ?? 0.0,
     );
   }
 
@@ -254,12 +260,46 @@ class TensorParallelMultiHeadAttention extends Module {
   TPMHACache newCache() =>
       TPMHACache([for (final s in shards) MHACache.empty(s.wkW.length)]);
 
-  /// Forward over a 2D `[N, embedDim]` sequence with optional additive
-  /// mask `[N, N]`. [startPos] is the absolute position of the first row
-  /// (for RoPE); when a [cache] is given, positions continue from the
-  /// cached length and each new token's K/V is appended per shard.
-  /// Returns `[N, embedDim]` on [outputDevice].
+  /// Forward over a 2D `[N, embedDim]` sequence or a 3D `[B, N, embedDim]`
+  /// batch, with optional additive mask `[N, N]`. For autoregressive
+  /// decoding (2D only) pass a per-shard [cache] and [startPos]. Attention
+  /// dropout is applied only in training mode. Returns the same rank as
+  /// the input, on [outputDevice].
   Tensor call(Tensor x, {Tensor? mask, TPMHACache? cache, int startPos = 0}) {
+    final Tensor out;
+    if (x.shape.length == 3) {
+      if (x.shape[2] != embedDim) {
+        throw ArgumentError(
+          'TensorParallelMultiHeadAttention: expected [B, N, $embedDim]; '
+          'got ${x.shape}',
+        );
+      }
+      if (cache != null) {
+        throw ArgumentError('batched (3D) input does not support a KV cache');
+      }
+      final b = x.shape[0];
+      final s = x.shape[1];
+      // Run each batch element's sequence through the 2D path, then stack.
+      final seqs = TensorConcat.splitRows(x.reshape([b * s, embedDim]), s);
+      final outs = [
+        for (final xi in seqs) _forward2d(xi, mask: mask, startPos: startPos),
+      ];
+      out = Tensor.onGpu(outputDevice, () {
+        final stacked = TensorConcat.concat(
+          [for (final o in outs) o.toGpu(outputDevice)],
+          axis: 0,
+        );
+        return stacked.reshape([b, s, embedDim]);
+      });
+    } else {
+      out = _forward2d(x, mask: mask, cache: cache, startPos: startPos);
+    }
+    if (dropoutP <= 0.0 || !training) return out;
+    return Tensor.onGpu(outputDevice, () => out.dropout(dropoutP, training: true));
+  }
+
+  Tensor _forward2d(Tensor x,
+      {Tensor? mask, TPMHACache? cache, int startPos = 0}) {
     if (x.shape.length != 2 || x.shape[1] != embedDim) {
       throw ArgumentError(
         'TensorParallelMultiHeadAttention: expected [N, $embedDim]; '

@@ -279,11 +279,11 @@ Rules of thumb:
 - The tensor-parallel **transformer block** (`TensorParallelTransformerBlock`)
   is inference-only, 2D `[N, embedDim]`, ReLU FFN; LayerNorms/residuals are
   replicated on the output device.
-- Tensor-parallel attention covers the 2D `[N, embedDim]` path with GQA,
-  an additive mask, **RoPE**, and a **per-shard KV cache** for
-  autoregressive decoding (`newCache()` on the attention, block, or
-  stack; `call(..., cache:/caches:, startPos:)`); dropout and the batched
-  3D path are not sharded yet.
+- Tensor-parallel attention covers the 2D `[N, embedDim]` path **and** a
+  batched 3D `[B, N, embedDim]` path, with GQA, an additive mask, **RoPE**,
+  a **per-shard KV cache** for autoregressive decoding (`newCache()` on
+  the attention, block, or stack; `call(..., cache:/caches:, startPos:)`),
+  and **attention dropout** applied in training mode.
 - Pinning is per-thread; drive GPU ops from a single Dart isolate (the
   default), or set the device inside each isolate.
 

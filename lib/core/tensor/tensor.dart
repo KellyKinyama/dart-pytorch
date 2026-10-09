@@ -433,6 +433,15 @@ class Tensor implements ffi.Finalizable {
   /// The CUDA device ordinal subsequent GPU allocations target.
   static int get currentGpu => engine.currentDevice;
 
+  /// Bytes in use on GPU [index] (total - free); 0 when unavailable.
+  static int gpuMemUsed(int index) => engine.deviceMemUsed(index);
+
+  /// Running total of bytes moved by cross-device (peer) copies.
+  static int get pcieBytesMoved => engine.pcieBytesMoved;
+
+  /// Reset the [pcieBytesMoved] counter.
+  static void resetPcieBytes() => engine.resetPcieBytes();
+
   /// Returns this tensor placed on GPU [index]. A no-op when already
   /// there. CPU tensors are uploaded to that device; GPU tensors are
   /// moved with a direct device-to-device (peer) copy.
@@ -453,6 +462,7 @@ class Tensor implements ffi.Finalizable {
       // GPU -> different GPU: direct peer copy, no host round-trip.
       engine.enablePeerAccess(index, gpuIndex);
       final h = engine.copyTensorToDevice(_handle!, index);
+      engine.pcieBytesMoved += length * 4;
       out = Tensor._gpu(shape, h, deviceIndex: index);
     }
     if (requiresGrad) {

@@ -37,6 +37,8 @@ typedef DCopyToDevice =
 // Peer access + cross-device strided block copy (GPU-native collectives).
 typedef CEnablePeer = ffi.Void Function(ffi.Int32, ffi.Int32);
 typedef DEnablePeer = void Function(int, int);
+typedef CMemUsed = ffi.Int64 Function(ffi.Int32);
+typedef DMemUsed = int Function(int);
 typedef CCopyBlock2d =
     ffi.Void Function(
       ffi.Pointer<ffi.Void>,
@@ -290,6 +292,11 @@ class CudaEngine {
   // GPU-native collectives (null if the native lib predates them).
   DEnablePeer? _enablePeer;
   DCopyBlock2d? _copyBlock2d;
+  DMemUsed? _memUsed;
+
+  /// Running total of bytes moved by cross-device (peer) copies, for the
+  /// scaling benchmark. Reset with [resetPcieBytes].
+  int pcieBytesMoved = 0;
 
   /// Directed device pairs (dst<<16 | src) whose peer access is already
   /// enabled, so the FFI call happens at most once per pair.
@@ -400,12 +407,16 @@ class CudaEngine {
       _copyBlock2d = _lib.lookupFunction<CCopyBlock2d, DCopyBlock2d>(
         'copy_block_2d',
       );
+      _memUsed = _lib.lookupFunction<CMemUsed, DMemUsed>(
+        'dp_device_mem_used',
+      );
     } on ArgumentError {
       _deviceCount = null;
       _setDevice = null;
       _copyToDevice = null;
       _enablePeer = null;
       _copyBlock2d = null;
+      _memUsed = null;
     }
 
     // Same underlying symbol as `destroyTensor`, exposed as a native
@@ -574,7 +585,15 @@ class CudaEngine {
     }
     fn(dst, dstStrideCols, dstColOffset, src, srcStrideCols, srcColOffset,
         rows, blockCols);
+    pcieBytesMoved += rows * blockCols * 4;
   }
+
+  /// Bytes currently in use on device [index] (total - free). Returns 0
+  /// when the native lib predates the memory query.
+  int deviceMemUsed(int index) => _memUsed?.call(index) ?? 0;
+
+  /// Reset the [pcieBytesMoved] counter.
+  void resetPcieBytes() => pcieBytesMoved = 0;
 }
 
 /// Resolves the platform-specific native library. Search order:
