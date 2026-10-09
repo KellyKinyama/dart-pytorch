@@ -332,33 +332,83 @@ class Lc0AttnNet {
 
     final attn = Float32List(64 * e);
     final row = Float32List(64);
-    for (var h = 0; h < heads; h++) {
-      final ho = h * depth;
-      for (var i = 0; i < 64; i++) {
-        var maxL = double.negativeInfinity;
-        for (var j = 0; j < 64; j++) {
-          var dot = 0.0;
-          for (var dd = 0; dd < depth; dd++) {
-            dot += q[i * e + ho + dd] * k[j * e + ho + dd];
-          }
-          var lg = dot * scaling;
-          if (smBias != null) lg += smBias[h * 4096 + i * 64 + j];
-          row[j] = lg;
-          if (lg > maxL) maxL = lg;
-        }
-        var denom = 0.0;
-        for (var j = 0; j < 64; j++) {
-          final ex = math.exp(row[j] - maxL);
-          row[j] = ex;
-          denom += ex;
-        }
-        final inv = 1.0 / denom;
-        for (var dd = 0; dd < depth; dd++) {
-          var acc = 0.0;
+    final depth4 = depth >> 2;
+    final eRow4 = e >> 2;
+    final simdHead = (depth & 3) == 0 && (e & 3) == 0;
+    if (simdHead) {
+      final qX = Float32x4List.view(q.buffer, q.offsetInBytes, 64 * eRow4);
+      final kX = Float32x4List.view(k.buffer, k.offsetInBytes, 64 * eRow4);
+      final vX = Float32x4List.view(v.buffer, v.offsetInBytes, 64 * eRow4);
+      final aX = Float32x4List.view(attn.buffer, attn.offsetInBytes, 64 * eRow4);
+      final accV = Float32x4List(depth4);
+      for (var h = 0; h < heads; h++) {
+        final ho4 = (h * depth) >> 2;
+        for (var i = 0; i < 64; i++) {
+          final qb4 = i * eRow4 + ho4;
+          var maxL = double.negativeInfinity;
           for (var j = 0; j < 64; j++) {
-            acc += row[j] * v[j * e + ho + dd];
+            final kb4 = j * eRow4 + ho4;
+            var acc = Float32x4.zero();
+            for (var d4 = 0; d4 < depth4; d4++) {
+              acc += qX[qb4 + d4] * kX[kb4 + d4];
+            }
+            var lg = (acc.x + acc.y + acc.z + acc.w) * scaling;
+            if (smBias != null) lg += smBias[h * 4096 + i * 64 + j];
+            row[j] = lg;
+            if (lg > maxL) maxL = lg;
           }
-          attn[i * e + ho + dd] = acc * inv;
+          var denom = 0.0;
+          for (var j = 0; j < 64; j++) {
+            final ex = math.exp(row[j] - maxL);
+            row[j] = ex;
+            denom += ex;
+          }
+          for (var d4 = 0; d4 < depth4; d4++) {
+            accV[d4] = Float32x4.zero();
+          }
+          for (var j = 0; j < 64; j++) {
+            final rj = Float32x4.splat(row[j]);
+            final vb4 = j * eRow4 + ho4;
+            for (var d4 = 0; d4 < depth4; d4++) {
+              accV[d4] += rj * vX[vb4 + d4];
+            }
+          }
+          final invV = Float32x4.splat(1.0 / denom);
+          final ab4 = i * eRow4 + ho4;
+          for (var d4 = 0; d4 < depth4; d4++) {
+            aX[ab4 + d4] = accV[d4] * invV;
+          }
+        }
+      }
+    } else {
+      for (var h = 0; h < heads; h++) {
+        final ho = h * depth;
+        for (var i = 0; i < 64; i++) {
+          var maxL = double.negativeInfinity;
+          for (var j = 0; j < 64; j++) {
+            var dot = 0.0;
+            for (var dd = 0; dd < depth; dd++) {
+              dot += q[i * e + ho + dd] * k[j * e + ho + dd];
+            }
+            var lg = dot * scaling;
+            if (smBias != null) lg += smBias[h * 4096 + i * 64 + j];
+            row[j] = lg;
+            if (lg > maxL) maxL = lg;
+          }
+          var denom = 0.0;
+          for (var j = 0; j < 64; j++) {
+            final ex = math.exp(row[j] - maxL);
+            row[j] = ex;
+            denom += ex;
+          }
+          final inv = 1.0 / denom;
+          for (var dd = 0; dd < depth; dd++) {
+            var acc = 0.0;
+            for (var j = 0; j < 64; j++) {
+              acc += row[j] * v[j * e + ho + dd];
+            }
+            attn[i * e + ho + dd] = acc * inv;
+          }
         }
       }
     }
@@ -421,6 +471,52 @@ class Lc0AttnNet {
   /// then normalize over [ch] per row and scale/shift by gamma/beta.
   void _layerNorm(Float32List data, double alpha, Float32List? skip,
       Float32List gamma, Float32List beta, double eps, int rows, int ch) {
+    final ch4 = ch >> 2;
+    final simd = (ch & 3) == 0 &&
+        (data.offsetInBytes & 15) == 0 &&
+        (gamma.offsetInBytes & 15) == 0 &&
+        (beta.offsetInBytes & 15) == 0 &&
+        (skip == null || (skip.offsetInBytes & 15) == 0);
+    if (simd) {
+      final dX = Float32x4List.view(data.buffer, data.offsetInBytes, rows * ch4);
+      final gX = Float32x4List.view(gamma.buffer, gamma.offsetInBytes, ch4);
+      final bX = Float32x4List.view(beta.buffer, beta.offsetInBytes, ch4);
+      final sX = skip == null
+          ? null
+          : Float32x4List.view(skip.buffer, skip.offsetInBytes, rows * ch4);
+      final alphaV = Float32x4.splat(alpha);
+      final invCh = 1.0 / ch;
+      for (var i = 0; i < rows; i++) {
+        final b4 = i * ch4;
+        var sumV = Float32x4.zero();
+        if (sX != null) {
+          for (var c = 0; c < ch4; c++) {
+            final val = dX[b4 + c] * alphaV + sX[b4 + c];
+            dX[b4 + c] = val;
+            sumV += val;
+          }
+        } else {
+          for (var c = 0; c < ch4; c++) {
+            final val = dX[b4 + c] * alphaV;
+            dX[b4 + c] = val;
+            sumV += val;
+          }
+        }
+        final mean = (sumV.x + sumV.y + sumV.z + sumV.w) * invCh;
+        final meanV = Float32x4.splat(mean);
+        var varV = Float32x4.zero();
+        for (var c = 0; c < ch4; c++) {
+          final diff = dX[b4 + c] - meanV;
+          varV += diff * diff;
+        }
+        final variance = (varV.x + varV.y + varV.z + varV.w) * invCh;
+        final denV = Float32x4.splat(1.0 / math.sqrt(variance + eps));
+        for (var c = 0; c < ch4; c++) {
+          dX[b4 + c] = bX[c] + gX[c] * (dX[b4 + c] - meanV) * denV;
+        }
+      }
+      return;
+    }
     for (var i = 0; i < rows; i++) {
       final base = i * ch;
       var mean = 0.0;
