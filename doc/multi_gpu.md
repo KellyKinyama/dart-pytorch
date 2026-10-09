@@ -211,6 +211,16 @@ RANK=0 WORLD_SIZE=2 MASTER_ADDR=10.0.0.1 MASTER_PORT=29500 dart run bin/tensor_p
 RANK=1 WORLD_SIZE=2 MASTER_ADDR=10.0.0.1 MASTER_PORT=29500 dart run bin/tensor_parallel_ddp_demo.dart
 ```
 
+Each rank's tensor-parallel GPU set is chosen by the `TP_DEVICES` env var
+(e.g. `TP_DEVICES=0,1,2,3`; unset = all visible GPUs). The cluster
+launcher reads a hostfile (host + GPU-set per line) and SSHes one rank
+per host with the right `RANK`/`WORLD_SIZE`/`MASTER_ADDR`/`TP_DEVICES`:
+
+```bash
+dart run bin/tp_ddp_cluster.dart --hostfile scripts/tp_hostfile --master-port 29500
+dart run bin/tp_ddp_cluster.dart --hostfile scripts/tp_hostfile --dry-run  # print ssh cmds
+```
+
 ### Scaling benchmark — [../bin/_tp_bench.dart](../bin/_tp_bench.dart)
 Times a tensor-parallel transformer stack's forward across every GPU
 count (1..N) and both gather modes (GPU-native peer copy vs host-staged),

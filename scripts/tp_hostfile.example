@@ -1,0 +1,18 @@
+# Hostfile for bin/tp_ddp_cluster.dart — 3D (data × tensor) parallelism.
+#
+# One line per HOST = one data-parallel rank. The second column is that
+# rank's tensor-parallel GPU set (comma-separated ordinals), passed as
+# TP_DEVICES. Omit it to use every visible GPU on the host.
+#
+# Format:  host[:user@]   gpu-set
+#
+# The first non-comment line is rank 0 and the rendezvous master
+# (override with --master-addr). Lines starting with # are ignored.
+
+# Two hosts, each tensor-parallel across its 4 GPUs (world size 2):
+10.0.0.1   0,1,2,3
+10.0.0.2   0,1,2,3
+
+# Mixed example: host with a user, and a host using only 2 of its GPUs:
+# user@10.0.0.3   0,1
+# 10.0.0.4                 # (no gpu-set -> all visible GPUs)

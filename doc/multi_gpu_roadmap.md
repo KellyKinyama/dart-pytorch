@@ -255,8 +255,9 @@ are local per card and every replica shares the shard layout, so
 flattening `parameters()` and `allReduceMean` averages corresponding
 shards across replicas; averaged grads are scattered back onto each
 shard's GPU. Pipeline parallelism composes within a host via the stack's
-`pipelineStages`. Remaining: a rank→(host, GPU-set) topology config and
-launcher update.
+`pipelineStages`. The rank→(host, GPU-set) topology is driven by the
+`TP_DEVICES` env var, and `bin/tp_ddp_cluster.dart` launches one rank per
+host over SSH from a hostfile (see scripts/tp_hostfile.example).
 
 **Objective.** Combine the socket DDP data-parallel path with in-process
 TP+PP for cluster-scale runs.

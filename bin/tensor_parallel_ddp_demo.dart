@@ -24,6 +24,7 @@
 /// lib/native/src/engine.cu).
 library;
 
+import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
@@ -35,6 +36,13 @@ const int _model = 64;
 const int _hidden = 256;
 const int _tokens = 8;
 const int _steps = 40;
+
+/// Parse a `TP_DEVICES` topology string like "0,1,2" into GPU ordinals.
+/// Null/empty means "use every visible GPU on this host".
+List<int>? _parseTpDevices(String? s) {
+  if (s == null || s.trim().isEmpty) return null;
+  return s.split(',').map((e) => int.parse(e.trim())).toList();
+}
 
 /// Download every parameter's grad into one host buffer (device-aware).
 void _gatherGrads(List<Tensor> params, Float32List flat) {
@@ -74,11 +82,14 @@ Future<void> main() async {
     if (dist.isMaster) print(m);
   }
 
+  // The GPU set this rank shards across (rank→GPU-set topology).
+  final tpDevices = _parseTpDevices(Platform.environment['TP_DEVICES']);
   log('=== 3D-parallel (tensor × data) training demo ===');
   log('world size (hosts): ${dist.worldSize} | visible GPUs this host: '
-      '${Tensor.gpuCount} | model: $_model, hidden: $_hidden');
+      '${Tensor.gpuCount} | TP devices this rank: '
+      '${tpDevices ?? 'all'} | model: $_model, hidden: $_hidden');
 
-  // Tensor-parallel model across this host's GPUs.
+  // Tensor-parallel model across this rank's assigned GPUs.
   final rng = math.Random(0);
   final upW = Tensor.fromList(
     [_hidden, _model],
@@ -92,6 +103,7 @@ Future<void> main() async {
     upWeight: upW,
     downWeight: downW,
     trainable: true,
+    devices: tpDevices,
   );
   final params = mlp.parameters();
   final totalScalars = params.fold<int>(0, (a, p) => a + p.length);
