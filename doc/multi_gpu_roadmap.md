@@ -247,6 +247,16 @@ memory-residency assertion.
 
 ## Phase 6 — 3D parallelism (data × tensor × pipeline), multi-host
 
+**Status: demoed.** `bin/tensor_parallel_ddp_demo.dart` composes
+tensor-parallel within a host with data-parallel across hosts (the socket
+`Dist` in [../bin/ddp_dist.dart](../bin/ddp_dist.dart)). TP weight grads
+are local per card and every replica shares the shard layout, so
+flattening `parameters()` and `allReduceMean` averages corresponding
+shards across replicas; averaged grads are scattered back onto each
+shard's GPU. Pipeline parallelism composes within a host via the stack's
+`pipelineStages`. Remaining: a rank→(host, GPU-set) topology config and
+launcher update.
+
 **Objective.** Combine the socket DDP data-parallel path with in-process
 TP+PP for cluster-scale runs.
 

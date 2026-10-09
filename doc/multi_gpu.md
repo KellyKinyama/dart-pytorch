@@ -195,6 +195,22 @@ dart run bin/tensor_parallel_llama_demo.dart --model path/to/model.safetensors
 dart run bin/tensor_parallel_llama_demo.dart --model ... --config smollm2-360m
 ```
 
+### 3D parallelism (tensor × data) — [../bin/tensor_parallel_ddp_demo.dart](../bin/tensor_parallel_ddp_demo.dart)
+Tensor-parallel within a host (across its GPUs) combined with
+data-parallel across hosts (over TCP via `bin/ddp_dist.dart`). TP weight
+gradients are already local per card and every replica shares the shard
+layout, so flattening `parameters()` and all-reducing element-wise
+averages corresponding shards across replicas; averaged grads are
+scattered back onto each shard's GPU.
+
+```bash
+# single host (tensor-parallel only; all-reduce is a no-op)
+dart run bin/tensor_parallel_ddp_demo.dart
+# two hosts (data × tensor parallel)
+RANK=0 WORLD_SIZE=2 MASTER_ADDR=10.0.0.1 MASTER_PORT=29500 dart run bin/tensor_parallel_ddp_demo.dart
+RANK=1 WORLD_SIZE=2 MASTER_ADDR=10.0.0.1 MASTER_PORT=29500 dart run bin/tensor_parallel_ddp_demo.dart
+```
+
 ### Scaling benchmark — [../bin/_tp_bench.dart](../bin/_tp_bench.dart)
 Times a tensor-parallel transformer stack's forward across every GPU
 count (1..N) and both gather modes (GPU-native peer copy vs host-staged),
