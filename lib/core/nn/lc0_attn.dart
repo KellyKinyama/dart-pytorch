@@ -24,6 +24,25 @@ double _mish(double x) {
   return x * t;
 }
 
+// lc0 activation codes used by the attention body.
+const int _actNone = 0;
+const int _actMish = 1;
+const int _actSwish = 2; // x * sigmoid(x)
+const int _actRelu2 = 3; // relu(x)^2
+
+double _activate(double x, int act) {
+  switch (act) {
+    case _actMish:
+      return _mish(x);
+    case _actSwish:
+      return x / (1.0 + math.exp(-x));
+    case _actRelu2:
+      return x > 0 ? x * x : 0.0;
+    default:
+      return x;
+  }
+}
+
 double _tanh(double x) {
   if (x > 20) return 1.0;
   if (x < -20) return -1.0;
@@ -298,20 +317,20 @@ class Lc0AttnNet {
     Float32List? smBias;
     if (l.hasSmolgen) {
       final hc = l.smCompress!.length ~/ e; // hidden channels (32)
-      final comp = _fc(x, l.smCompress!, null, false, 64, e, hc); // [64,hc]
+      final comp = _fc(x, l.smCompress!, null, _actNone, 64, e, hc); // [64,hc]
       final hidden = l.smD1B!.length;
-      final d1 = _fc(comp, l.smD1W!, l.smD1B, true, 1, 64 * hc, hidden);
+      final d1 = _fc(comp, l.smD1W!, l.smD1B, _actSwish, 1, 64 * hc, hidden);
       _layerNorm(d1, 1.0, null, l.smLn1G!, l.smLn1B!, 1e-3, 1, hidden);
       final genOut = l.smD2B!.length;
-      final d2 = _fc(d1, l.smD2W!, l.smD2B, true, 1, hidden, genOut);
+      final d2 = _fc(d1, l.smD2W!, l.smD2B, _actSwish, 1, hidden, genOut);
       _layerNorm(d2, 1.0, null, l.smLn2G!, l.smLn2B!, 1e-3, 1, genOut);
       final perHead = genOut ~/ heads;
-      smBias = _fc(d2, w.smolgenW!, null, false, heads, perHead, 64 * 64);
+      smBias = _fc(d2, w.smolgenW!, null, _actNone, heads, perHead, 64 * 64);
     }
 
-    final q = _fc(x, l.qW, l.qB, false, 64, e, e);
-    final k = _fc(x, l.kW, l.kB, false, 64, e, e);
-    final v = _fc(x, l.vW, l.vB, false, 64, e, e);
+    final q = _fc(x, l.qW, l.qB, _actNone, 64, e, e);
+    final k = _fc(x, l.kW, l.kB, _actNone, 64, e, e);
+    final v = _fc(x, l.vW, l.vB, _actNone, 64, e, e);
 
     final attn = Float32List(64 * e);
     final row = Float32List(64);
@@ -346,19 +365,19 @@ class Lc0AttnNet {
       }
     }
 
-    final mhaOut = _fc(attn, l.denseW, l.denseB, false, 64, e, e);
+    final mhaOut = _fc(attn, l.denseW, l.denseB, _actNone, 64, e, e);
     _layerNorm(mhaOut, alpha, x, l.ln1G, l.ln1B, 1e-6, 64, e); // LN(alpha*mha + x)
     final y = mhaOut;
 
-    final h1 = _fc(y, l.ffn1W, l.ffn1B, true, 64, e, w.dff);
-    final ffnOut = _fc(h1, l.ffn2W, l.ffn2B, false, 64, w.dff, e);
+    final h1 = _fc(y, l.ffn1W, l.ffn1B, _actRelu2, 64, e, w.dff);
+    final ffnOut = _fc(h1, l.ffn2W, l.ffn2B, _actNone, 64, w.dff, e);
     _layerNorm(ffnOut, alpha, y, l.ln2G, l.ln2B, 1e-6, 64, e); // LN(alpha*ffn + y)
     return ffnOut;
   }
 
   /// lc0 FullyConnectedLayer::Forward1D: out[m,n] = act(sum_k in[m,k]*w[n,k] + b[n]).
   Float32List _fc(Float32List input, Float32List weight, Float32List? bias,
-      bool mish, int m, int k, int n) {
+      int act, int m, int k, int n) {
     final out = Float32List(m * n);
     for (var mi = 0; mi < m; mi++) {
       final ib = mi * k;
@@ -369,7 +388,7 @@ class Lc0AttnNet {
         for (var ki = 0; ki < k; ki++) {
           sum += input[ib + ki] * weight[wb + ki];
         }
-        out[ob + ni] = mish ? _mish(sum) : sum;
+        out[ob + ni] = _activate(sum, act);
       }
     }
     return out;
@@ -419,10 +438,10 @@ class Lc0AttnNet {
   Float32List _policy(Float32List body) {
     final e = w.embDim;
     final polEmb = w.ipPolB.length;
-    final emb = _fc(body, w.ipPolW, w.ipPolB, true, 64, e, polEmb); // MISH
+    final emb = _fc(body, w.ipPolW, w.ipPolB, _actMish, 64, e, polEmb); // MISH
     final dModel = w.ip2PolB.length;
-    final q = _fc(emb, w.ip2PolW, w.ip2PolB, false, 64, polEmb, dModel);
-    final k = _fc(emb, w.ip3PolW, w.ip3PolB, false, 64, polEmb, dModel);
+    final q = _fc(emb, w.ip2PolW, w.ip2PolB, _actNone, 64, polEmb, dModel);
+    final k = _fc(emb, w.ip3PolW, w.ip3PolB, _actNone, 64, polEmb, dModel);
     final scaling = 1.0 / math.sqrt(dModel);
 
     final hb = Float32List(64 * 64 + 8 * 24);
@@ -470,20 +489,20 @@ class Lc0AttnNet {
   /// Attention value head -> WDL (softmaxed).
   List<double> _value(Float32List body) {
     final vp = w.ipValB.length;
-    final emb = _fc(body, w.ipValW, w.ipValB, true, 64, w.embDim, vp); // MISH
+    final emb = _fc(body, w.ipValW, w.ipValB, _actMish, 64, w.embDim, vp); // MISH
     final vc = w.ip1ValB.length;
-    final h1 = _fc(emb, w.ip1ValW, w.ip1ValB, true, 1, 64 * vp, vc); // MISH
-    final logits = _fc(h1, w.ip2ValW, w.ip2ValB, false, 1, vc, w.wdl);
+    final h1 = _fc(emb, w.ip1ValW, w.ip1ValB, _actMish, 1, 64 * vp, vc); // MISH
+    final logits = _fc(h1, w.ip2ValW, w.ip2ValB, _actNone, 1, vc, w.wdl);
     return _softmax(logits);
   }
 
   double _movesLeft(Float32List body) {
     if (w.ipMovW == null) return 0.0;
     final mp = w.ipMovB!.length;
-    final emb = _fc(body, w.ipMovW!, w.ipMovB, true, 64, w.embDim, mp); // MISH
+    final emb = _fc(body, w.ipMovW!, w.ipMovB, _actMish, 64, w.embDim, mp); // MISH
     final mc = w.ip1MovB!.length;
-    final h1 = _fc(emb, w.ip1MovW!, w.ip1MovB, true, 1, 64 * mp, mc); // MISH
-    final out = _fc(h1, w.ip2MovW!, w.ip2MovB, false, 1, mc, 1);
+    final h1 = _fc(emb, w.ip1MovW!, w.ip1MovB, _actMish, 1, 64 * mp, mc); // MISH
+    final out = _fc(h1, w.ip2MovW!, w.ip2MovB, _actNone, 1, mc, 1);
     return out[0] > 0 ? out[0] : 0.0; // lc0: ip2_mov uses RELU
   }
 
