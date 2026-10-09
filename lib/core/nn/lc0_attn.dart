@@ -270,27 +270,25 @@ class Lc0AttnNet {
   Float32List embed(Float32List inputNCHW) {
     final e = w.embDim;
     final inSize = _kInputPlanes + 64; // 176
-    final out = Float32List(_kSquares * e);
-    final row = Float32List(inSize);
+    // NHWC [64, 176] = 112 input planes + kPosEncoding per square.
+    final nhwc = Float32List(_kSquares * inSize);
     for (var s = 0; s < _kSquares; s++) {
+      final base = s * inSize;
       for (var p = 0; p < _kInputPlanes; p++) {
-        row[p] = inputNCHW[p * _kSquares + s];
+        nhwc[base + p] = inputNCHW[p * _kSquares + s];
       }
       for (var c = 0; c < 64; c++) {
-        row[_kInputPlanes + c] = kLc0PosEncoding[s * 64 + c];
+        nhwc[base + _kInputPlanes + c] = kLc0PosEncoding[s * 64 + c];
       }
-      for (var o = 0; o < e; o++) {
-        var sum = w.ipEmbB[o];
-        final base = o * inSize;
-        for (var k = 0; k < inSize; k++) {
-          sum += row[k] * w.ipEmbW[base + k];
-        }
-        var v = _mish(sum);
-        if (w.ipMultGate != null) {
-          v = v * w.ipMultGate![o * _kSquares + s] +
+    }
+    final out = _fc(nhwc, w.ipEmbW, w.ipEmbB, _actMish, _kSquares, inSize, e);
+    // ma_gating: emb[s,o] *= ip_mult_gate[o*64+s]; += ip_add_gate[o*64+s].
+    if (w.ipMultGate != null) {
+      for (var s = 0; s < _kSquares; s++) {
+        for (var o = 0; o < e; o++) {
+          out[s * e + o] = out[s * e + o] * w.ipMultGate![o * _kSquares + s] +
               w.ipAddGate![o * _kSquares + s];
         }
-        out[s * e + o] = v;
       }
     }
     return out;
@@ -376,9 +374,34 @@ class Lc0AttnNet {
   }
 
   /// lc0 FullyConnectedLayer::Forward1D: out[m,n] = act(sum_k in[m,k]*w[n,k] + b[n]).
+  /// SIMD (Float32x4) inner product when K is a multiple of 4 and buffers are
+  /// 16-byte aligned; scalar fallback otherwise.
   Float32List _fc(Float32List input, Float32List weight, Float32List? bias,
       int act, int m, int k, int n) {
     final out = Float32List(m * n);
+    final k4 = k >> 2;
+    final simd = (k & 3) == 0 &&
+        (input.offsetInBytes & 15) == 0 &&
+        (weight.offsetInBytes & 15) == 0;
+    if (simd) {
+      final inX4 = Float32x4List.view(input.buffer, input.offsetInBytes, m * k4);
+      final wX4 = Float32x4List.view(weight.buffer, weight.offsetInBytes, n * k4);
+      for (var mi = 0; mi < m; mi++) {
+        final ib4 = mi * k4;
+        final ob = mi * n;
+        for (var ni = 0; ni < n; ni++) {
+          final wb4 = ni * k4;
+          var acc = Float32x4.zero();
+          for (var kk = 0; kk < k4; kk++) {
+            acc += inX4[ib4 + kk] * wX4[wb4 + kk];
+          }
+          var sum = acc.x + acc.y + acc.z + acc.w;
+          if (bias != null) sum += bias[ni];
+          out[ob + ni] = _activate(sum, act);
+        }
+      }
+      return out;
+    }
     for (var mi = 0; mi < m; mi++) {
       final ib = mi * k;
       final ob = mi * n;
