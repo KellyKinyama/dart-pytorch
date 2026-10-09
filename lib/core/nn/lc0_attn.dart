@@ -436,7 +436,59 @@ class Lc0AttnNet {
     if (simd) {
       final inX4 = Float32x4List.view(input.buffer, input.offsetInBytes, m * k4);
       final wX4 = Float32x4List.view(weight.buffer, weight.offsetInBytes, n * k4);
-      for (var mi = 0; mi < m; mi++) {
+      // Block 8 input rows per weight row so each weight vector is loaded once
+      // and reused across the block (cuts weight-memory bandwidth ~8x).
+      final mBlock = m & ~7;
+      for (var mi = 0; mi < mBlock; mi += 8) {
+        final ib0 = mi * k4;
+        final ib1 = ib0 + k4;
+        final ib2 = ib1 + k4;
+        final ib3 = ib2 + k4;
+        final ib4 = ib3 + k4;
+        final ib5 = ib4 + k4;
+        final ib6 = ib5 + k4;
+        final ib7 = ib6 + k4;
+        final ob0 = mi * n;
+        final ob1 = ob0 + n;
+        final ob2 = ob1 + n;
+        final ob3 = ob2 + n;
+        final ob4 = ob3 + n;
+        final ob5 = ob4 + n;
+        final ob6 = ob5 + n;
+        final ob7 = ob6 + n;
+        for (var ni = 0; ni < n; ni++) {
+          final wb4 = ni * k4;
+          var a0 = Float32x4.zero();
+          var a1 = Float32x4.zero();
+          var a2 = Float32x4.zero();
+          var a3 = Float32x4.zero();
+          var a4 = Float32x4.zero();
+          var a5 = Float32x4.zero();
+          var a6 = Float32x4.zero();
+          var a7 = Float32x4.zero();
+          for (var kk = 0; kk < k4; kk++) {
+            final wv = wX4[wb4 + kk];
+            a0 += inX4[ib0 + kk] * wv;
+            a1 += inX4[ib1 + kk] * wv;
+            a2 += inX4[ib2 + kk] * wv;
+            a3 += inX4[ib3 + kk] * wv;
+            a4 += inX4[ib4 + kk] * wv;
+            a5 += inX4[ib5 + kk] * wv;
+            a6 += inX4[ib6 + kk] * wv;
+            a7 += inX4[ib7 + kk] * wv;
+          }
+          final bn = bias != null ? bias[ni] : 0.0;
+          out[ob0 + ni] = _activate(a0.x + a0.y + a0.z + a0.w + bn, act);
+          out[ob1 + ni] = _activate(a1.x + a1.y + a1.z + a1.w + bn, act);
+          out[ob2 + ni] = _activate(a2.x + a2.y + a2.z + a2.w + bn, act);
+          out[ob3 + ni] = _activate(a3.x + a3.y + a3.z + a3.w + bn, act);
+          out[ob4 + ni] = _activate(a4.x + a4.y + a4.z + a4.w + bn, act);
+          out[ob5 + ni] = _activate(a5.x + a5.y + a5.z + a5.w + bn, act);
+          out[ob6 + ni] = _activate(a6.x + a6.y + a6.z + a6.w + bn, act);
+          out[ob7 + ni] = _activate(a7.x + a7.y + a7.z + a7.w + bn, act);
+        }
+      }
+      for (var mi = mBlock; mi < m; mi++) {
         final ib4 = mi * k4;
         final ob = mi * n;
         for (var ni = 0; ni < n; ni++) {
@@ -551,6 +603,208 @@ class Lc0AttnNet {
   Lc0AttnOutput forward(Float32List inputNCHW) {
     final body = encode(inputNCHW);
     return Lc0AttnOutput(_policy(body), _value(body), _movesLeft(body));
+  }
+
+  /// Batched forward: `B` inputs evaluated together so the big FC matmuls reuse
+  /// each weight matrix across all `64*B` tokens (better cache/throughput on
+  /// CPU). Numerically identical to calling [forward] per input.
+  List<Lc0AttnOutput> forwardBatch(List<Float32List> inputs) {
+    if (inputs.isEmpty) return const [];
+    final body = encodeBatch(inputs);
+    final e = w.embDim;
+    final stride = 64 * e;
+    final out = <Lc0AttnOutput>[];
+    for (var b = 0; b < inputs.length; b++) {
+      final slice = Float32List.view(
+          body.buffer, body.offsetInBytes + b * stride * 4, stride);
+      out.add(Lc0AttnOutput(_policy(slice), _value(slice), _movesLeft(slice)));
+    }
+    return out;
+  }
+
+  /// Batched attention body: `B` inputs -> `[64*B * embDim]`.
+  Float32List encodeBatch(List<Float32List> inputs) {
+    final B = inputs.length;
+    var x = _embedBatch(inputs);
+    final alpha = math.pow(2.0 * w.encoders.length, -0.25).toDouble();
+    for (final layer in w.encoders) {
+      x = _encoderBatch(x, layer, alpha, B);
+    }
+    return x;
+  }
+
+  Float32List _embedBatch(List<Float32List> inputs) {
+    final B = inputs.length;
+    final e = w.embDim;
+    final inSize = _kInputPlanes + 64; // 176
+    final nhwc = Float32List(B * _kSquares * inSize);
+    for (var b = 0; b < B; b++) {
+      final input = inputs[b];
+      for (var s = 0; s < _kSquares; s++) {
+        final base = (b * _kSquares + s) * inSize;
+        for (var p = 0; p < _kInputPlanes; p++) {
+          nhwc[base + p] = input[p * _kSquares + s];
+        }
+        for (var c = 0; c < 64; c++) {
+          nhwc[base + _kInputPlanes + c] = kLc0PosEncoding[s * 64 + c];
+        }
+      }
+    }
+    final out =
+        _fc(nhwc, w.ipEmbW, w.ipEmbB, _actMish, B * _kSquares, inSize, e);
+    if (w.ipMultGate != null) {
+      for (var b = 0; b < B; b++) {
+        for (var s = 0; s < _kSquares; s++) {
+          final rowBase = (b * _kSquares + s) * e;
+          for (var o = 0; o < e; o++) {
+            out[rowBase + o] =
+                out[rowBase + o] * w.ipMultGate![o * _kSquares + s] +
+                    w.ipAddGate![o * _kSquares + s];
+          }
+        }
+      }
+    }
+    return out;
+  }
+
+  /// Batched encoder layer over `64*B` tokens. The FC matmuls (Q/K/V, dense,
+  /// FFN) run across the whole batch; smolgen and the 64x64 attention are
+  /// per-position (looped over `B`).
+  Float32List _encoderBatch(
+      Float32List x, Lc0AttnEncoder l, double alpha, int B) {
+    final e = w.embDim;
+    final heads = w.heads;
+    final depth = e ~/ heads;
+    final scaling = 1.0 / math.sqrt(depth);
+    final rows = 64 * B;
+
+    // Smolgen per position -> smBiasAll [B * heads * 4096].
+    Float32List? smBiasAll;
+    if (l.hasSmolgen) {
+      final hc = l.smCompress!.length ~/ e;
+      final hidden = l.smD1B!.length;
+      final genOut = l.smD2B!.length;
+      final perHead = genOut ~/ heads;
+      smBiasAll = Float32List(B * heads * 4096);
+      for (var b = 0; b < B; b++) {
+        final xb = Float32List.view(
+            x.buffer, x.offsetInBytes + b * 64 * e * 4, 64 * e);
+        final comp = _fc(xb, l.smCompress!, null, _actNone, 64, e, hc);
+        final d1 = _fc(comp, l.smD1W!, l.smD1B, _actSwish, 1, 64 * hc, hidden);
+        _layerNorm(d1, 1.0, null, l.smLn1G!, l.smLn1B!, 1e-3, 1, hidden);
+        final d2 = _fc(d1, l.smD2W!, l.smD2B, _actSwish, 1, hidden, genOut);
+        _layerNorm(d2, 1.0, null, l.smLn2G!, l.smLn2B!, 1e-3, 1, genOut);
+        final sb = _fc(d2, w.smolgenW!, null, _actNone, heads, perHead, 64 * 64);
+        smBiasAll.setRange(b * heads * 4096, (b + 1) * heads * 4096, sb);
+      }
+    }
+
+    final q = _fc(x, l.qW, l.qB, _actNone, rows, e, e);
+    final k = _fc(x, l.kW, l.kB, _actNone, rows, e, e);
+    final v = _fc(x, l.vW, l.vB, _actNone, rows, e, e);
+
+    final attn = Float32List(rows * e);
+    final row = Float32List(64);
+    final depth4 = depth >> 2;
+    final eRow4 = e >> 2;
+    final simdHead = (depth & 3) == 0 && (e & 3) == 0;
+    if (simdHead) {
+      final qX = Float32x4List.view(q.buffer, q.offsetInBytes, rows * eRow4);
+      final kX = Float32x4List.view(k.buffer, k.offsetInBytes, rows * eRow4);
+      final vX = Float32x4List.view(v.buffer, v.offsetInBytes, rows * eRow4);
+      final aX = Float32x4List.view(attn.buffer, attn.offsetInBytes, rows * eRow4);
+      final accV = Float32x4List(depth4);
+      for (var b = 0; b < B; b++) {
+        final rowBase = b * 64;
+        final smBase = b * heads * 4096;
+        for (var h = 0; h < heads; h++) {
+          final ho4 = (h * depth) >> 2;
+          final smh = smBase + h * 4096;
+          for (var i = 0; i < 64; i++) {
+            final qb4 = (rowBase + i) * eRow4 + ho4;
+            var maxL = double.negativeInfinity;
+            for (var j = 0; j < 64; j++) {
+              final kb4 = (rowBase + j) * eRow4 + ho4;
+              var acc = Float32x4.zero();
+              for (var d4 = 0; d4 < depth4; d4++) {
+                acc += qX[qb4 + d4] * kX[kb4 + d4];
+              }
+              var lg = (acc.x + acc.y + acc.z + acc.w) * scaling;
+              if (smBiasAll != null) lg += smBiasAll[smh + i * 64 + j];
+              row[j] = lg;
+              if (lg > maxL) maxL = lg;
+            }
+            var denom = 0.0;
+            for (var j = 0; j < 64; j++) {
+              final ex = math.exp(row[j] - maxL);
+              row[j] = ex;
+              denom += ex;
+            }
+            for (var d4 = 0; d4 < depth4; d4++) {
+              accV[d4] = Float32x4.zero();
+            }
+            for (var j = 0; j < 64; j++) {
+              final rj = Float32x4.splat(row[j]);
+              final vb4 = (rowBase + j) * eRow4 + ho4;
+              for (var d4 = 0; d4 < depth4; d4++) {
+                accV[d4] += rj * vX[vb4 + d4];
+              }
+            }
+            final invV = Float32x4.splat(1.0 / denom);
+            final ab4 = (rowBase + i) * eRow4 + ho4;
+            for (var d4 = 0; d4 < depth4; d4++) {
+              aX[ab4 + d4] = accV[d4] * invV;
+            }
+          }
+        }
+      }
+    } else {
+      for (var b = 0; b < B; b++) {
+        final rowBase = b * 64;
+        final smBase = b * heads * 4096;
+        for (var h = 0; h < heads; h++) {
+          final ho = h * depth;
+          final smh = smBase + h * 4096;
+          for (var i = 0; i < 64; i++) {
+            final qr = (rowBase + i) * e + ho;
+            var maxL = double.negativeInfinity;
+            for (var j = 0; j < 64; j++) {
+              final kr = (rowBase + j) * e + ho;
+              var dot = 0.0;
+              for (var dd = 0; dd < depth; dd++) {
+                dot += q[qr + dd] * k[kr + dd];
+              }
+              var lg = dot * scaling;
+              if (smBiasAll != null) lg += smBiasAll[smh + i * 64 + j];
+              row[j] = lg;
+              if (lg > maxL) maxL = lg;
+            }
+            var denom = 0.0;
+            for (var j = 0; j < 64; j++) {
+              final ex = math.exp(row[j] - maxL);
+              row[j] = ex;
+              denom += ex;
+            }
+            final inv = 1.0 / denom;
+            for (var dd = 0; dd < depth; dd++) {
+              var acc = 0.0;
+              for (var j = 0; j < 64; j++) {
+                acc += row[j] * v[(rowBase + j) * e + ho + dd];
+              }
+              attn[(rowBase + i) * e + ho + dd] = acc * inv;
+            }
+          }
+        }
+      }
+    }
+
+    final mhaOut = _fc(attn, l.denseW, l.denseB, _actNone, rows, e, e);
+    _layerNorm(mhaOut, alpha, x, l.ln1G, l.ln1B, 1e-6, rows, e);
+    final y = mhaOut;
+    final h1 = _fc(y, l.ffn1W, l.ffn1B, _actRelu2, rows, e, w.dff);
+    final ffnOut = _fc(h1, l.ffn2W, l.ffn2B, _actNone, rows, w.dff, e);
+    _layerNorm(ffnOut, alpha, y, l.ln2G, l.ln2B, 1e-6, rows, e);
+    return ffnOut;
   }
 
   /// Attention policy head -> 1858 classical move logits (via kAttnPolicyMap).
