@@ -171,6 +171,18 @@ dart run bin/tensor_parallel_stack_demo.dart              # TP only
 dart run bin/tensor_parallel_stack_demo.dart --pipeline 2 # TP + pipeline
 ```
 
+### Shard a real GPT-2 — [../bin/tensor_parallel_gpt2_demo.dart](../bin/tensor_parallel_gpt2_demo.dart)
+Loads a GPT-2 safetensors checkpoint, builds a tensor-parallel stack from
+its transformer blocks across every visible GPU, and matches the sharded
+logits (and next-token argmax) against the single-GPU reference. The
+loader already splits GPT-2's fused QKV into per-head Linears, and the
+tanh-GELU FFN is supported.
+
+```bash
+dart run bin/tensor_parallel_gpt2_demo.dart --model path/to/model.safetensors
+dart run bin/tensor_parallel_gpt2_demo.dart --model ... --config distilgpt2
+```
+
 ### Scaling benchmark — [../bin/_tp_bench.dart](../bin/_tp_bench.dart)
 Times a tensor-parallel transformer stack's forward across every GPU
 count (1..N) and both gather modes (GPU-native peer copy vs host-staged),

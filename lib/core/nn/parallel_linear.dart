@@ -317,20 +317,24 @@ class RowParallelLinear extends Module {
 }
 
 /// Canonical tensor-parallel transformer MLP:
-/// `down( relu( up(x) ) )`, where `up` is column-parallel (so the hidden
+/// `down( act( up(x) ) )`, where `up` is column-parallel (so the hidden
 /// activation is already sharded across GPUs) and `down` is row-parallel
 /// (so the sharded hidden is consumed in place and all-reduced back to
 /// the model dim). Only the block's input and output activations cross
 /// GPU boundaries; the wide hidden layer never materialises on one card.
+/// [activation] defaults to ReLU; pass a GELU for GPT-2-style models.
 class TensorParallelMLP extends Module {
   final ColumnParallelLinear up;
   final RowParallelLinear down;
+  final Tensor Function(Tensor) activation;
 
-  TensorParallelMLP(this.up, this.down);
+  TensorParallelMLP(this.up, this.down, {Tensor Function(Tensor)? activation})
+      : activation = activation ?? ((t) => t.relu());
 
   /// Build from full CPU weights. [upWeight] is `[hidden, model]`,
   /// [downWeight] is `[model, hidden]`. Pass `trainable: true` to make
-  /// the sharded weights autograd leaves.
+  /// the sharded weights autograd leaves, and [activation] for a
+  /// non-ReLU FFN (e.g. GELU).
   factory TensorParallelMLP.fromWeights({
     required Tensor upWeight,
     required Tensor downWeight,
@@ -339,6 +343,7 @@ class TensorParallelMLP extends Module {
     List<int>? devices,
     int? outputDevice,
     bool trainable = false,
+    Tensor Function(Tensor)? activation,
   }) {
     final devs = devices ?? List<int>.generate(Tensor.gpuCount, (i) => i);
     final outDev = outputDevice ?? devs.first;
@@ -360,10 +365,11 @@ class TensorParallelMLP extends Module {
         outputDevice: outDev,
         trainable: trainable,
       ),
+      activation: activation,
     );
   }
 
-  Tensor call(Tensor x) => down(up(x).relu());
+  Tensor call(Tensor x) => down(activation(up(x)));
 
   @override
   List<Module> submodules() => [up, down];

@@ -197,7 +197,9 @@ blocks with optional pipeline parallelism (`pipelineStages > 1` splits
 devices + blocks into stages; TP within a stage, PP across stages) and is
 validated end to end ([../bin/tensor_parallel_stack_demo.dart](../bin/tensor_parallel_stack_demo.dart)).
 The block and stack are also **trainable** (`trainable: true`) end to end.
-Remaining: a real-weights (HF) loader path.
+The FFN supports ReLU and tanh/quick GELU, so a real GPT-2 checkpoint can
+be sharded block-by-block and its logits matched against the single-GPU
+reference ([../bin/tensor_parallel_gpt2_demo.dart](../bin/tensor_parallel_gpt2_demo.dart)).
 
 **Objective.** Compose Phases 1–2 into a drop-in parallel block and a
 runnable model.

@@ -169,6 +169,45 @@ void main() {
     );
   });
 
+  group('TensorParallelTransformerBlock GELU', () {
+    test(
+      'tanh-GELU FFN block matches the single-GPU reference',
+      () {
+        const embedDim = 64;
+        const numHeads = 8;
+        const n = 5;
+        final rng = math.Random(9);
+
+        final block = TransformerBlock(
+          embedDim,
+          numHeads,
+          attnBias: true,
+          activation: Activation.geluTanh,
+          device: Device.GPU,
+          seed: 31,
+        )..eval();
+
+        final x = Tensor.fromList(
+          [n, embedDim],
+          _rand(rng, n * embedDim, 0.5),
+          device: Device.GPU,
+        );
+
+        final ref = block(x).to(Device.CPU).toFloat32List();
+        final tp = TensorParallelTransformerBlock.fromBlock(block);
+        final got = tp(x).to(Device.CPU).toFloat32List();
+
+        var maxDiff = 0.0;
+        for (var i = 0; i < ref.length; i++) {
+          final d = (got[i] - ref[i]).abs();
+          if (d > maxDiff) maxDiff = d;
+        }
+        expect(maxDiff < 1e-3, isTrue, reason: 'max abs diff $maxDiff');
+      },
+      skip: gpu ? false : 'no CUDA GPU available',
+    );
+  });
+
   group('TensorParallelTransformerBlock training', () {
     test(
       'full block trains: grads reach all shards and loss decreases',

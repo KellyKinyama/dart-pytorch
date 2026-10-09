@@ -58,7 +58,7 @@ class TensorParallelTransformerBlock extends Module {
   );
 
   /// Shard a reference [block] across [devices] (defaults to all visible
-  /// GPUs). The FFN activation must be ReLU (the default). Pass
+  /// GPUs). Supports the block's ReLU / tanh-GELU / quick-GELU FFN. Pass
   /// `trainable: true` to make the sharded sublayers and LayerNorms
   /// autograd leaves.
   factory TensorParallelTransformerBlock.fromBlock(
@@ -67,12 +67,6 @@ class TensorParallelTransformerBlock extends Module {
     int? outputDevice,
     bool trainable = false,
   }) {
-    if (block.activation != Activation.relu) {
-      throw ArgumentError(
-        'TensorParallelTransformerBlock: only the ReLU FFN is supported '
-        '(got ${block.activation}).',
-      );
-    }
     final devs = devices ?? List<int>.generate(Tensor.gpuCount, (i) => i);
     final outDev = outputDevice ?? devs.first;
 
@@ -90,6 +84,7 @@ class TensorParallelTransformerBlock extends Module {
       devices: devs,
       outputDevice: outDev,
       trainable: trainable,
+      activation: _activationFn(block.activation),
     );
 
     Tensor onOut(Tensor t) {
@@ -154,6 +149,25 @@ class TensorParallelTransformerBlock extends Module {
         ]
       : const [];
 }
+
+/// Maps a [TransformerBlock] activation to the elementwise function the
+/// tensor-parallel MLP applies to its (sharded) hidden activation.
+Tensor Function(Tensor) _activationFn(Activation a) => switch (a) {
+      Activation.relu => (t) => t.relu(),
+      Activation.geluTanh => _geluTanh,
+      Activation.quickGelu => _quickGelu,
+    };
+
+/// GPT-2 tanh-approximation GELU (mirrors `TransformerBlock._geluTanh`).
+Tensor _geluTanh(Tensor x) {
+  const c = 0.7978845608028654; // sqrt(2 / pi)
+  final inner = (x + x.pow(3.0) * 0.044715) * c;
+  final t = inner.tanh();
+  return x * (t + 1.0) * 0.5;
+}
+
+/// OpenAI CLIP QuickGELU: `x * sigmoid(1.702 * x)`.
+Tensor _quickGelu(Tensor x) => x * (x * 1.702).sigmoid();
 
 /// Even split of `total` into `parts` contiguous chunks; earlier chunks
 /// take the remainder. Returns `parts + 1` boundary offsets.
