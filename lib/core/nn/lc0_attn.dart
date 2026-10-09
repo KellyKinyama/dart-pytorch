@@ -266,6 +266,138 @@ class Lc0AttnNet {
     }
     return out;
   }
+
+  /// Full attention body (M3): input planes -> encoder-stack output `[64*embDim]`.
+  Float32List encode(Float32List inputNCHW) {
+    var x = embed(inputNCHW);
+    final alpha = math.pow(2.0 * w.encoders.length, -0.25).toDouble();
+    for (final layer in w.encoders) {
+      x = _encoder(x, layer, alpha);
+    }
+    return x;
+  }
+
+  /// One transformer encoder layer (MHA + smolgen, FFN, two LayerNorm+skip).
+  Float32List _encoder(Float32List x, Lc0AttnEncoder l, double alpha) {
+    final e = w.embDim;
+    final heads = w.heads;
+    final depth = e ~/ heads;
+    final scaling = 1.0 / math.sqrt(depth);
+
+    // Smolgen: produces a per-head [64*64] attention-logit bias.
+    Float32List? smBias;
+    if (l.hasSmolgen) {
+      final hc = l.smCompress!.length ~/ e; // hidden channels (32)
+      final comp = _fc(x, l.smCompress!, null, false, 64, e, hc); // [64,hc]
+      final hidden = l.smD1B!.length;
+      final d1 = _fc(comp, l.smD1W!, l.smD1B, true, 1, 64 * hc, hidden);
+      _layerNorm(d1, 1.0, null, l.smLn1G!, l.smLn1B!, 1e-3, 1, hidden);
+      final genOut = l.smD2B!.length;
+      final d2 = _fc(d1, l.smD2W!, l.smD2B, true, 1, hidden, genOut);
+      _layerNorm(d2, 1.0, null, l.smLn2G!, l.smLn2B!, 1e-3, 1, genOut);
+      final perHead = genOut ~/ heads;
+      smBias = _fc(d2, w.smolgenW!, null, false, heads, perHead, 64 * 64);
+    }
+
+    final q = _fc(x, l.qW, l.qB, false, 64, e, e);
+    final k = _fc(x, l.kW, l.kB, false, 64, e, e);
+    final v = _fc(x, l.vW, l.vB, false, 64, e, e);
+
+    final attn = Float32List(64 * e);
+    final row = Float32List(64);
+    for (var h = 0; h < heads; h++) {
+      final ho = h * depth;
+      for (var i = 0; i < 64; i++) {
+        var maxL = double.negativeInfinity;
+        for (var j = 0; j < 64; j++) {
+          var dot = 0.0;
+          for (var dd = 0; dd < depth; dd++) {
+            dot += q[i * e + ho + dd] * k[j * e + ho + dd];
+          }
+          var lg = dot * scaling;
+          if (smBias != null) lg += smBias[h * 4096 + i * 64 + j];
+          row[j] = lg;
+          if (lg > maxL) maxL = lg;
+        }
+        var denom = 0.0;
+        for (var j = 0; j < 64; j++) {
+          final ex = math.exp(row[j] - maxL);
+          row[j] = ex;
+          denom += ex;
+        }
+        final inv = 1.0 / denom;
+        for (var dd = 0; dd < depth; dd++) {
+          var acc = 0.0;
+          for (var j = 0; j < 64; j++) {
+            acc += row[j] * v[j * e + ho + dd];
+          }
+          attn[i * e + ho + dd] = acc * inv;
+        }
+      }
+    }
+
+    final mhaOut = _fc(attn, l.denseW, l.denseB, false, 64, e, e);
+    _layerNorm(mhaOut, alpha, x, l.ln1G, l.ln1B, 1e-6, 64, e); // LN(alpha*mha + x)
+    final y = mhaOut;
+
+    final h1 = _fc(y, l.ffn1W, l.ffn1B, true, 64, e, w.dff);
+    final ffnOut = _fc(h1, l.ffn2W, l.ffn2B, false, 64, w.dff, e);
+    _layerNorm(ffnOut, alpha, y, l.ln2G, l.ln2B, 1e-6, 64, e); // LN(alpha*ffn + y)
+    return ffnOut;
+  }
+
+  /// lc0 FullyConnectedLayer::Forward1D: out[m,n] = act(sum_k in[m,k]*w[n,k] + b[n]).
+  Float32List _fc(Float32List input, Float32List weight, Float32List? bias,
+      bool mish, int m, int k, int n) {
+    final out = Float32List(m * n);
+    for (var mi = 0; mi < m; mi++) {
+      final ib = mi * k;
+      final ob = mi * n;
+      for (var ni = 0; ni < n; ni++) {
+        var sum = bias != null ? bias[ni] : 0.0;
+        final wb = ni * k;
+        for (var ki = 0; ki < k; ki++) {
+          sum += input[ib + ki] * weight[wb + ki];
+        }
+        out[ob + ni] = mish ? _mish(sum) : sum;
+      }
+    }
+    return out;
+  }
+
+  /// lc0 LayerNorm2DWithSkipConnection (in place): combined = alpha*data + skip,
+  /// then normalize over [ch] per row and scale/shift by gamma/beta.
+  void _layerNorm(Float32List data, double alpha, Float32List? skip,
+      Float32List gamma, Float32List beta, double eps, int rows, int ch) {
+    for (var i = 0; i < rows; i++) {
+      final base = i * ch;
+      var mean = 0.0;
+      if (skip != null) {
+        for (var c = 0; c < ch; c++) {
+          final val = data[base + c] * alpha + skip[base + c];
+          data[base + c] = val;
+          mean += val;
+        }
+      } else {
+        for (var c = 0; c < ch; c++) {
+          final val = data[base + c] * alpha;
+          data[base + c] = val;
+          mean += val;
+        }
+      }
+      mean /= ch;
+      var variance = 0.0;
+      for (var c = 0; c < ch; c++) {
+        final diff = data[base + c] - mean;
+        variance += diff * diff;
+      }
+      variance /= ch;
+      final den = 1.0 / math.sqrt(variance + eps);
+      for (var c = 0; c < ch; c++) {
+        data[base + c] = beta[c] + gamma[c] * (data[base + c] - mean) * den;
+      }
+    }
+  }
 }
 
 // ---------------- minimal protobuf helpers ----------------
