@@ -97,6 +97,36 @@ the new symbols (or `CUDA_VISIBLE_DEVICES` is restricting the process).
 
 ---
 
+## Validate on GPU (quickstart)
+
+After the one-time native rebuild above, on a CUDA machine:
+
+```bash
+# 1. Equivalence + training tests (GPU-guarded; skip cleanly without a GPU)
+dart test test/tensor_parallel_attention_test.dart \
+          test/tensor_parallel_transformer_test.dart \
+          test/tensor_parallel_llama_test.dart \
+          test/tensor_parallel_train_test.dart
+
+# 2. Synthetic demos (match a single-GPU reference within ~1e-6)
+dart run bin/tensor_parallel_mlp_demo.dart
+dart run bin/tensor_parallel_attention_demo.dart
+dart run bin/tensor_parallel_transformer_demo.dart
+dart run bin/tensor_parallel_stack_demo.dart --pipeline 2
+
+# 3. Real checkpoints (need a local safetensors file)
+dart run bin/tensor_parallel_gpt2_demo.dart  --model path/to/gpt2.safetensors
+dart run bin/tensor_parallel_llama_demo.dart --model path/to/smollm2.safetensors
+
+# 4. Scaling benchmark (tokens/s, PCIe bytes/iter, per-GPU memory)
+dart run bin/_tp_bench.dart
+```
+
+The demos print `max abs diff vs single-GPU reference` and an `OK` line
+when the sharded output matches; the tests assert the same tolerance.
+
+---
+
 ## Run the demos
 
 Both demos degrade gracefully to a single GPU, so they run anywhere the
