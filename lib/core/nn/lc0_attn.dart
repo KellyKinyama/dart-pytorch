@@ -11,6 +11,7 @@ import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
+import 'lc0_attn_policy_map.dart';
 import 'lc0_pos_encoding.dart';
 
 const int _kSquares = 64;
@@ -67,6 +68,15 @@ class Lc0AttnEncoder {
   });
 
   bool get hasSmolgen => smCompress != null;
+}
+
+/// Attention-net forward result.
+class Lc0AttnOutput {
+  final Float32List policy; // 1858 classical move logits (unmasked)
+  final List<double> wdl; // [W, D, L] softmaxed
+  final double movesLeft;
+  const Lc0AttnOutput(this.policy, this.wdl, this.movesLeft);
+  double get value => wdl[0] - wdl[2];
 }
 
 /// Parsed attention-body weights.
@@ -397,6 +407,102 @@ class Lc0AttnNet {
         data[base + c] = beta[c] + gamma[c] * (data[base + c] - mean) * den;
       }
     }
+  }
+
+  /// Full forward: input planes `[112*64]` -> policy(1858) + WDL + moves-left.
+  Lc0AttnOutput forward(Float32List inputNCHW) {
+    final body = encode(inputNCHW);
+    return Lc0AttnOutput(_policy(body), _value(body), _movesLeft(body));
+  }
+
+  /// Attention policy head -> 1858 classical move logits (via kAttnPolicyMap).
+  Float32List _policy(Float32List body) {
+    final e = w.embDim;
+    final polEmb = w.ipPolB.length;
+    final emb = _fc(body, w.ipPolW, w.ipPolB, true, 64, e, polEmb); // MISH
+    final dModel = w.ip2PolB.length;
+    final q = _fc(emb, w.ip2PolW, w.ip2PolB, false, 64, polEmb, dModel);
+    final k = _fc(emb, w.ip3PolW, w.ip3PolB, false, 64, polEmb, dModel);
+    final scaling = 1.0 / math.sqrt(dModel);
+
+    final hb = Float32List(64 * 64 + 8 * 24);
+    for (var m = 0; m < 64; m++) {
+      for (var n = 0; n < 64; n++) {
+        var dot = 0.0;
+        for (var c = 0; c < dModel; c++) {
+          dot += q[m * dModel + c] * k[n * dModel + c];
+        }
+        hb[m * 64 + n] = dot * scaling;
+      }
+    }
+    // Promotion offsets from the rank-8 keys and the ppo weight [4, dModel].
+    final promo = [for (var i = 0; i < 4; i++) Float32List(8)];
+    for (var i = 0; i < 4; i++) {
+      for (var j = 0; j < 8; j++) {
+        var sum = 0.0;
+        for (var c = 0; c < dModel; c++) {
+          sum += k[(56 + j) * dModel + c] * w.ip4PolW[i * dModel + c];
+        }
+        promo[i][j] = sum;
+      }
+    }
+    for (var i = 0; i < 3; i++) {
+      for (var j = 0; j < 8; j++) {
+        promo[i][j] += promo[3][j];
+      }
+    }
+    for (var kk = 0; kk < 8; kk++) {
+      for (var j = 0; j < 8; j++) {
+        for (var i = 0; i < 3; i++) {
+          hb[4096 + 24 * kk + 3 * j + i] =
+              hb[(48 + kk) * 64 + 56 + j] + promo[i][j];
+        }
+      }
+    }
+    final pol = Float32List(1858);
+    for (var idx = 0; idx < kAttnPolicyMap.length; idx++) {
+      final j = kAttnPolicyMap[idx];
+      if (j >= 0) pol[j] = hb[idx];
+    }
+    return pol;
+  }
+
+  /// Attention value head -> WDL (softmaxed).
+  List<double> _value(Float32List body) {
+    final vp = w.ipValB.length;
+    final emb = _fc(body, w.ipValW, w.ipValB, true, 64, w.embDim, vp); // MISH
+    final vc = w.ip1ValB.length;
+    final h1 = _fc(emb, w.ip1ValW, w.ip1ValB, true, 1, 64 * vp, vc); // MISH
+    final logits = _fc(h1, w.ip2ValW, w.ip2ValB, false, 1, vc, w.wdl);
+    return _softmax(logits);
+  }
+
+  double _movesLeft(Float32List body) {
+    if (w.ipMovW == null) return 0.0;
+    final mp = w.ipMovB!.length;
+    final emb = _fc(body, w.ipMovW!, w.ipMovB, true, 64, w.embDim, mp); // MISH
+    final mc = w.ip1MovB!.length;
+    final h1 = _fc(emb, w.ip1MovW!, w.ip1MovB, true, 1, 64 * mp, mc); // MISH
+    final out = _fc(h1, w.ip2MovW!, w.ip2MovB, false, 1, mc, 1);
+    return out[0] > 0 ? out[0] : 0.0; // lc0: ip2_mov uses RELU
+  }
+
+  List<double> _softmax(Float32List logits) {
+    var mx = double.negativeInfinity;
+    for (final v in logits) {
+      if (v > mx) mx = v;
+    }
+    var denom = 0.0;
+    final out = List<double>.filled(logits.length, 0.0);
+    for (var i = 0; i < logits.length; i++) {
+      final e = math.exp(logits[i] - mx);
+      out[i] = e;
+      denom += e;
+    }
+    for (var i = 0; i < out.length; i++) {
+      out[i] /= denom;
+    }
+    return out;
   }
 }
 
