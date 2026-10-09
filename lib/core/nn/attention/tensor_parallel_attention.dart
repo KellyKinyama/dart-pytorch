@@ -1,0 +1,266 @@
+/// Tensor-parallel multi-head attention — one attention layer's heads
+/// spread across several GPUs in a single process (Megatron-style).
+///
+/// Sharding: the `numKvHeads` KV heads (and the Q heads that map to
+/// them) are partitioned into contiguous groups, one group per GPU.
+/// Each GPU holds its heads' Q/K/V weights, runs scaled-dot-product
+/// attention for those heads entirely **on-card**, and projects its
+/// slice of the concatenated head outputs with its shard of the output
+/// weight. The per-GPU partial projections are summed (all-reduced) into
+/// the final `[N, embedDim]` result — so only the input activation and
+/// the output partials cross GPU boundaries; attention itself never does.
+///
+/// This mirrors [MultiHeadAttention] numerically. It is **inference
+/// oriented** (weights held detached, like the other tensor-parallel
+/// layers), covers the 2D `[N, embedDim]` single-sequence path, supports
+/// GQA and an optional additive mask. RoPE, dropout, KV-cache, and the
+/// batched 3D path are intentionally out of scope for this first cut —
+/// see doc/multi_gpu_roadmap.md.
+library;
+
+import '../../tensor/tensor.dart';
+import '../module.dart';
+import 'multi_head_attention.dart';
+
+/// Even split of `total` into `parts` contiguous chunks; earlier chunks
+/// take the remainder. Returns `parts + 1` boundary offsets.
+List<int> _splitOffsets(int total, int parts) {
+  final offs = <int>[0];
+  final base = total ~/ parts;
+  var rem = total % parts;
+  var acc = 0;
+  for (var i = 0; i < parts; i++) {
+    acc += base + (rem > 0 ? 1 : 0);
+    if (rem > 0) rem--;
+    offs.add(acc);
+  }
+  return offs;
+}
+
+/// Column-slice `[c0, c1)` of a rank-2 CPU tensor into a fresh CPU
+/// tensor (complements [Tensor.sliceRows]).
+Tensor _sliceCols(Tensor w2d, int c0, int c1) {
+  final rows = w2d.shape[0];
+  final cols = w2d.shape[1];
+  final src = w2d.toFloat32List();
+  final w = c1 - c0;
+  final out = List<double>.filled(rows * w, 0);
+  for (var r = 0; r < rows; r++) {
+    for (var j = 0; j < w; j++) {
+      out[r * w + j] = src[r * cols + c0 + j];
+    }
+  }
+  return Tensor.fromList([rows, w], out);
+}
+
+/// One GPU's slice of the attention layer: the Q heads it owns, the KV
+/// heads those map to, and the matching output-projection columns —
+/// all resident on [device].
+class _AttnShard {
+  _AttnShard({
+    required this.device,
+    required this.qHead0,
+    required this.kvHead0,
+    required this.numHeadGroups,
+    required this.wqW,
+    required this.wqB,
+    required this.wkW,
+    required this.wkB,
+    required this.wvW,
+    required this.wvB,
+    required this.woShard,
+  });
+
+  final int device;
+
+  /// Global index of this shard's first Q head and first KV head, so a
+  /// local Q head `i` maps to local KV head `(qHead0 + i) ~/ groups - kvHead0`.
+  final int qHead0;
+  final int kvHead0;
+  final int numHeadGroups;
+
+  final List<Tensor> wqW; // per local Q head: [headDim, embedDim] on device
+  final List<Tensor?> wqB; // per local Q head: [1, headDim] or null
+  final List<Tensor> wkW; // per local KV head
+  final List<Tensor?> wkB;
+  final List<Tensor> wvW;
+  final List<Tensor?> wvB;
+
+  /// Output-projection shard: `[embedDim, qHeads*headDim]` on device.
+  final Tensor woShard;
+
+  int get qCount => wqW.length;
+}
+
+class TensorParallelMultiHeadAttention extends Module {
+  final int embedDim;
+  final int numHeads;
+  final int numKvHeads;
+  final int numHeadGroups;
+  final int headDim;
+  final List<_AttnShard> shards;
+
+  /// Full output-projection bias `[1, embedDim]` on [outputDevice], or null.
+  final Tensor? woBias;
+  final int outputDevice;
+
+  TensorParallelMultiHeadAttention._(
+    this.embedDim,
+    this.numHeads,
+    this.numKvHeads,
+    this.numHeadGroups,
+    this.headDim,
+    this.shards,
+    this.woBias,
+    this.outputDevice,
+  );
+
+  /// Build a tensor-parallel copy of [mha], slicing its per-head weights
+  /// onto [devices] (defaults to all visible GPUs). The result is a
+  /// detached, inference-only layer numerically equivalent to [mha].
+  factory TensorParallelMultiHeadAttention.fromAttention(
+    MultiHeadAttention mha, {
+    List<int>? devices,
+    int? outputDevice,
+  }) {
+    final devs = devices ?? List<int>.generate(Tensor.gpuCount, (i) => i);
+    if (devs.isEmpty) {
+      throw ArgumentError('TensorParallelMultiHeadAttention: no devices');
+    }
+    final embedDim = mha.embedDim;
+    final numHeads = mha.numHeads;
+    final numKvHeads = mha.numKvHeads;
+    final groups = mha.numHeadGroups;
+    final headDim = mha.headDim;
+    final outDev = outputDevice ?? devs.first;
+
+    // Shard along KV heads so each GPU owns whole KV heads plus the Q
+    // heads that attend to them. Use at most numKvHeads devices.
+    final g = devs.length < numKvHeads ? devs.length : numKvHeads;
+    final kvOffs = _splitOffsets(numKvHeads, g);
+
+    // Pull every weight to the host once for bit-exact slicing.
+    Tensor cpu(Tensor t) => t.to(Device.CPU);
+    final wqWcpu = [for (final l in mha.wq) cpu(l.weight)];
+    final wqBcpu = [for (final l in mha.wq) l.bias == null ? null : cpu(l.bias!)];
+    final wkWcpu = [for (final l in mha.wk) cpu(l.weight)];
+    final wkBcpu = [for (final l in mha.wk) l.bias == null ? null : cpu(l.bias!)];
+    final wvWcpu = [for (final l in mha.wv) cpu(l.weight)];
+    final wvBcpu = [for (final l in mha.wv) l.bias == null ? null : cpu(l.bias!)];
+    final woWcpu = cpu(mha.wo.weight); // [embedDim, embedDim]
+
+    final shards = <_AttnShard>[];
+    for (var d = 0; d < g; d++) {
+      final kv0 = kvOffs[d];
+      final kv1 = kvOffs[d + 1];
+      if (kv1 <= kv0) continue; // more devices than KV heads
+      final dev = devs[d];
+      final q0 = kv0 * groups;
+      final q1 = kv1 * groups;
+
+      final wqW = <Tensor>[];
+      final wqB = <Tensor?>[];
+      for (var h = q0; h < q1; h++) {
+        wqW.add(wqWcpu[h].toGpu(dev));
+        wqB.add(wqBcpu[h]?.toGpu(dev));
+      }
+      final wkW = <Tensor>[];
+      final wkB = <Tensor?>[];
+      final wvW = <Tensor>[];
+      final wvB = <Tensor?>[];
+      for (var kh = kv0; kh < kv1; kh++) {
+        wkW.add(wkWcpu[kh].toGpu(dev));
+        wkB.add(wkBcpu[kh]?.toGpu(dev));
+        wvW.add(wvWcpu[kh].toGpu(dev));
+        wvB.add(wvBcpu[kh]?.toGpu(dev));
+      }
+      // Output-projection columns for this shard's Q heads.
+      final woShard = _sliceCols(woWcpu, q0 * headDim, q1 * headDim).toGpu(dev);
+
+      shards.add(
+        _AttnShard(
+          device: dev,
+          qHead0: q0,
+          kvHead0: kv0,
+          numHeadGroups: groups,
+          wqW: wqW,
+          wqB: wqB,
+          wkW: wkW,
+          wkB: wkB,
+          wvW: wvW,
+          wvB: wvB,
+          woShard: woShard,
+        ),
+      );
+    }
+
+    final woBias = mha.wo.bias == null ? null : cpu(mha.wo.bias!).toGpu(outDev);
+    return TensorParallelMultiHeadAttention._(
+      embedDim,
+      numHeads,
+      numKvHeads,
+      groups,
+      headDim,
+      shards,
+      woBias,
+      outDev,
+    );
+  }
+
+  /// Forward over a 2D `[N, embedDim]` sequence with optional additive
+  /// mask `[N, N]`. Returns `[N, embedDim]` on [outputDevice].
+  Tensor call(Tensor x, {Tensor? mask}) {
+    if (x.shape.length != 2 || x.shape[1] != embedDim) {
+      throw ArgumentError(
+        'TensorParallelMultiHeadAttention: expected [N, $embedDim]; '
+        'got ${x.shape}',
+      );
+    }
+    Tensor? acc;
+    for (final s in shards) {
+      final dev = s.device;
+      final xg = x.toGpu(dev);
+      final maskg = mask?.toGpu(dev);
+      final partial = Tensor.onGpu(dev, () {
+        // Project K/V once per local KV head.
+        final ks = <Tensor>[];
+        final vs = <Tensor>[];
+        for (var i = 0; i < s.wkW.length; i++) {
+          var k = xg.matmul(s.wkW[i].transpose());
+          if (s.wkB[i] != null) k = k + s.wkB[i]!;
+          var v = xg.matmul(s.wvW[i].transpose());
+          if (s.wvB[i] != null) v = v + s.wvB[i]!;
+          ks.add(k);
+          vs.add(v);
+        }
+        // Per Q head: project, SDPA against its KV head.
+        final heads = <Tensor>[];
+        for (var i = 0; i < s.qCount; i++) {
+          var q = xg.matmul(s.wqW[i].transpose());
+          if (s.wqB[i] != null) q = q + s.wqB[i]!;
+          final globalH = s.qHead0 + i;
+          final localKv = (globalH ~/ s.numHeadGroups) - s.kvHead0;
+          heads.add(
+            q.scaledDotProductAttention(ks[localKv], vs[localKv], mask: maskg),
+          );
+        }
+        final concat = TensorConcat.concat(heads, axis: 1);
+        // Row-parallel output projection: this shard's contribution.
+        return concat.matmul(s.woShard.transpose());
+      });
+      final onOut = partial.toGpu(outputDevice);
+      acc = acc == null
+          ? onOut
+          : Tensor.onGpu(outputDevice, () => acc! + onOut);
+    }
+    var out = acc!;
+    if (woBias != null) {
+      final b = woBias!;
+      out = Tensor.onGpu(outputDevice, () => out + b);
+    }
+    return out;
+  }
+
+  @override
+  List<Tensor> parameters() => const [];
+}

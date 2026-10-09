@@ -25,11 +25,18 @@ extern "C"
     {
         float *data_gpu, *grad_gpu;
         int rows, cols, size;
+        // Physical CUDA device ordinal this tensor's memory lives on.
+        // Recorded at allocation time so multi-GPU ops (peer copies,
+        // frees) know which device a handle belongs to.
+        int device;
 
-        Tensor(int r, int c) : rows(r), cols(c), size(r * c)
+        Tensor(int r, int c) : rows(r), cols(c), size(r * c), device(0)
         {
             data_gpu = nullptr;
             grad_gpu = nullptr;
+            // Allocation happens on whatever device is current for the
+            // calling thread; capture it so the handle is self-describing.
+            cudaGetDevice(&device);
             // Fail loud on OOM instead of silently returning a Tensor
             // with garbage/null device pointers (previously subsequent
             // kernels would read/write to unmapped memory, producing
@@ -38,8 +45,10 @@ extern "C"
             cudaError_t e2 = cudaMalloc(&grad_gpu, size * sizeof(float));
             if (e1 != cudaSuccess || e2 != cudaSuccess) {
                 fprintf(stderr,
-                        "[cuda] Tensor(%d,%d) alloc failed: data=%s grad=%s\n",
-                        r, c, cudaGetErrorString(e1), cudaGetErrorString(e2));
+                        "[cuda] Tensor(%d,%d) alloc failed on dev %d: "
+                        "data=%s grad=%s\n",
+                        r, c, device, cudaGetErrorString(e1),
+                        cudaGetErrorString(e2));
                 if (data_gpu) { cudaFree(data_gpu); data_gpu = nullptr; }
                 if (grad_gpu) { cudaFree(grad_gpu); grad_gpu = nullptr; }
                 // Zero out size so downstream ops that check for null
@@ -111,6 +120,103 @@ extern "C"
         Tensor *t = (Tensor *)h;
         cudaMemcpy(b, t->data_gpu, t->size * sizeof(float),
                    cudaMemcpyDeviceToHost);
+    }
+
+    // ---------------------------------------------------------------------
+    // Multi-GPU device management.
+    //
+    // CUDA's "current device" is per-OS-thread. The Dart FFI layer runs
+    // synchronous calls on the mutator thread, so it drives the current
+    // device explicitly: set_device(k) before launching an op pins every
+    // subsequent allocation + kernel to GPU k until changed. Tensors
+    // record their own device (see struct) so cross-device moves are safe.
+    // ---------------------------------------------------------------------
+
+    DLLEXPORT int dp_device_count()
+    {
+        int n = 0;
+        cudaError_t e = cudaGetDeviceCount(&n);
+        if (e != cudaSuccess) return 0;
+        return n;
+    }
+
+    DLLEXPORT int dp_get_device()
+    {
+        int d = 0;
+        cudaGetDevice(&d);
+        return d;
+    }
+
+    DLLEXPORT void dp_set_device(int d)
+    {
+        cudaError_t e = cudaSetDevice(d);
+        if (e != cudaSuccess) {
+            fprintf(stderr, "[cuda] set_device(%d) failed: %s\n",
+                    d, cudaGetErrorString(e));
+        }
+    }
+
+    // Allocate a copy of `h`'s data on device `dst` and return the new
+    // handle. Uses cudaMemcpyPeer, which transfers GPU->GPU directly when
+    // peer access is available and otherwise stages through the host, so
+    // it is safe regardless of the P2P topology. The source tensor is
+    // left untouched. The current device is preserved across the call.
+    DLLEXPORT void *copy_tensor_to_device(void *h, int dst)
+    {
+        if (!h) return nullptr;
+        Tensor *src = (Tensor *)h;
+        int prev = 0;
+        cudaGetDevice(&prev);
+        cudaSetDevice(dst);
+        Tensor *out = new Tensor(src->rows, src->cols);
+        if (out->size == src->size && out->data_gpu && src->data_gpu) {
+            cudaMemcpyPeer(out->data_gpu, dst, src->data_gpu, src->device,
+                           src->size * sizeof(float));
+        }
+        cudaSetDevice(prev);
+        return (void *)out;
+    }
+
+    // Best-effort peer access from `dst` to `src` so cross-device copies
+    // go GPU-direct instead of staging through host. Idempotent and
+    // non-fatal: if P2P is unsupported for this pair the copies still
+    // work (slower) via UVA host staging, so errors are swallowed.
+    DLLEXPORT void dp_enable_peer_access(int dst, int src)
+    {
+        if (dst == src) return;
+        int prev = 0;
+        cudaGetDevice(&prev);
+        cudaSetDevice(dst);
+        cudaError_t e = cudaDeviceEnablePeerAccess(src, 0);
+        if (e != cudaSuccess && e != cudaErrorPeerAccessAlreadyEnabled) {
+            cudaGetLastError(); // clear the sticky error; fall back to UVA
+        }
+        cudaSetDevice(prev);
+    }
+
+    // Copy a [rows, blockCols] column block between two tensors, possibly
+    // on different GPUs. Strides/offsets are in ELEMENTS (float columns).
+    // Uses cudaMemcpy2D with cudaMemcpyDefault, which resolves direction
+    // via UVA — GPU-direct when peer access is enabled, host-staged
+    // otherwise — so it is correct regardless of the P2P topology.
+    DLLEXPORT void copy_block_2d(void *dstH, int dstStrideCols, int dstColOffset,
+                                 void *srcH, int srcStrideCols, int srcColOffset,
+                                 int rows, int blockCols)
+    {
+        Tensor *d = (Tensor *)dstH;
+        Tensor *s = (Tensor *)srcH;
+        if (!d || !s || !d->data_gpu || !s->data_gpu) return;
+        float *dstBase = d->data_gpu + dstColOffset;
+        float *srcBase = s->data_gpu + srcColOffset;
+        size_t dpitch = (size_t)dstStrideCols * sizeof(float);
+        size_t spitch = (size_t)srcStrideCols * sizeof(float);
+        size_t widthBytes = (size_t)blockCols * sizeof(float);
+        int prev = 0;
+        cudaGetDevice(&prev);
+        cudaSetDevice(d->device);
+        cudaMemcpy2D(dstBase, dpitch, srcBase, spitch, widthBytes, rows,
+                     cudaMemcpyDefault);
+        cudaSetDevice(prev);
     }
 
     // ---------------------------------------------------------------------

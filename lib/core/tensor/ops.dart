@@ -182,6 +182,7 @@ extension TensorOps on Tensor {
         }
         return Tensor._cpu(shape, out);
       }
+      _useDevice();
       final scalarT = Tensor.fill([1, 1], s, device: Device.GPU);
       final h = gpuScalar()(_handle!, scalarT._handle!);
       scalarT.dispose();
@@ -195,6 +196,12 @@ extension TensorOps on Tensor {
       throw ArgumentError(
         '$opName: mixed devices ($device vs ${other.device}). '
         'Call .to(...) on one operand first.',
+      );
+    }
+    if (device == Device.GPU && gpuIndex != other.gpuIndex) {
+      throw ArgumentError(
+        '$opName: operands on different GPUs ($gpuIndex vs ${other.gpuIndex}). '
+        'Move one with .toGpu(...) first.',
       );
     }
 
@@ -266,6 +273,7 @@ extension TensorOps on Tensor {
     _GpuOp2? gpuRowBroadcast,
     String opName,
   ) {
+    _useDevice();
     if (length == other.length) {
       return Tensor._gpu(shape, gpuExact(_handle!, other._handle!));
     }
@@ -426,6 +434,7 @@ extension TensorOps on Tensor {
       }
       return Tensor._cpu(shape, out);
     }
+    _useDevice();
     return Tensor._gpu(shape, gpu()(_handle!));
   }
 

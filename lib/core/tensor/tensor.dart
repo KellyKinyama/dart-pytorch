@@ -50,6 +50,12 @@ class Tensor implements ffi.Finalizable {
   final int length;
   Device device;
 
+  /// Physical CUDA device ordinal this tensor's GPU memory lives on.
+  /// Meaningful only when [device] is [Device.GPU]; always 0 for CPU
+  /// tensors. Lets one process hold a model split across several GPUs —
+  /// see [onGpu] and [toGpu].
+  int gpuIndex = 0;
+
   /// Storage precision. Compute is always fp32; when this is
   /// [DType.fp16] the CPU backing lives in [_cpuF16Bits] as raw
   /// half-precision bits and ops materialise a fp32 copy at read
@@ -89,6 +95,13 @@ class Tensor implements ffi.Finalizable {
   /// Explicit `device:` arguments are always honoured regardless.
   static bool disableAutoGpu = false;
 
+  /// When true (default), tensor-parallel gather/scatter use the
+  /// GPU-native cross-device copy (peer access + `cudaMemcpy2D`) instead
+  /// of staging through host memory. Set to false to force the portable
+  /// host path (e.g. to bisect a suspected collective bug). Ignored when
+  /// the native lib lacks the collective symbols.
+  static bool useGpuCollectives = true;
+
   static Device _pickDevice(int length, Device? explicit) {
     if (explicit != null) return explicit;
     if (disableAutoGpu) return Device.CPU;
@@ -112,10 +125,15 @@ class Tensor implements ffi.Finalizable {
     this.shape,
     ffi.Pointer<ffi.Void> handle, {
     this.requiresGrad = false,
+    int? deviceIndex,
   }) : length = shape.reduce((a, b) => a * b),
        device = Device.GPU,
        dtype = DType.fp32,
        _handle = handle {
+    // Freshly-allocated GPU tensors live on whatever device was current
+    // when the native op ran; tag them with it (or an explicit override
+    // for cross-device copies) so later ops target the right card.
+    gpuIndex = deviceIndex ?? engine.currentDevice;
     // Register a native finalizer so autograd-graph intermediates and
     // other implicitly-owned GPU tensors get their handle freed when
     // the Dart object is GC'd. Without this, a training loop leaks
@@ -377,6 +395,7 @@ class Tensor implements ffi.Finalizable {
         // stay in the same storage format.
         return this;
       }
+      _useDevice();
       final ptr = calloc<ffi.Float>(length);
       engine.getTensorData(_handle!, ptr);
       final data = Float32List.fromList(ptr.asTypedList(length));
@@ -388,6 +407,87 @@ class Tensor implements ffi.Finalizable {
     return Tensor._gpu(shape, _uploadToGpu(shape, srcFp32));
   }
 
+  /// Pin the CUDA device to [index] for the duration of [body], then
+  /// restore the previous device. All GPU tensors created inside the
+  /// callback are allocated on device [index]. This is how one process
+  /// drives a model split across several GPUs: wrap each stage's forward
+  /// pass in `Tensor.onGpu(k, () => stage.forward(x))`, and move the
+  /// activation across the boundary with [toGpu].
+  ///
+  /// On a single-GPU build (or native lib without multi-GPU support)
+  /// this simply runs [body] on the only device.
+  static T onGpu<T>(int index, T Function() body) {
+    final prev = engine.currentDevice;
+    engine.setDevice(index);
+    try {
+      return body();
+    } finally {
+      engine.setDevice(prev);
+    }
+  }
+
+  /// Number of CUDA devices visible to this process (1 when GPU support
+  /// is single-device or unavailable).
+  static int get gpuCount => engine.deviceCount;
+
+  /// The CUDA device ordinal subsequent GPU allocations target.
+  static int get currentGpu => engine.currentDevice;
+
+  /// Returns this tensor placed on GPU [index]. A no-op when already
+  /// there. CPU tensors are uploaded to that device; GPU tensors are
+  /// moved with a direct device-to-device (peer) copy.
+  ///
+  /// **Differentiable:** when this tensor requires grad, the transfer is
+  /// an identity on values, so its backward moves the incoming gradient
+  /// back to this tensor's original device and accumulates it there.
+  /// This is what lets gradients flow across GPU boundaries in a
+  /// tensor-parallel model. For a `requiresGrad == false` tensor the
+  /// move is detached (no graph), matching inference use.
+  Tensor toGpu(int index) {
+    if (device == Device.GPU && gpuIndex == index) return this;
+    final Tensor out;
+    if (device == Device.CPU) {
+      // Upload onto `index` by making it current for the allocation.
+      out = onGpu(index, () => to(Device.GPU));
+    } else {
+      // GPU -> different GPU: direct peer copy, no host round-trip.
+      engine.enablePeerAccess(index, gpuIndex);
+      final h = engine.copyTensorToDevice(_handle!, index);
+      out = Tensor._gpu(shape, h, deviceIndex: index);
+    }
+    if (requiresGrad) {
+      final src = this;
+      out._setBackward([src], () {
+        final g = out._grad!;
+        // Move the upstream grad back onto the source's device. `src`
+        // is on a different device than `out` (equal-device is the
+        // early return above), so this is always a genuine, safe copy.
+        final gSrc =
+            src.device == Device.CPU ? g.to(Device.CPU) : g.toGpu(src.gpuIndex);
+        src._accumulateGrad(gSrc);
+      });
+    }
+    return out;
+  }
+
+  /// A zero tensor shaped and placed like [t] — on [t]'s exact GPU when
+  /// it is a GPU tensor, so optimizer state buffers land on the same
+  /// card as the parameter they track (important for sharded params).
+  static Tensor zerosLike(Tensor t) {
+    if (t.device == Device.CPU) {
+      return Tensor.fill(t.shape, 0.0, device: Device.CPU);
+    }
+    return onGpu(t.gpuIndex, () => Tensor.fill(t.shape, 0.0, device: Device.GPU));
+  }
+
+  /// Make this tensor's GPU device current before an op reads its
+  /// handle, so the output (allocated by the native op on the current
+  /// device) lands on the same card. Cheap no-op for CPU tensors and
+  /// when the device is already current.
+  void _useDevice() {
+    if (device == Device.GPU) engine.setDevice(gpuIndex);
+  }
+
   /// Copies tensor data to host as a plain `List<double>`, regardless of
   /// current device. fp16 storage is decoded to fp32 on the fly.
   List<double> toList() {
@@ -395,6 +495,7 @@ class Tensor implements ffi.Finalizable {
       if (dtype == DType.fp16) return decodeFp16Bulk(_cpuF16Bits!).toList();
       return _cpuData!.toList();
     }
+    _useDevice();
     final ptr = calloc<ffi.Float>(length);
     engine.getTensorData(_handle!, ptr);
     final out = ptr.asTypedList(length).toList();
@@ -412,6 +513,7 @@ class Tensor implements ffi.Finalizable {
       if (dtype == DType.fp16) return decodeFp16Bulk(_cpuF16Bits!);
       return Float32List.fromList(_cpuData!);
     }
+    _useDevice();
     final ptr = calloc<ffi.Float>(length);
     engine.getTensorData(_handle!, ptr);
     final out = Float32List.fromList(ptr.asTypedList(length));
@@ -427,7 +529,8 @@ class Tensor implements ffi.Finalizable {
       }
       return Tensor._cpu(shape, Float32List.fromList(_cpuData!));
     }
-    return Tensor._gpu(shape, _uploadToGpu(shape, toList()));
+    // Keep the clone on the same physical GPU as the source.
+    return onGpu(gpuIndex, () => Tensor._gpu(shape, _uploadToGpu(shape, toList())));
   }
 
   /// Detach from the autograd graph — same data, `requiresGrad = false`.
@@ -461,6 +564,12 @@ class Tensor implements ffi.Finalizable {
     if (device == Device.CPU) {
       _cpuData!.setAll(0, source._cpuData!);
     } else {
+      if (source.gpuIndex != gpuIndex) {
+        throw ArgumentError(
+          'assign: GPU device mismatch — source on GPU ${source.gpuIndex}, '
+          'target on GPU $gpuIndex. Call source.toGpu($gpuIndex) first.',
+        );
+      }
       // Detach both finalizers to prevent a double-free once the
       // handles change owners.
       engine.destroyTensorFinalizer.detach(this);

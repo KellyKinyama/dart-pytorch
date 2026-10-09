@@ -24,6 +24,42 @@ typedef CCopy =
     ffi.Void Function(ffi.Pointer<ffi.Void>, ffi.Pointer<ffi.Float>);
 typedef DCopy = void Function(ffi.Pointer<ffi.Void>, ffi.Pointer<ffi.Float>);
 
+// Multi-GPU device management.
+typedef CDeviceCount = ffi.Int32 Function();
+typedef DDeviceCount = int Function();
+typedef CSetDevice = ffi.Void Function(ffi.Int32);
+typedef DSetDevice = void Function(int);
+typedef CCopyToDevice =
+    ffi.Pointer<ffi.Void> Function(ffi.Pointer<ffi.Void>, ffi.Int32);
+typedef DCopyToDevice =
+    ffi.Pointer<ffi.Void> Function(ffi.Pointer<ffi.Void>, int);
+
+// Peer access + cross-device strided block copy (GPU-native collectives).
+typedef CEnablePeer = ffi.Void Function(ffi.Int32, ffi.Int32);
+typedef DEnablePeer = void Function(int, int);
+typedef CCopyBlock2d =
+    ffi.Void Function(
+      ffi.Pointer<ffi.Void>,
+      ffi.Int32,
+      ffi.Int32,
+      ffi.Pointer<ffi.Void>,
+      ffi.Int32,
+      ffi.Int32,
+      ffi.Int32,
+      ffi.Int32,
+    );
+typedef DCopyBlock2d =
+    void Function(
+      ffi.Pointer<ffi.Void>,
+      int,
+      int,
+      ffi.Pointer<ffi.Void>,
+      int,
+      int,
+      int,
+      int,
+    );
+
 typedef COp1 = ffi.Pointer<ffi.Void> Function(ffi.Pointer<ffi.Void>);
 typedef DOp1 = ffi.Pointer<ffi.Void> Function(ffi.Pointer<ffi.Void>);
 
@@ -246,6 +282,25 @@ class CudaEngine {
   late DDestroy destroyTensor;
   late DCopy getTensorData;
 
+  // Multi-GPU device management (null if the native lib predates them).
+  DDeviceCount? _deviceCount;
+  DSetDevice? _setDevice;
+  DCopyToDevice? _copyToDevice;
+
+  // GPU-native collectives (null if the native lib predates them).
+  DEnablePeer? _enablePeer;
+  DCopyBlock2d? _copyBlock2d;
+
+  /// Directed device pairs (dst<<16 | src) whose peer access is already
+  /// enabled, so the FFI call happens at most once per pair.
+  final Set<int> _peerEnabled = <int>{};
+
+  /// Dart-side cache of the current CUDA device so `Tensor._gpu` can tag
+  /// freshly-allocated outputs without an FFI round-trip per op. Kept in
+  /// sync by [setDevice]; seeded to 0 (CUDA's default device).
+  int _currentDevice = 0;
+  int? _deviceCountCache;
+
   /// Native finalizer that calls `destroy_tensor` on the attached
   /// pointer when the owning Dart object is garbage-collected. Used
   /// by `Tensor._gpu` to free intermediate GPU handles that the
@@ -329,6 +384,30 @@ class CudaEngine {
     destroyTensor = _lib.lookupFunction<CDestroy, DDestroy>('destroy_tensor');
     getTensorData = _lib.lookupFunction<CCopy, DCopy>('get_tensor_data');
 
+    // Device-management symbols are optional: a locally-built or
+    // downloaded lib from before multi-GPU support won't export them, so
+    // look them up defensively and leave the single-GPU path working.
+    try {
+      _deviceCount =
+          _lib.lookupFunction<CDeviceCount, DDeviceCount>('dp_device_count');
+      _setDevice = _lib.lookupFunction<CSetDevice, DSetDevice>('dp_set_device');
+      _copyToDevice = _lib.lookupFunction<CCopyToDevice, DCopyToDevice>(
+        'copy_tensor_to_device',
+      );
+      _enablePeer = _lib.lookupFunction<CEnablePeer, DEnablePeer>(
+        'dp_enable_peer_access',
+      );
+      _copyBlock2d = _lib.lookupFunction<CCopyBlock2d, DCopyBlock2d>(
+        'copy_block_2d',
+      );
+    } on ArgumentError {
+      _deviceCount = null;
+      _setDevice = null;
+      _copyToDevice = null;
+      _enablePeer = null;
+      _copyBlock2d = null;
+    }
+
     // Same underlying symbol as `destroyTensor`, exposed as a native
     // function pointer so it can be attached as a NativeFinalizer.
     final destroyPtr = _lib.lookup<ffi.NativeFunction<CDestroy>>(
@@ -409,6 +488,92 @@ class CudaEngine {
       'relu_backward_op',
     );
     absBackwardOp = _lib.lookupFunction<CReluBwd, DReluBwd>('abs_backward_op');
+  }
+
+  /// Number of CUDA devices visible to this process. Returns 1 when the
+  /// native lib predates multi-GPU support (so single-GPU callers behave
+  /// unchanged). Cached after the first query.
+  int get deviceCount {
+    final q = _deviceCount;
+    if (q == null) return 1;
+    return _deviceCountCache ??= (() {
+      final n = q();
+      return n > 0 ? n : 1;
+    })();
+  }
+
+  /// The CUDA device subsequent allocations and kernels target. Read
+  /// from the Dart-side cache — [setDevice] keeps it authoritative.
+  int get currentDevice => _currentDevice;
+
+  /// Whether the loaded native lib exposes multi-GPU device management.
+  bool get supportsMultiGpu => _setDevice != null;
+
+  /// Pin the current CUDA device to [index] for this thread. No-op when
+  /// already current, or when the native lib predates multi-GPU support
+  /// (in which case only device 0 is ever addressable).
+  void setDevice(int index) {
+    if (index == _currentDevice) return;
+    final set = _setDevice;
+    if (set == null) return;
+    set(index);
+    _currentDevice = index;
+  }
+
+  /// Allocate a copy of [handle]'s data on device [dst] and return the
+  /// new handle. Requires multi-GPU support in the native lib.
+  ffi.Pointer<ffi.Void> copyTensorToDevice(
+    ffi.Pointer<ffi.Void> handle,
+    int dst,
+  ) {
+    final copy = _copyToDevice;
+    if (copy == null) {
+      throw StateError(
+        'copyTensorToDevice: native lib lacks multi-GPU support. '
+        'Rebuild libmat_mul from lib/native/src/engine.cu.',
+      );
+    }
+    return copy(handle, dst);
+  }
+
+  /// Whether the loaded native lib exposes the GPU-native collective
+  /// primitives (peer access + cross-device strided copy).
+  bool get supportsPeerCollectives => _copyBlock2d != null;
+
+  /// Best-effort enable peer access from device [dst] to device [src] so
+  /// cross-device copies go GPU-direct. Idempotent (cached per pair) and
+  /// a no-op when unsupported — copies still work via host staging.
+  void enablePeerAccess(int dst, int src) {
+    if (dst == src) return;
+    final fn = _enablePeer;
+    if (fn == null) return;
+    final key = (dst << 16) | (src & 0xffff);
+    if (!_peerEnabled.add(key)) return;
+    fn(dst, src);
+  }
+
+  /// Copy a `[rows, blockCols]` column block from `src` columns
+  /// `[srcColOffset, …]` into `dst` columns `[dstColOffset, …]`. Strides
+  /// are in elements. Cross-device capable; requires [supportsPeerCollectives].
+  void copyBlock2d(
+    ffi.Pointer<ffi.Void> dst,
+    int dstStrideCols,
+    int dstColOffset,
+    ffi.Pointer<ffi.Void> src,
+    int srcStrideCols,
+    int srcColOffset,
+    int rows,
+    int blockCols,
+  ) {
+    final fn = _copyBlock2d;
+    if (fn == null) {
+      throw StateError(
+        'copyBlock2d: native lib lacks GPU-native collectives. '
+        'Rebuild libmat_mul from lib/native/src/engine.cu.',
+      );
+    }
+    fn(dst, dstStrideCols, dstColOffset, src, srcStrideCols, srcColOffset,
+        rows, blockCols);
   }
 }
 

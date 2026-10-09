@@ -200,4 +200,92 @@ extension TensorConcat on Tensor {
     }
     return chunks;
   }
+
+  /// Gather a list of per-GPU 2D shards `[rows, cols_g]` (each resident
+  /// on its own device) into a single `[rows, sum(cols_g)]` tensor on
+  /// [outputDevice], concatenating along columns. This is the
+  /// tensor-parallel column gather.
+  ///
+  /// When [Tensor.useGpuCollectives] is on and the native lib exposes
+  /// the collective symbols, each shard's columns are copied straight
+  /// into the output with a cross-device `cudaMemcpy2D` (GPU-direct
+  /// under peer access, host-staged otherwise) — no host round-trip.
+  /// Otherwise it falls back to moving every shard to [outputDevice] and
+  /// using the host-staged [concat].
+  ///
+  /// Differentiable: backward scatters the output-gradient columns back
+  /// to each requiring shard's device.
+  static Tensor gatherColumns(List<Tensor> parts, {required int outputDevice}) {
+    if (parts.isEmpty) {
+      throw ArgumentError('gatherColumns: input list is empty');
+    }
+    final rows = parts[0].shape[0];
+    var totalCols = 0;
+    final widths = <int>[];
+    for (final p in parts) {
+      if (p.shape.length != 2 || p.shape[0] != rows) {
+        throw ArgumentError(
+          'gatherColumns: all shards must be 2D with $rows rows; '
+          'got ${p.shape}',
+        );
+      }
+      widths.add(p.shape[1]);
+      totalCols += p.shape[1];
+    }
+
+    final native = Tensor.useGpuCollectives &&
+        engine.supportsPeerCollectives &&
+        parts.every((p) => p.device == Device.GPU);
+
+    if (!native) {
+      // Portable path: move each shard to the gather device, host-concat.
+      final moved = [for (final p in parts) p.toGpu(outputDevice)];
+      return Tensor.onGpu(outputDevice, () => concat(moved, axis: 1));
+    }
+
+    // GPU-native gather: allocate the output zeroed directly on the
+    // device (no host upload), then peer-copy each shard's columns in.
+    final out = Tensor.onGpu(
+      outputDevice,
+      () => Tensor._gpu(
+        [rows, totalCols],
+        engine.createTensor(rows, totalCols, ffi.nullptr),
+      ),
+    );
+    final offsets = <int>[];
+    var off = 0;
+    for (var i = 0; i < parts.length; i++) {
+      final p = parts[i];
+      engine.enablePeerAccess(outputDevice, p.gpuIndex);
+      engine.copyBlock2d(
+        out._handle!, totalCols, off, p._handle!, widths[i], 0, rows, widths[i],
+      );
+      offsets.add(off);
+      off += widths[i];
+    }
+
+    if (parts.any((p) => p.requiresGrad)) {
+      out._setBackward(parts, () {
+        final gO = out._grad!;
+        for (var i = 0; i < parts.length; i++) {
+          final p = parts[i];
+          if (!p.requiresGrad) continue;
+          final c = widths[i];
+          final gP = Tensor.onGpu(
+            p.gpuIndex,
+            () => Tensor._gpu(
+              [rows, c],
+              engine.createTensor(rows, c, ffi.nullptr),
+            ),
+          );
+          engine.enablePeerAccess(p.gpuIndex, gO.gpuIndex);
+          engine.copyBlock2d(
+            gP._handle!, c, 0, gO._handle!, totalCols, offsets[i], rows, c,
+          );
+          p._accumulateGrad(gP);
+        }
+      });
+    }
+    return out;
+  }
 }

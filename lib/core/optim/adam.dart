@@ -48,15 +48,16 @@ class Adam extends Optimizer {
       final g = p.grad;
       if (g == null) continue;
 
-      // Lazily allocate moment buffers to match parameter shape/device.
+      // Lazily allocate moment buffers to match parameter shape/device
+      // (including the exact GPU ordinal for tensor-parallel shards).
       var m = _m[i];
       var v = _v[i];
       if (m == null) {
-        m = Tensor.fill(p.shape, 0.0, device: p.device);
+        m = Tensor.zerosLike(p);
         _m[i] = m;
       }
       if (v == null) {
-        v = Tensor.fill(p.shape, 0.0, device: p.device);
+        v = Tensor.zerosLike(p);
         _v[i] = v;
       }
 

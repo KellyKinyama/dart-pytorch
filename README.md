@@ -108,6 +108,8 @@ lib/
     lib/                         # populated by the nvcc build (gitignored)
 native/lib/libmat_mul.so         # actual load path used by cuda_engine.dart
 doc/device-placement.md         # per-op CPU vs GPU decisions + implementation status
+doc/multi_gpu.md                # one model across several GPUs (pipeline + tensor parallel)
+doc/multi_gpu_roadmap.md        # phased plan: TP attention, distributed backward, 3D parallelism
 test/dart_pytorch_test.dart      # matmul + CPU-op correctness tests
 ```
 
@@ -226,6 +228,7 @@ Short version:
 | `nn.SinusoidalPositionalEncoding(D)`    | yes  | yes  | Fixed sin/cos PE, no params, recomputed per forward for the exact seqLen |
 | `nn.LearnedPositionalEmbedding(maxLen, D)` | yes  | yes  | Trainable position table gathered via `Embedding`; scatter-add backward comes free |
 | `clipGradNorm(params, maxNorm)`         | yes  | yes  | Global L2 grad clip, in-place via `Tensor.assign` |
+| Multi-GPU (pipeline + tensor parallel)  | —    | yes  | One model across several GPUs in one process; `Tensor.onGpu`/`toGpu` (differentiable), peer collectives, `ColumnParallelLinear`/`RowParallelLinear`/`TensorParallelMLP` (trainable), `TensorParallelMultiHeadAttention`, `TensorParallelTransformerBlock`/`Stack` (TP + pipeline). See `doc/multi_gpu.md` |
 
 **Placement rule:** ops respect the input tensor's device. Mixed-device
 inputs to a binary op raise `ArgumentError` — call `.to(...)`
