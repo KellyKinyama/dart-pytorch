@@ -219,6 +219,13 @@ multi-block TP transformer matching a reference within tolerance.
 
 ## Phase 5 — Benchmarks, tests, tooling (cross-cutting)
 
+**Status: in progress.** `bin/_tp_bench.dart` times the TP transformer
+stack's forward across GPU counts (1..N) and both gather modes (peer vs
+host-staged), reporting tokens/s, speedup, and per-GPU weight footprint.
+GPU-guarded equivalence + training tests exist for the linears, MLP,
+attention, block, and stack. Remaining: a PCIe-bytes counter and a
+memory-residency assertion.
+
 **Tasks.**
 - Equivalence tests under `test/`: extend
   `test/attention_test.dart`, add `test/parallel_linear_test.dart`,

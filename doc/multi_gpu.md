@@ -171,6 +171,17 @@ dart run bin/tensor_parallel_stack_demo.dart              # TP only
 dart run bin/tensor_parallel_stack_demo.dart --pipeline 2 # TP + pipeline
 ```
 
+### Scaling benchmark — [../bin/_tp_bench.dart](../bin/_tp_bench.dart)
+Times a tensor-parallel transformer stack's forward across every GPU
+count (1..N) and both gather modes (GPU-native peer copy vs host-staged),
+reporting tokens/s, speedup, and the per-GPU weight footprint (which
+should be ~`total / GPUs`, confirming the weights are sharded).
+
+```bash
+dart run bin/_tp_bench.dart
+dart run bin/_tp_bench.dart --tokens 256 --depth 8 --embed 1024
+```
+
 ---
 
 ## Writing your own sharded model
