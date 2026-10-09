@@ -38,7 +38,9 @@ on-card, and row-parallelises the output projection. Validated against
 single-GPU `MultiHeadAttention` for plain MHA, GQA, and a causal mask
 ([../test/tensor_parallel_attention_test.dart](../test/tensor_parallel_attention_test.dart),
 [../bin/tensor_parallel_attention_demo.dart](../bin/tensor_parallel_attention_demo.dart)).
-Remaining for a later pass: RoPE, dropout, KV-cache, batched 3D path.
+Remaining for a later pass: dropout, KV-cache, batched 3D path. (RoPE is
+supported: each shard gets a device-local `RopeCache` and `call` takes a
+`startPos`.)
 
 **Objective.** A `ColumnParallel`/`RowParallel` multi-head attention so
 one attention layer's QKV and output projection span all GPUs, matching

@@ -138,6 +138,50 @@ void main() {
     );
   });
 
+  group('TensorParallelMultiHeadAttention RoPE', () {
+    test(
+      'matches single-GPU MHA with rotary embeddings',
+      () {
+        const embedDim = 64;
+        const numHeads = 8;
+        const n = 6;
+        final rng = math.Random(4);
+
+        final mha = MultiHeadAttention(
+          embedDim,
+          numHeads,
+          bias: false,
+          device: Device.GPU,
+          seed: 13,
+        );
+        // Attach a full-rotation RoPE cache on the GPU.
+        mha.rope = RopeCache(
+          maxCtx: n,
+          headDim: embedDim ~/ numHeads,
+          device: Device.GPU,
+        );
+
+        final x = Tensor.fromList(
+          [n, embedDim],
+          _rand(rng, n * embedDim, 0.5),
+          device: Device.GPU,
+        );
+
+        final ref = mha(x).to(Device.CPU).toFloat32List();
+        final tp = TensorParallelMultiHeadAttention.fromAttention(mha);
+        final got = tp(x).to(Device.CPU).toFloat32List();
+
+        var maxDiff = 0.0;
+        for (var i = 0; i < ref.length; i++) {
+          final d = (got[i] - ref[i]).abs();
+          if (d > maxDiff) maxDiff = d;
+        }
+        expect(maxDiff < 1e-3, isTrue, reason: 'max abs diff $maxDiff');
+      },
+      skip: gpu ? false : 'no CUDA GPU available',
+    );
+  });
+
   group('TensorParallelMultiHeadAttention training', () {
     test(
       'gradients reach every sharded weight and loss decreases',

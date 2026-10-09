@@ -199,4 +199,20 @@ class RopeCache {
     final rotated = qOrK.matmul(_rotateHalfP); // rotate_half via matmul
     return (qOrK * cosBlock) + (rotated * sinBlock);
   }
+
+  /// A copy of this cache with all its tables resident on GPU [index].
+  /// Used by tensor-parallel attention so each shard can apply RoPE on
+  /// the card that holds its heads.
+  RopeCache onGpu(int index) {
+    return RopeCache._(
+      maxCtx,
+      headDim,
+      rotaryDim,
+      base,
+      [for (final t in _cosPerPos) t.toGpu(index)],
+      [for (final t in _sinPerPos) t.toGpu(index)],
+      _rotateHalfP.toGpu(index),
+      Device.GPU,
+    );
+  }
 }

@@ -20,6 +20,7 @@ library;
 
 import '../../tensor/tensor.dart';
 import '../module.dart';
+import '../rotary.dart';
 import 'multi_head_attention.dart';
 
 /// Even split of `total` into `parts` contiguous chunks; earlier chunks
@@ -69,6 +70,7 @@ class _AttnShard {
     required this.wvW,
     required this.wvB,
     required this.woShard,
+    this.rope,
   });
 
   final int device;
@@ -88,6 +90,9 @@ class _AttnShard {
 
   /// Output-projection shard: `[embedDim, qHeads*headDim]` on device.
   final Tensor woShard;
+
+  /// Device-local RoPE cache (null when the layer has no rotary embed).
+  final RopeCache? rope;
 
   int get qCount => wqW.length;
 }
@@ -213,6 +218,7 @@ class TensorParallelMultiHeadAttention extends Module {
           wvW: wvW,
           wvB: wvB,
           woShard: woShard,
+          rope: mha.rope?.onGpu(dev),
         ),
       );
     }
@@ -233,8 +239,9 @@ class TensorParallelMultiHeadAttention extends Module {
   }
 
   /// Forward over a 2D `[N, embedDim]` sequence with optional additive
-  /// mask `[N, N]`. Returns `[N, embedDim]` on [outputDevice].
-  Tensor call(Tensor x, {Tensor? mask}) {
+  /// mask `[N, N]`. [startPos] is the absolute position of the first row
+  /// (for RoPE). Returns `[N, embedDim]` on [outputDevice].
+  Tensor call(Tensor x, {Tensor? mask, int startPos = 0}) {
     if (x.shape.length != 2 || x.shape[1] != embedDim) {
       throw ArgumentError(
         'TensorParallelMultiHeadAttention: expected [N, $embedDim]; '
@@ -253,6 +260,7 @@ class TensorParallelMultiHeadAttention extends Module {
         for (var i = 0; i < s.wkW.length; i++) {
           var k = xg.matmul(s.wkW[i].transpose());
           if (s.wkB[i] != null) k = k + s.wkB[i]!;
+          if (s.rope != null) k = s.rope!.apply(k, startPos: startPos);
           var v = xg.matmul(s.wvW[i].transpose());
           if (s.wvB[i] != null) v = v + s.wvB[i]!;
           ks.add(k);
@@ -263,6 +271,7 @@ class TensorParallelMultiHeadAttention extends Module {
         for (var i = 0; i < s.qCount; i++) {
           var q = xg.matmul(s.wqW[i].transpose());
           if (s.wqB[i] != null) q = q + s.wqB[i]!;
+          if (s.rope != null) q = s.rope!.apply(q, startPos: startPos);
           final globalH = s.qHead0 + i;
           final localKv = (globalH ~/ s.numHeadGroups) - s.kvHead0;
           heads.add(
