@@ -115,14 +115,17 @@ class TensorParallelTransformerBlock extends Module {
   }
 
   /// Forward over a 2D `[N, embedDim]` sequence with optional additive
-  /// mask `[N, N]`. Returns `[N, embedDim]` on [outputDevice].
-  Tensor call(Tensor x, {Tensor? mask}) {
+  /// mask `[N, N]`. For autoregressive decoding pass a per-layer [cache]
+  /// (from [newCache]) and [startPos]; the attention appends each token's
+  /// K/V and continues RoPE positions from the cached length.
+  /// Returns `[N, embedDim]` on [outputDevice].
+  Tensor call(Tensor x, {Tensor? mask, TPMHACache? cache, int startPos = 0}) {
     final xo = x.toGpu(outputDevice);
     final normed1 = Tensor.onGpu(
       outputDevice,
       () => xo.layerNorm(ln1Gamma, ln1Beta, eps: eps),
     );
-    final attn = mha(normed1, mask: mask);
+    final attn = mha(normed1, mask: mask, cache: cache, startPos: startPos);
     final h = Tensor.onGpu(outputDevice, () => xo + attn);
 
     final normed2 = Tensor.onGpu(
@@ -132,6 +135,9 @@ class TensorParallelTransformerBlock extends Module {
     final ff = mlp(normed2);
     return Tensor.onGpu(outputDevice, () => h + ff);
   }
+
+  /// A fresh, empty KV cache for this block's attention.
+  TPMHACache newCache() => mha.newCache();
 
   @override
   List<Module> submodules() => [mha, mlp];
@@ -242,10 +248,14 @@ class TensorParallelTransformerStack extends Module {
   List<int> get blockOutputDevices =>
       [for (final b in blocks) b.outputDevice];
 
-  Tensor call(Tensor x, {Tensor? mask}) {
+  /// Fresh KV caches, one per block, for autoregressive decoding.
+  List<TPMHACache> newCache() => [for (final b in blocks) b.newCache()];
+
+  Tensor call(Tensor x,
+      {Tensor? mask, List<TPMHACache>? caches, int startPos = 0}) {
     var h = x;
-    for (final b in blocks) {
-      h = b(h, mask: mask);
+    for (var i = 0; i < blocks.length; i++) {
+      h = blocks[i](h, mask: mask, cache: caches?[i], startPos: startPos);
     }
     return h;
   }

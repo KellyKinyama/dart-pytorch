@@ -182,6 +182,59 @@ void main() {
     );
   });
 
+  group('TensorParallelMultiHeadAttention KV cache', () {
+    test(
+      'incremental decoding with cache matches the full causal forward',
+      () {
+        const embedDim = 64;
+        const numHeads = 8;
+        const t = 5;
+        final rng = math.Random(5);
+
+        final mha = MultiHeadAttention(
+          embedDim,
+          numHeads,
+          bias: false,
+          device: Device.GPU,
+          seed: 21,
+        );
+        mha.rope = RopeCache(
+          maxCtx: t,
+          headDim: embedDim ~/ numHeads,
+          device: Device.GPU,
+        );
+        final tp = TensorParallelMultiHeadAttention.fromAttention(mha);
+
+        final xData = _rand(rng, t * embedDim, 0.5);
+        final xFull =
+            Tensor.fromList([t, embedDim], xData, device: Device.GPU);
+        final maskVals = List<double>.filled(t * t, 0);
+        for (var i = 0; i < t; i++) {
+          for (var j = i + 1; j < t; j++) {
+            maskVals[i * t + j] = -1e9;
+          }
+        }
+        final mask = Tensor.fromList([t, t], maskVals, device: Device.GPU);
+        final full = tp(xFull, mask: mask).to(Device.CPU).toFloat32List();
+
+        // Decode one token at a time through the KV cache.
+        final cache = tp.newCache();
+        var maxDiff = 0.0;
+        for (var step = 0; step < t; step++) {
+          final row = xData.sublist(step * embedDim, (step + 1) * embedDim);
+          final xt = Tensor.fromList([1, embedDim], row, device: Device.GPU);
+          final outT = tp(xt, cache: cache).to(Device.CPU).toFloat32List();
+          for (var j = 0; j < embedDim; j++) {
+            final d = (outT[j] - full[step * embedDim + j]).abs();
+            if (d > maxDiff) maxDiff = d;
+          }
+        }
+        expect(maxDiff < 1e-3, isTrue, reason: 'max abs diff $maxDiff');
+      },
+      skip: gpu ? false : 'no CUDA GPU available',
+    );
+  });
+
   group('TensorParallelMultiHeadAttention training', () {
     test(
       'gradients reach every sharded weight and loss decreases',

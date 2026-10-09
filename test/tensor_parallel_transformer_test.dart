@@ -230,4 +230,64 @@ void main() {
       skip: gpu ? false : 'no CUDA GPU available',
     );
   });
+
+  group('TensorParallelTransformerStack KV cache', () {
+    test(
+      'cached incremental decoding matches the full causal forward',
+      () {
+        const embedDim = 48;
+        const numHeads = 6;
+        const t = 4;
+        const depth = 2;
+        final rng = math.Random(7);
+
+        final blocks = [
+          for (var i = 0; i < depth; i++)
+            TransformerBlock(
+              embedDim,
+              numHeads,
+              device: Device.GPU,
+              seed: 300 + i,
+            )..eval(),
+        ];
+        // Attach RoPE to each block's attention so positions matter.
+        for (final b in blocks) {
+          b.mha.rope = RopeCache(
+            maxCtx: t,
+            headDim: embedDim ~/ numHeads,
+            device: Device.GPU,
+          );
+        }
+
+        final stack = TensorParallelTransformerStack.fromBlocks(blocks);
+
+        final xData = _rand(rng, t * embedDim, 0.5);
+        final xFull =
+            Tensor.fromList([t, embedDim], xData, device: Device.GPU);
+        final maskVals = List<double>.filled(t * t, 0);
+        for (var i = 0; i < t; i++) {
+          for (var j = i + 1; j < t; j++) {
+            maskVals[i * t + j] = -1e9;
+          }
+        }
+        final mask = Tensor.fromList([t, t], maskVals, device: Device.GPU);
+        final full = stack(xFull, mask: mask).to(Device.CPU).toFloat32List();
+
+        final caches = stack.newCache();
+        var maxDiff = 0.0;
+        for (var step = 0; step < t; step++) {
+          final row = xData.sublist(step * embedDim, (step + 1) * embedDim);
+          final xt = Tensor.fromList([1, embedDim], row, device: Device.GPU);
+          final outT =
+              stack(xt, caches: caches).to(Device.CPU).toFloat32List();
+          for (var j = 0; j < embedDim; j++) {
+            final d = (outT[j] - full[step * embedDim + j]).abs();
+            if (d > maxDiff) maxDiff = d;
+          }
+        }
+        expect(maxDiff < 1e-3, isTrue, reason: 'max abs diff $maxDiff');
+      },
+      skip: gpu ? false : 'no CUDA GPU available',
+    );
+  });
 }

@@ -240,9 +240,10 @@ Rules of thumb:
   is inference-only, 2D `[N, embedDim]`, ReLU FFN; LayerNorms/residuals are
   replicated on the output device.
 - Tensor-parallel attention covers the 2D `[N, embedDim]` path with GQA,
-  an additive mask, and **RoPE** (`mha.rope` is sharded per card with a
-  `startPos` argument); dropout, KV-cache, and the batched 3D path are
-  not sharded yet.
+  an additive mask, **RoPE**, and a **per-shard KV cache** for
+  autoregressive decoding (`newCache()` on the attention, block, or
+  stack; `call(..., cache:/caches:, startPos:)`); dropout and the batched
+  3D path are not sharded yet.
 - Pinning is per-thread; drive GPU ops from a single Dart isolate (the
   default), or set the device inside each isolate.
 

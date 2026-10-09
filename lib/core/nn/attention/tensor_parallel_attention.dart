@@ -19,6 +19,7 @@
 library;
 
 import '../../tensor/tensor.dart';
+import '../kv_cache.dart';
 import '../module.dart';
 import '../rotary.dart';
 import 'multi_head_attention.dart';
@@ -95,6 +96,17 @@ class _AttnShard {
   final RopeCache? rope;
 
   int get qCount => wqW.length;
+}
+
+/// KV cache for a [TensorParallelMultiHeadAttention] layer: one
+/// [MHACache] per attention shard (holding that shard's KV heads on its
+/// own GPU). Build one with [TensorParallelMultiHeadAttention.newCache].
+class TPMHACache {
+  final List<MHACache> shards;
+  TPMHACache(this.shards);
+
+  /// Cached sequence length so far (all shards share it).
+  int get seqLen => shards.isEmpty ? 0 : shards[0].seqLen;
 }
 
 class TensorParallelMultiHeadAttention extends Module {
@@ -238,31 +250,53 @@ class TensorParallelMultiHeadAttention extends Module {
     );
   }
 
+  /// A fresh, empty KV cache matching this layer's shard/KV-head layout.
+  TPMHACache newCache() =>
+      TPMHACache([for (final s in shards) MHACache.empty(s.wkW.length)]);
+
   /// Forward over a 2D `[N, embedDim]` sequence with optional additive
   /// mask `[N, N]`. [startPos] is the absolute position of the first row
-  /// (for RoPE). Returns `[N, embedDim]` on [outputDevice].
-  Tensor call(Tensor x, {Tensor? mask, int startPos = 0}) {
+  /// (for RoPE); when a [cache] is given, positions continue from the
+  /// cached length and each new token's K/V is appended per shard.
+  /// Returns `[N, embedDim]` on [outputDevice].
+  Tensor call(Tensor x, {Tensor? mask, TPMHACache? cache, int startPos = 0}) {
     if (x.shape.length != 2 || x.shape[1] != embedDim) {
       throw ArgumentError(
         'TensorParallelMultiHeadAttention: expected [N, $embedDim]; '
         'got ${x.shape}',
       );
     }
+    if (cache != null && cache.shards.length != shards.length) {
+      throw ArgumentError(
+        'cache has ${cache.shards.length} shards; layer has ${shards.length}',
+      );
+    }
+    if (cache != null && cache.seqLen > 0 && mask != null) {
+      throw ArgumentError(
+        'cannot pass a mask when appending to a non-empty cache',
+      );
+    }
+    final pos = cache != null ? cache.seqLen : startPos;
+
     Tensor? acc;
-    for (final s in shards) {
+    for (var si = 0; si < shards.length; si++) {
+      final s = shards[si];
       final dev = s.device;
+      final sc = cache?.shards[si];
       final xg = x.toGpu(dev);
       final maskg = mask?.toGpu(dev);
       final partial = Tensor.onGpu(dev, () {
-        // Project K/V once per local KV head.
+        // Project K/V once per local KV head (append to cache if present).
         final ks = <Tensor>[];
         final vs = <Tensor>[];
         for (var i = 0; i < s.wkW.length; i++) {
           var k = xg.matmul(s.wkW[i].transpose());
           if (s.wkB[i] != null) k = k + s.wkB[i]!;
-          if (s.rope != null) k = s.rope!.apply(k, startPos: startPos);
+          if (s.rope != null) k = s.rope!.apply(k, startPos: pos);
+          if (sc != null) k = sc.appendK(i, k);
           var v = xg.matmul(s.wvW[i].transpose());
           if (s.wvB[i] != null) v = v + s.wvB[i]!;
+          if (sc != null) v = sc.appendV(i, v);
           ks.add(k);
           vs.add(v);
         }
@@ -271,7 +305,7 @@ class TensorParallelMultiHeadAttention extends Module {
         for (var i = 0; i < s.qCount; i++) {
           var q = xg.matmul(s.wqW[i].transpose());
           if (s.wqB[i] != null) q = q + s.wqB[i]!;
-          if (s.rope != null) q = s.rope!.apply(q, startPos: startPos);
+          if (s.rope != null) q = s.rope!.apply(q, startPos: pos);
           final globalH = s.qHead0 + i;
           final localKv = (globalH ~/ s.numHeadGroups) - s.kvHead0;
           heads.add(
