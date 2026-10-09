@@ -23,6 +23,7 @@ export 'core/nn/diffusion.dart';
 export 'core/nn/lc0_proto.dart';
 export 'core/nn/lc0.dart';
 export 'core/nn/lc0_input.dart';
+export 'core/nn/lc0_attn.dart';
 export 'core/nn/conv1d.dart';
 export 'core/nn/lstm_cell.dart';
 export 'core/nn/hopfield.dart';
