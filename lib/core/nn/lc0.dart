@@ -176,7 +176,27 @@ class Lc0Net extends Module {
       foldedB[o] = -newGamma * (mean[o] - rawB[o]) + beta[o];
     }
 
-    final wT = _transpose2d(foldedW, cout, inputsPerOutput);
+    // For the CPU engine, lay the kernel out as (ky,kx,ci) so the fast host
+    // im2col can gather each KxK tap as one contiguous Cin-vector.
+    final Float32List kernelW;
+    if (device == Device.CPU) {
+      kernelW = Float32List(foldedW.length);
+      final kk = k * k;
+      for (int o = 0; o < cout; o++) {
+        final ob = o * inputsPerOutput;
+        for (int ci = 0; ci < cin; ci++) {
+          for (int ky = 0; ky < k; ky++) {
+            for (int kx = 0; kx < k; kx++) {
+              kernelW[ob + (ky * k + kx) * cin + ci] =
+                  foldedW[ob + ci * kk + ky * k + kx];
+            }
+          }
+        }
+      }
+    } else {
+      kernelW = foldedW;
+    }
+    final wT = _transpose2d(kernelW, cout, inputsPerOutput);
 
     return _ConvGpu(
       cin: cin,
@@ -443,7 +463,43 @@ class Lc0Net extends Module {
   }
 
   Tensor _im2colNHWC(Tensor input, int cin, int k, int pad, int b) {
+    if (device == Device.CPU) return _im2colFastCpu(input, cin, k, pad, b);
     return input.im2colNhwc(batch: b, cin: cin, k: k, pad: pad);
+  }
+
+  // Host im2col for the CPU engine. Kernel is laid out (ky,kx,ci), so each tap
+  // copies a contiguous Cin-vector (one setRange) instead of Cin*k*k scalar
+  // gathers. Out-of-range taps stay zero.
+  Tensor _im2colFastCpu(Tensor input, int cin, int k, int pad, int b) {
+    const w = 8, h = 8;
+    final data = input.toFloat32List();
+    final rowsPerBatch = h * w;
+    final rows = b * rowsPerBatch;
+    final colsWidth = cin * k * k;
+    final out = Float32List(rows * colsWidth);
+    var rowOff = 0;
+    for (int bi = 0; bi < b; bi++) {
+      final batchBase = bi * rowsPerBatch * cin;
+      for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+          var colOff = rowOff;
+          for (int ky = 0; ky < k; ky++) {
+            final yin = y + ky - pad;
+            final yok = yin >= 0 && yin < h;
+            for (int kx = 0; kx < k; kx++) {
+              final xin = x + kx - pad;
+              if (yok && xin >= 0 && xin < w) {
+                final src = batchBase + (yin * w + xin) * cin;
+                out.setRange(colOff, colOff + cin, data, src);
+              }
+              colOff += cin;
+            }
+          }
+          rowOff += colsWidth;
+        }
+      }
+    }
+    return Tensor.fromFloat32List([rows, colsWidth], out, device: Device.CPU);
   }
 
   Tensor _initialNHWC(Tensor input) {
