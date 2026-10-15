@@ -71,6 +71,52 @@ class ESM2HFLoader {
     seed: seed,
   );
 
+  /// `facebook/esm2_t30_150M_UR50D` config — 30 layers, 640 hidden, 20 heads.
+  static ESM2Config esm2_150mConfig({
+    Device device = Device.CPU,
+    int seed = 0,
+  }) => ESM2Config(
+    vocabSize: 33,
+    maxCtx: 1026,
+    embedDim: 640,
+    numLayers: 30,
+    numHeads: 20,
+    ffnDim: 2560,
+    device: device,
+    seed: seed,
+  );
+
+  /// `facebook/esm2_t33_650M_UR50D` config — 33 layers, 1280 hidden, 20 heads.
+  static ESM2Config esm2_650mConfig({
+    Device device = Device.CPU,
+    int seed = 0,
+  }) => ESM2Config(
+    vocabSize: 33,
+    maxCtx: 1026,
+    embedDim: 1280,
+    numLayers: 33,
+    numHeads: 20,
+    ffnDim: 5120,
+    device: device,
+    seed: seed,
+  );
+
+  /// `facebook/esm2_t36_3B_UR50D` config — 36 layers, 2560 hidden, 40 heads.
+  /// This is the language model ESMFold (`esmfold_v1`) is built on.
+  static ESM2Config esm2_3bConfig({
+    Device device = Device.CPU,
+    int seed = 0,
+  }) => ESM2Config(
+    vocabSize: 33,
+    maxCtx: 1026,
+    embedDim: 2560,
+    numLayers: 36,
+    numHeads: 40,
+    ffnDim: 10240,
+    device: device,
+    seed: seed,
+  );
+
   static ESM2LoadReport loadFile(ESM2Model model, String path) {
     final state = SafeTensors.loadFile(path);
     return loadMap(model, state);

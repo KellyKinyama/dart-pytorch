@@ -1,3 +1,18 @@
+## Unreleased
+
+- Native **ESMFold** protein-structure-prediction modules under
+  `lib/core/nn/fold/` (see `doc/esmfold.md`): rigid-frame geometry,
+  Invariant Point Attention structure module, triangular
+  self-attention trunk, and a HuggingFace `facebook/esmfold_v1`
+  weight-key loader. Backbone (N/Cα/C) only for now; validated by
+  invariance / equivariance / round-trip tests in `test/fold/`.
+- `ESM2Model.representations()` exposes the per-layer hidden-state
+  stack; added `esm2_150mConfig` / `esm2_650mConfig` / `esm2_3bConfig`
+  (ESMFold's 3B stem).
+- Simplified the `Tensor` device model to a single CPU-or-GPU device,
+  removing the multi-GPU `gpuIndex` / `onGpu` / `toGpu` / `gpuCount`
+  surface from the core tensor ops, `concat`, `matmul`, and `RopeCache`.
+
 ## 0.1.3
 
 - CPU pipeline no longer requires the native CUDA library: GPU op

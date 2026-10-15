@@ -86,6 +86,9 @@ lib/
     kv_cache.dart                # MHACache + EncoderCache for GPT.generate fast path
     gpt.dart                     # GPT-2 style: tied weights, learned PE, generate()
     serialize.dart               # Checkpoint.save/loadInto — DPTC binary format
+    esm2.dart                    # ESM-2 protein LM + per-layer representations()
+    fold/                        # native ESMFold: geometry, IPA structure module,
+                                 #   triangular trunk, HF weight loader (doc/esmfold.md)
   core/optim/
     optimizer.dart               # abstract Optimizer base (step, zeroGrad, mutable lr)
     sgd.dart                     # SGD with optional momentum + weight decay
@@ -110,6 +113,7 @@ native/lib/libmat_mul.so         # actual load path used by cuda_engine.dart
 doc/device-placement.md         # per-op CPU vs GPU decisions + implementation status
 doc/multi_gpu.md                # one model across several GPUs (pipeline + tensor parallel)
 doc/multi_gpu_roadmap.md        # phased plan: TP attention, distributed backward, 3D parallelism
+doc/esmfold.md                  # native ESMFold protein structure prediction (fold/)
 test/dart_pytorch_test.dart      # matmul + CPU-op correctness tests
 ```
 

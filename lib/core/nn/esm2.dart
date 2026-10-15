@@ -245,6 +245,40 @@ class ESM2Model extends Module {
     return Tensor.fromList([d], out, device: h.device);
   }
 
+  /// Per-layer hidden-state stack, matching Facebook ESM-2's
+  /// `representations` convention: index 0 is the token embedding (no
+  /// LayerNorm), index `k` is the output of transformer layer `k-1`. The
+  /// list has length `numLayers + 1` and **none** of the entries have the
+  /// final `emb_layer_norm_after` applied — this is exactly what ESMFold
+  /// stacks and combines with its learned per-layer softmax weights.
+  ///
+  /// Consistency: `finalLn(representations(tokens).last)` equals
+  /// [call]`(tokens)`.
+  List<Tensor> representations(Tensor tokens) {
+    if (tokens.shape.length != 1) {
+      throw ArgumentError(
+        'ESM2Model: tokens must be 1D [seqLen]; got ${tokens.shape}',
+      );
+    }
+    final n = tokens.shape.last;
+    if (n == 0) {
+      throw ArgumentError('ESM2Model: empty sequence');
+    }
+    if (n > config.maxCtx) {
+      throw ArgumentError(
+        'ESM2Model: seqLen $n exceeds maxCtx ${config.maxCtx}',
+      );
+    }
+    final reps = <Tensor>[];
+    var h = embedIn(tokens);
+    reps.add(h); // index 0 = embedding
+    for (final layer in layers) {
+      h = layer(h);
+      reps.add(h); // index k = after layer k-1
+    }
+    return reps;
+  }
+
   @override
   List<Tensor> parameters() => [
     ...embedIn.parameters(),
