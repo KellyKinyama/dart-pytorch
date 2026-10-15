@@ -114,6 +114,7 @@ doc/device-placement.md         # per-op CPU vs GPU decisions + implementation s
 doc/multi_gpu.md                # one model across several GPUs (pipeline + tensor parallel)
 doc/multi_gpu_roadmap.md        # phased plan: TP attention, distributed backward, 3D parallelism
 doc/esmfold.md                  # native ESMFold protein structure prediction (fold/)
+doc/char_state_lm.md            # context-free, state-based char LM (linear-attention RNN decoder)
 test/dart_pytorch_test.dart      # matmul + CPU-op correctness tests
 ```
 
@@ -233,6 +234,7 @@ Short version:
 | `nn.LearnedPositionalEmbedding(maxLen, D)` | yes  | yes  | Trainable position table gathered via `Embedding`; scatter-add backward comes free |
 | `clipGradNorm(params, maxNorm)`         | yes  | yes  | Global L2 grad clip, in-place via `Tensor.assign` |
 | Multi-GPU (pipeline + tensor parallel)  | —    | yes  | One model across several GPUs in one process; `Tensor.onGpu`/`toGpu` (differentiable), peer collectives, `ColumnParallelLinear`/`RowParallelLinear`/`TensorParallelMLP` (trainable), `TensorParallelMultiHeadAttention`, `TensorParallelTransformerBlock`/`Stack` (TP + pipeline). See `doc/multi_gpu.md` |
+| `CharStateLM` (context-free char LM)    | yes  | —    | Decoder-only transformer with recurrent **linear attention** (multi-head + RWKV-style decay) — no context window, no positional embedding, O(1)/char generation. See `doc/char_state_lm.md` |
 
 **Placement rule:** ops respect the input tensor's device. Mixed-device
 inputs to a binary op raise `ArgumentError` — call `.to(...)`
