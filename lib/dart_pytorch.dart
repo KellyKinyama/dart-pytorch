@@ -118,6 +118,7 @@ export 'core/nn/esm2_hf_loader.dart';
 export 'core/nn/fold/geometry.dart';
 export 'core/nn/fold/structure_module.dart';
 export 'core/nn/fold/trunk.dart';
+export 'core/nn/fold/esmfold.dart';
 export 'core/nn/fold/esmfold_loader.dart';
 export 'core/nn/prelu.dart';
 export 'core/utils/hungarian_algorithm.dart';

@@ -3,9 +3,13 @@
 - Native **ESMFold** protein-structure-prediction modules under
   `lib/core/nn/fold/` (see `doc/esmfold.md`): rigid-frame geometry,
   Invariant Point Attention structure module, triangular
-  self-attention trunk, and a HuggingFace `facebook/esmfold_v1`
-  weight-key loader. Backbone (N/Cα/C) only for now; validated by
-  invariance / equivariance / round-trip tests in `test/fold/`.
+  self-attention trunk, the end-to-end `EsmFold` assembly (ESM-2 combine
+  → trunk with recycling → structure module → backbone PDB), and a
+  HuggingFace `facebook/esmfold_v1` weight loader. The HF key schema is
+  validated against the real checkpoint (all 48 trunk blocks + structure
+  module load and run). Backbone (N/Cα/C) only for now; validated by
+  invariance / equivariance / round-trip / end-to-end tests in
+  `test/fold/`.
 - `ESM2Model.representations()` exposes the per-layer hidden-state
   stack; added `esm2_150mConfig` / `esm2_650mConfig` / `esm2_3bConfig`
   (ESMFold's 3B stem).

@@ -14,6 +14,8 @@ library;
 import 'dart:typed_data';
 
 import '../../tensor/tensor.dart';
+import '../esm2_hf_loader.dart';
+import 'esmfold.dart';
 import 'structure_module.dart';
 import 'trunk.dart';
 
@@ -228,4 +230,60 @@ Map<String, Tensor> dumpStructureModule(StructureModule sm, String p) {
   _dumpLn(tr.lnGamma, tr.lnBeta, m, '${p}transition.layer_norm');
   _dumpDense(sm.bbUpdate.linear, m, '${p}bb_update.linear');
   return m;
+}
+
+// --------------------------------------------------------------------------
+// Full model
+// --------------------------------------------------------------------------
+
+/// Summary of a full-model load: how many tensors were consumed and which
+/// checkpoint keys went unused (e.g. sidechain `angle_resnet.*`, output heads).
+class EsmFoldLoadReport {
+  final int consumed;
+  final List<String> unused;
+  const EsmFoldLoadReport(this.consumed, this.unused);
+  @override
+  String toString() =>
+      'EsmFoldLoadReport(consumed=$consumed, unused=${unused.length})';
+}
+
+/// Load a converted `facebook/esmfold_v1` state dict into [model]. The ESM-2
+/// stem is loaded via [ESM2HFLoader] (keys `esm.*`); the trunk, structure
+/// module, and glue layers use the HF key schema. Unused keys (sidechain angle
+/// resnet, distogram/ptm/lm/lddt heads) are reported, not required.
+EsmFoldLoadReport loadEsmFold(EsmFold model, Map<String, Tensor> state) {
+  final consumed = <String>{};
+
+  // ESM-2 stem.
+  ESM2HFLoader.loadMap(model.esm, state);
+  for (final k in state.keys) {
+    if (k.startsWith('esm.')) consumed.add(k);
+  }
+
+  // Top-level glue.
+  _copyInto(model.esmSCombine, state, 'esm_s_combine', consumed);
+  _loadLn(model.mlpLnG, model.mlpLnB, state, 'esm_s_mlp.0', consumed);
+  _loadDense(model.mlp1, state, 'esm_s_mlp.1', consumed);
+  _loadDense(model.mlp2, state, 'esm_s_mlp.3', consumed);
+  _copyInto(model.aaEmbedding, state, 'embedding.weight', consumed);
+
+  // Trunk glue.
+  _copyInto(model.relPos, state,
+      'trunk.pairwise_positional_embedding.embedding.weight', consumed);
+  _loadLn(model.recycleSg, model.recycleSb, state, 'trunk.recycle_s_norm',
+      consumed);
+  _loadLn(model.recycleZg, model.recycleZb, state, 'trunk.recycle_z_norm',
+      consumed);
+  _copyInto(model.recycleDisto, state, 'trunk.recycle_disto.weight', consumed);
+  _loadDense(model.trunk2smS, state, 'trunk.trunk2sm_s', consumed);
+  _loadDense(model.trunk2smZ, state, 'trunk.trunk2sm_z', consumed);
+
+  for (var i = 0; i < model.blocks.length; i++) {
+    loadTrunkBlock(model.blocks[i], state, 'trunk.blocks.$i.', consumed);
+  }
+  loadStructureModule(model.structure, state, 'trunk.structure_module.',
+      consumed);
+
+  final unused = [for (final k in state.keys) if (!consumed.contains(k)) k];
+  return EsmFoldLoadReport(consumed.length, unused);
 }
