@@ -23,9 +23,19 @@ const String kChessUciPath = 'data/chess_uci.txt';
 const String _startFen =
     'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
 
+/// Sanitised cache key for a given set of users + per-user game count, so a
+/// different request (more games, more users) rebuilds instead of returning
+/// a stale corpus.
+String _cacheKey(List<String> users, int maxGames) {
+  final who = users.map((u) => u.toLowerCase()).join('-');
+  final safe = who.replaceAll(RegExp(r'[^a-z0-9\-]'), '');
+  return '${safe}_g$maxGames';
+}
+
 /// Load (and cache) the UCI corpus. On first use it downloads [maxGames]
-/// of [user]'s games from Lichess and converts them to UCI; if the
-/// download fails it synthesises [synthGames] random legal games instead.
+/// games **per user** in [user] (a single name or a comma-separated list)
+/// from Lichess and converts them to UCI; if the download fails it
+/// synthesises [synthGames] random legal games instead.
 Future<String> loadChessUci({
   String user = 'DrNykterstein',
   int maxGames = 400,
@@ -34,13 +44,22 @@ Future<String> loadChessUci({
   int seed = 0,
   bool regenerate = false,
 }) async {
-  final out = File(kChessUciPath);
+  final users = user
+      .split(',')
+      .map((s) => s.trim())
+      .where((s) => s.isNotEmpty)
+      .toList();
+  final key = _cacheKey(users, maxGames);
+  final out = File('data/chess_uci_$key.txt');
   if (out.existsSync() && !regenerate) return out.readAsStringSync();
 
   String uci;
   try {
-    final pgn = await _ensureLichessPgn(user, maxGames, regenerate);
-    uci = _pgnToUci(pgn);
+    final pgnBuf = StringBuffer();
+    for (final u in users) {
+      pgnBuf.writeln(await _ensureLichessPgn(u, maxGames, regenerate));
+    }
+    uci = _pgnToUci(pgnBuf.toString());
     if (uci.trim().isEmpty) throw StateError('no games parsed');
   } catch (e) {
     stdout.writeln('lichess download/parse failed ($e); '
@@ -50,13 +69,15 @@ Future<String> loadChessUci({
 
   out.parent.createSync(recursive: true);
   out.writeAsStringSync(uci);
+  stdout.writeln('corpus: ${uci.length} chars -> ${out.path}');
   return uci;
 }
 
-/// Download `maxGames` of a user's games as PGN (cached on disk).
+/// Download `maxGames` of a single user's games as PGN (cached per user).
 Future<String> _ensureLichessPgn(
     String user, int maxGames, bool regenerate) async {
-  final f = File(kLichessPgnPath);
+  final safeUser = user.toLowerCase().replaceAll(RegExp(r'[^a-z0-9\-]'), '');
+  final f = File('data/lichess_${safeUser}_g$maxGames.pgn');
   if (f.existsSync() && !regenerate) return f.readAsStringSync();
 
   final uri = Uri.parse(
@@ -80,7 +101,7 @@ Future<String> _ensureLichessPgn(
     final pgn = buf.toString();
     f.parent.createSync(recursive: true);
     f.writeAsStringSync(pgn);
-    stdout.writeln('saved PGN (${pgn.length} chars) -> $kLichessPgnPath');
+    stdout.writeln('saved PGN (${pgn.length} chars) -> ${f.path}');
     return pgn;
   } finally {
     client.close(force: true);

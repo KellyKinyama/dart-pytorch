@@ -61,6 +61,10 @@ fix so the CUDA driver stub is found. Drop it on native Linux.
 | C1 | Stockfish NNUE (SFNNv5 / SF16 default net, `nn-5af11540bbfe.nnue`) | ~10M params, 39 MB | CPU | n/a | [bin/nnue_demo.dart](bin/nnue_demo.dart) — FEN → cp (float + int backends), HalfKAv2_hm + 8-bucket layered stack |
 | C2 | NNUE move picker (chess.dart + NNUE) | same net | CPU | n/a | [bin/nnue_play.dart](bin/nnue_play.dart) — `--top N` / `--play N` / `--depth D` (negamax + alpha-beta) |
 | C3 | Stockfish `.nnue` file inspector | any | CPU | n/a | [bin/_nnue_probe.dart](bin/_nnue_probe.dart) — header / arch hash / FT + bucket stats for any HalfKAv2_hm file |
+| C4 | Chess-move LM — **AFT** (attention-free) | ~0.56M | CPU | n/a | [bin/chess_aft_demo.dart](bin/chess_aft_demo.dart) — trains an `AFTLanguageModel` on Lichess UCI games, samples a continuation, checks legality |
+| C5 | Chess-move LM — **GPT** (standard decoder) | ~0.60M | CPU | n/a | [bin/chess_gpt_demo.dart](bin/chess_gpt_demo.dart) — same corpus/flags with a weight-tied `GPT` for a head-to-head comparison |
+| C6 | Chess-move LM — **CharStateLM** (linear-attn state LM) | tiny | CPU | n/a | [bin/chess_moves_lm_demo.dart](bin/chess_moves_lm_demo.dart) — context-free recurrent-linear-attention LM; `--save`/`--load` checkpoints |
+| C7 | **AFT plays chess** (constrained legal decoding) | ~0.56M | CPU | n/a | [bin/chess_aft_play.dart](bin/chess_aft_play.dart) — scores the board's legal UCI moves under the AFT so every move is legal; self-play or `--vs white/black`; EMA best-checkpoint + Ctrl+C-safe training |
 
 All `tokenizer.json` files are already downloaded under
 `models/<name>/`, so every command below runs fully offline — no
@@ -122,6 +126,62 @@ containing your layer has finished downloading):
 dart run bin/qwen15_moe_layer_stream.dart      --layer 0
 dart run bin/deepseek_v2_moe_layer_stream.dart --layer 5
 ```
+
+### Chess-move language models (Lichess UCI)
+
+Three small character LMs trained on **real Lichess games** converted to
+UCI (one game per line, e.g. `e2e4 e7e5 g1f3 ...`), plus a play program.
+The corpus is downloaded + cached on first run — no weights to download.
+
+**Build / grow the corpus.** `--user` takes a single name or a
+comma-separated list; `--games` is per user. Caches are keyed by
+users + game count, so changing either auto-rebuilds (no `--regen`):
+
+```sh
+# one player, 200 games (~84k chars)
+dart run bin/chess_aft_demo.dart --user DrNykterstein --games 200 --steps 1
+
+# three players, 600 games each → ~744k chars (1772 games)
+dart run bin/chess_aft_demo.dart \
+  --user "DrNykterstein,penguingim1,Zhigalko_Sergei" --games 600 --steps 1
+```
+
+**Compare the three models** (same corpus, same flags, same legality
+check — reports the legal-move prefix of a sampled continuation):
+
+```sh
+dart run bin/chess_aft_demo.dart        --games 200 --steps 400 --temp 0.5 --topk 20   # attention-free
+dart run bin/chess_gpt_demo.dart        --games 200 --steps 400 --temp 0.5 --topk 20   # standard GPT
+dart run bin/chess_moves_lm_demo.dart   --games 200 --steps 400 --temp 0.5             # CharStateLM
+```
+
+Shared flags: `--user`, `--games`, `--plies`, `--regen`, `--steps`,
+`--seq`, `--dim`, `--layers`, `--heads` (GPT/CharStateLM), `--prompt`,
+`--gen`, `--temp`, `--topk` (GPT/AFT), `--lr`.
+
+**Play a real game** with the AFT. Constrained decoding scores the
+board's legal moves under the model, so every move is legal and a full
+game is always produced. Weights load from `models/chess_aft.json`; if
+missing it trains one first, then plays. Training saves the **best**
+checkpoint by EMA loss and is **Ctrl+C-safe** (first Ctrl+C stops and
+keeps the best weights; a second force-quits):
+
+```sh
+# train on the big corpus, then self-play (stop anytime with Ctrl+C)
+dart run bin/chess_aft_play.dart \
+  --user "DrNykterstein,penguingim1,Zhigalko_Sergei" --games 600 --train 40000
+
+# play against it — you are White, enter moves in UCI (e2e4, e7e8q); "quit" to stop
+dart run bin/chess_aft_play.dart --vs white
+
+# strongest (greedy) self-play from the saved checkpoint
+dart run bin/chess_aft_play.dart --temp 0.0
+```
+
+Play/train flags: `--load` (default `models/chess_aft.json`),
+`--train N` (force (re)train N steps), `--save-every N` (checkpoint
+cadence, default 500), `--vs white|black`, `--temp` (0 = greedy),
+`--max` (ply limit), plus the corpus flags above.
 
 ### Refresh tokenizers (only if you nuke `models/`)
 
