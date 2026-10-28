@@ -65,6 +65,8 @@ fix so the CUDA driver stub is found. Drop it on native Linux.
 | C5 | Chess-move LM — **GPT** (standard decoder) | ~0.60M | CPU | n/a | [bin/chess_gpt_demo.dart](bin/chess_gpt_demo.dart) — same corpus/flags with a weight-tied `GPT` for a head-to-head comparison |
 | C6 | Chess-move LM — **CharStateLM** (linear-attn state LM) | tiny | CPU | n/a | [bin/chess_moves_lm_demo.dart](bin/chess_moves_lm_demo.dart) — context-free recurrent-linear-attention LM; `--save`/`--load` checkpoints |
 | C7 | **AFT plays chess** (constrained legal decoding) | ~0.56M | CPU | n/a | [bin/chess_aft_play.dart](bin/chess_aft_play.dart) — scores the board's legal UCI moves under the AFT so every move is legal; self-play or `--vs white/black`; EMA best-checkpoint + Ctrl+C-safe training |
+| N1 | **Needle 3** (Cactus) `.cact` inspector | n/a | CPU | n/a | [bin/needle_describe.dart](bin/needle_describe.dart) — header geometry + tensor inventory + 581-tensor contract check for any `needle3.cact` |
+| N2 | **Needle 3** tool-calling model (Dart port) | 121M (CQ2, 35 MB) | CPU | ✅ embedded | [bin/needle_run.dart](bin/needle_run.dart) — loads real CQ2 weights, tokenizes, builds the tool prompt, runs the full forward (SAN attn, Hadamard/Monarch MLP, engram, mHC) and greedily decodes `<think>…</think><tool_call>[…]</tool_call>` |
 
 All `tokenizer.json` files are already downloaded under
 `models/<name>/`, so every command below runs fully offline — no
@@ -182,6 +184,58 @@ Play/train flags: `--load` (default `models/chess_aft.json`),
 `--train N` (force (re)train N steps), `--save-every N` (checkpoint
 cadence, default 500), `--vs white|black`, `--temp` (0 = greedy),
 `--max` (ply limit), plus the corpus flags above.
+
+### Needle 3 (Cactus) — Dart port of the 2-bit tool-calling model
+
+A from-scratch Dart re-implementation of Cactus's **Needle 3** (Laddered
+Simple Attention Network, 121M params, CQ2 2-bit, ~35 MB). It reads the real
+`.cact` container, dequantises the Cactus-Quant weights, runs the full forward
+(GQA attention with causal conv taps + QK-norm + RoPE, the Monarch "Hadamard
+MLP", hashed n-gram engram memory, multi-lane hyper-connections), tokenises
+with a SentencePiece-BPE port, and greedily decodes in Needle's wire format.
+All grounded in the Apache-2.0 reference (`architecture.py` / `quantize.py` /
+`export.py` / `tokenizer.py`); see `lib/core/nn/needle/` and the 43-test suite
+`test/needle_*_test.dart`.
+
+**Get the weights** (Apache-2.0 tooling; weights on Hugging Face):
+
+```sh
+# direct download of the shipped 20-layer archive (~35 MB)
+curl -L -o models/needle3/needle3.cact \
+  https://huggingface.co/Cactus-Compute/needle3/resolve/main/needle3.cact
+# or: pip install cactus-needle && needle build --platform <your-platform>
+```
+
+**Inspect** any archive — validates the header geometry and the positional
+581-tensor contract without dequantising:
+
+```sh
+dart run bin/needle_describe.dart models/needle3/needle3.cact
+# → 581 tensors, d=768, 20 layers, 12x48 q / 2kv / 64v, engram sites 3,7,11,15,19,
+#   cq2 115 (84.7%), cq4 7 (11.4%), fp16 456, raw 1 — contract OK
+```
+
+**Run** the model (CPU, no KV cache — keep `--max` small):
+
+```sh
+dart run bin/needle_run.dart --model models/needle3/needle3.cact \
+  --user "turn on the kitchen lights" \
+  --tools '[{"name":"set_lights","parameters":{"type":"object","properties":{"room":{"type":"string"},"state":{"type":"string"}},"required":["room","state"]}}]' \
+  --date "2026-09-18 Fri 09:41" --max 40
+# → <think>
+#   ...one-line derivation...
+#   </think>
+#   <tool_call>[...]</tool_call><|im_end|>
+```
+
+Flags: `--model` (`.cact` path), `--user`, `--tools` (minified JSON array),
+`--date` (optional system line), `--max` (new-token budget).
+
+Status: loads real weights and emits Needle's exact wire format. It runs the
+float path only — the model was post-trained at W2/A8/KV8, so without the int8
+activation/KV quant-simulation the greedy path can diverge from the engine on
+semantics (numeric validation against the JAX float32 oracle, cosine > 0.999,
+is the remaining step).
 
 ### Refresh tokenizers (only if you nuke `models/`)
 
