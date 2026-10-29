@@ -79,6 +79,78 @@ void main() {
     });
   });
 
+  group('gradcheck — broadcasting (CPU)', () {
+    test('add [2,3] + [3] (row broadcast)', () {
+      expectGradCheck(
+        (t) => t[0] + t[1],
+        [
+          [1.0, -2.0, 3.0, 0.5, -1.0, 2.0], // [2,3]
+          [0.3, 1.5, -0.7], // [3]
+        ],
+        [
+          [2, 3],
+          [3],
+        ],
+      );
+    });
+
+    test('mul [2,3] * [2,1] (column broadcast)', () {
+      expectGradCheck(
+        (t) => t[0] * t[1],
+        [
+          [1.0, -2.0, 3.0, 0.5, -1.0, 2.0], // [2,3]
+          [1.5, -0.5], // [2,1]
+        ],
+        [
+          [2, 3],
+          [2, 1],
+        ],
+      );
+    });
+
+    test('sub [2,3] - [1,3] (leading-dim broadcast)', () {
+      expectGradCheck(
+        (t) => t[0] - t[1],
+        [
+          [1.0, -2.0, 3.0, 0.5, -1.0, 2.0], // [2,3]
+          [0.3, 1.5, -0.7], // [1,3]
+        ],
+        [
+          [2, 3],
+          [1, 3],
+        ],
+      );
+    });
+
+    test('div [2,3] / [2,1] (both grads, column broadcast)', () {
+      expectGradCheck(
+        (t) => t[0] / t[1],
+        [
+          [1.0, -2.0, 3.0, 0.5, -1.0, 2.0], // [2,3]
+          [1.5, 2.0], // [2,1]
+        ],
+        [
+          [2, 3],
+          [2, 1],
+        ],
+      );
+    });
+
+    test('mul [2,1,3] * [4,3] (3D x 2D broadcast)', () {
+      expectGradCheck(
+        (t) => t[0] * t[1],
+        [
+          [1.0, -2.0, 3.0, 0.5, -1.0, 2.0], // [2,1,3]
+          [0.3, 1.5, -0.7, 2.0, 1.0, -0.5, 0.8, -1.2, 0.4, 1.1, -0.6, 0.9], // [4,3]
+        ],
+        [
+          [2, 1, 3],
+          [4, 3],
+        ],
+      );
+    });
+  });
+
   group('gradcheck — unary activations / math (CPU)', () {
     test('relu', () {
       // Seeds kept away from 0 so the kink doesn't break central diff.

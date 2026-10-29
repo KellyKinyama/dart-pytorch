@@ -182,6 +182,7 @@ extension TensorOps on Tensor {
         }
         return Tensor._cpu(shape, out);
       }
+      _useDevice();
       final scalarT = Tensor.fill([1, 1], s, device: Device.GPU);
       final h = gpuScalar()(_handle!, scalarT._handle!);
       scalarT.dispose();
@@ -195,6 +196,12 @@ extension TensorOps on Tensor {
       throw ArgumentError(
         '$opName: mixed devices ($device vs ${other.device}). '
         'Call .to(...) on one operand first.',
+      );
+    }
+    if (device == Device.GPU && gpuIndex != other.gpuIndex) {
+      throw ArgumentError(
+        '$opName: operands on different GPUs ($gpuIndex vs ${other.gpuIndex}). '
+        'Move one with .toGpu(...) first.',
       );
     }
 
@@ -217,13 +224,15 @@ extension TensorOps on Tensor {
   ) {
     final a = _readAsFp32();
     final b = other._readAsFp32();
-    if (a.length == b.length) {
+    // Fast path: identical shapes — plain elementwise.
+    if (Tensor._shapeEq(shape, other.shape)) {
       final out = Float32List(a.length);
       for (int i = 0; i < a.length; i++) {
         out[i] = f(a[i], b[i]);
       }
       return Tensor._cpu(shape, out);
     }
+    // Fast path: scalar operand on either side.
     if (b.length == 1) {
       final s = b[0];
       final out = Float32List(a.length);
@@ -240,23 +249,29 @@ extension TensorOps on Tensor {
       }
       return Tensor._cpu(other.shape, out);
     }
-    if (shape.length == 2 &&
-        other.shape.length == 2 &&
-        other.shape[0] == 1 &&
-        other.shape[1] == shape[1]) {
-      final m = shape[0];
-      final n = shape[1];
-      final out = Float32List(a.length);
-      for (int i = 0; i < m; i++) {
-        for (int j = 0; j < n; j++) {
-          out[i * n + j] = f(a[i * n + j], b[j]);
-        }
+    // General case: full NumPy/PyTorch broadcasting.
+    final outShape = Tensor._broadcastShapes(shape, other.shape, opName);
+    final rank = outShape.length;
+    final as = Tensor._padShape(shape, rank);
+    final bs = Tensor._padShape(other.shape, rank);
+    final aStrides = Tensor._rowMajorStrides(as);
+    final bStrides = Tensor._rowMajorStrides(bs);
+    final outStrides = Tensor._rowMajorStrides(outShape);
+    final outLen = outShape.reduce((x, y) => x * y);
+    final out = Float32List(outLen);
+    for (int lin = 0; lin < outLen; lin++) {
+      int rem = lin;
+      int ai = 0;
+      int bi = 0;
+      for (int d = 0; d < rank; d++) {
+        final idx = rem ~/ outStrides[d];
+        rem = rem % outStrides[d];
+        if (as[d] != 1) ai += idx * aStrides[d];
+        if (bs[d] != 1) bi += idx * bStrides[d];
       }
-      return Tensor._cpu(shape, out);
+      out[lin] = f(a[ai], b[bi]);
     }
-    throw ArgumentError(
-      '$opName: incompatible shapes $shape vs ${other.shape}',
-    );
+    return Tensor._cpu(outShape, out);
   }
 
   Tensor _binaryGpu(
@@ -266,6 +281,7 @@ extension TensorOps on Tensor {
     _GpuOp2? gpuRowBroadcast,
     String opName,
   ) {
+    _useDevice();
     if (length == other.length) {
       return Tensor._gpu(shape, gpuExact(_handle!, other._handle!));
     }
@@ -426,6 +442,7 @@ extension TensorOps on Tensor {
       }
       return Tensor._cpu(shape, out);
     }
+    _useDevice();
     return Tensor._gpu(shape, gpu()(_handle!));
   }
 

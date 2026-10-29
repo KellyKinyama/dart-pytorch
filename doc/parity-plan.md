@@ -32,7 +32,7 @@ Grounded in the current `lib/core/tensor` implementation:
 | CPU/GPU parity | ✅ backward composed from forward ops; FFI CUDA kernels |
 | Op surface | ⚠️ ~25 ops (`+ - * /`, matmul, `relu/sigmoid/tanh/abs/log/pow`, `transpose/reshape`, `sum/mean`, softmax, LayerNorm, RMSNorm, crossEntropy, embedding, attention, concat, dropout, scatter, AFT) |
 | Higher-order grad | ❌ no `create_graph` / `grad()`; backwards not themselves differentiable |
-| Broadcasting | ⚠️ scalar + row-broadcast only |
+| Broadcasting | 🟡 full NumPy broadcasting on CPU (fwd + backward reduce); GPU still scalar/row only |
 | In-place autograd | ❌ not tracked |
 | Custom autograd API | ❌ edit the op file by hand |
 | `relu`/`abs` backward | ⚠️ CPU-only |
@@ -57,12 +57,16 @@ tests — a strong regression net to build on.
 - **Exit:** all current ops pass gradcheck within tolerance on CPU **and** GPU;
   becomes the gate for every new op in Track B.
 
-### A2. Full broadcasting in autograd
-- Generalize `_reduceForBroadcast` to NumPy/PyTorch broadcasting rules
-  (right-aligned dims, size-1 expansion on any axis).
-- Extend `_binaryFwd` CPU/GPU paths to emit broadcasted output shapes.
+### A2. Full broadcasting in autograd  🟡 CPU done
+- ✅ Generalized `_reduceForBroadcast` to full NumPy/PyTorch rules (sum out
+  every expanded axis, incl. missing leading dims).
+- ✅ `_binaryCpu` now broadcasts arbitrary rank operands via strides;
+  shared helpers `_broadcastShapes` / `_padShape` / `_rowMajorStrides`.
+- ✅ gradcheck covers row, column, leading-dim, and 3D×2D broadcasts.
+- ⬜ GPU broadcast kernels (currently scalar + row-broadcast on `+` only);
+  until then non-trivial GPU broadcasts throw a clear error.
 - **Exit:** `a + b` etc. match `torch` broadcasting on a shape matrix;
-  gradcheck passes for broadcasted operands.
+  gradcheck passes for broadcasted operands (CPU ✅, GPU pending).
 
 ### A3. Higher-order gradients
 - Make backward closures build graph nodes when a `create_graph` flag is set
