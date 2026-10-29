@@ -79,6 +79,14 @@ class Tensor implements ffi.Finalizable {
   void Function()? _backward;
   List<Tensor> _children = const [];
 
+  // In-place tracking: bumped by every in-place mutation (add_, mul_,
+  // zero_, assign, ...). Ops whose backward reads an input's *values*
+  // snapshot the input versions at wire time; the backward walk verifies
+  // them before running the closure. See [_setBackward] / [_checkSaved].
+  int _version = 0;
+  List<Tensor>? _savedForBackward;
+  List<int>? _savedVersions;
+
   /// Debug-only accessor: shapes of this tensor's autograd children.
   List<List<int>> get debugChildShapes =>
       _children.map((c) => c.shape).toList();
@@ -597,6 +605,46 @@ class Tensor implements ffi.Finalizable {
         externalSize: length * 4,
       );
     }
+    _version++;
+  }
+
+  /// **In-place** zero this tensor's storage. Bumps the in-place version
+  /// so autograd can detect misuse. Returns `this`.
+  Tensor zero_() {
+    if (device == Device.CPU) {
+      if (dtype == DType.fp16) {
+        throw StateError('zero_: fp16 tensors are read-only.');
+      }
+      final d = _cpuData!;
+      for (int i = 0; i < d.length; i++) {
+        d[i] = 0.0;
+      }
+      _version++;
+    } else {
+      final z = Tensor.fill(shape, 0.0, device: Device.GPU);
+      assign(z); // bumps version
+    }
+    return this;
+  }
+
+  /// **In-place** add `other` (tensor or scalar) into this tensor.
+  /// The addition is computed detached from autograd; the mutation
+  /// bumps the in-place version. Returns `this`.
+  Tensor add_(dynamic other) {
+    final result = Tensor.noGrad(() => this + other);
+    assign(result); // bumps version
+    if (device == Device.CPU) result.dispose();
+    return this;
+  }
+
+  /// **In-place** multiply this tensor by `other` (tensor or scalar).
+  /// Computed detached from autograd; bumps the in-place version.
+  /// Returns `this`.
+  Tensor mul_(dynamic other) {
+    final result = Tensor.noGrad(() => this * other);
+    assign(result); // bumps version
+    if (device == Device.CPU) result.dispose();
+    return this;
   }
 
   /// **In-place** replace this tensor's CPU storage with `source`'s
@@ -759,6 +807,7 @@ class Tensor implements ffi.Finalizable {
     visit(this);
     for (int i = ordered.length - 1; i >= 0; i--) {
       final t = ordered[i];
+      t._checkSaved();
       t._backward?.call();
       final hook = debugBackwardHook;
       if (hook != null) hook(ordered.length - 1 - i, t);
@@ -773,6 +822,8 @@ class Tensor implements ffi.Finalizable {
         if (t._handle != null) t.dispose();
         t._children = const [];
         t._backward = null;
+        t._savedForBackward = null;
+        t._savedVersions = null;
       }
     }
 
@@ -849,6 +900,7 @@ class Tensor implements ffi.Finalizable {
 
     void run() {
       for (int i = ordered.length - 1; i >= 0; i--) {
+        ordered[i]._checkSaved();
         ordered[i]._backward?.call();
       }
     }
@@ -879,11 +931,44 @@ class Tensor implements ffi.Finalizable {
   /// Wire `fn` as this tensor's backward closure, remember its parents,
   /// and mark this node as requiring grad. Called by every op that
   /// participates in autograd. Skipped entirely inside a [noGrad] scope.
-  void _setBackward(List<Tensor> children, void Function() fn) {
+  ///
+  /// Pass `saved` with the input tensors whose *values* the backward
+  /// closure reads; their versions are snapshotted here and verified
+  /// before the closure runs, so an intervening in-place mutation is
+  /// caught instead of silently corrupting the gradient.
+  void _setBackward(
+    List<Tensor> children,
+    void Function() fn, {
+    List<Tensor>? saved,
+  }) {
     if (_noGradDepth > 0) return;
     _children = children;
     _backward = fn;
     requiresGrad = true;
+    if (saved != null) {
+      _savedForBackward = saved;
+      _savedVersions = [for (final t in saved) t._version];
+    }
+  }
+
+  /// Throw if any tensor saved for this node's backward was mutated
+  /// in-place since it was saved.
+  void _checkSaved() {
+    final saved = _savedForBackward;
+    final vers = _savedVersions;
+    if (saved == null || vers == null) return;
+    for (int i = 0; i < saved.length; i++) {
+      if (saved[i]._version != vers[i]) {
+        throw StateError(
+          'In-place operation detected: a tensor needed for gradient '
+          'computation was modified (shape ${saved[i].shape}, version '
+          '${saved[i]._version}, expected ${vers[i]}). An in-place op '
+          '(add_/mul_/zero_/assign) mutated a value that an earlier op '
+          'saved for its backward pass. Clone the tensor before mutating, '
+          'or move the mutation out of the autograd region.',
+        );
+      }
+    }
   }
 
   static int _noGradDepth = 0;

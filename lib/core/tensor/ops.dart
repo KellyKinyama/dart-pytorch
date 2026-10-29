@@ -120,7 +120,7 @@ extension TensorOps on Tensor {
         if (b.requiresGrad) {
           b._accumulateGrad(Tensor._reduceForBroadcast(g * a, b.shape));
         }
-      });
+      }, saved: [a, b]);
     }
     return out;
   }
@@ -155,7 +155,7 @@ extension TensorOps on Tensor {
           final contrib = (g * a * -1.0) / bSq;
           b._accumulateGrad(Tensor._reduceForBroadcast(contrib, b.shape));
         }
-      });
+      }, saved: [a, b]);
     }
     return out;
   }
@@ -427,7 +427,7 @@ extension TensorOps on Tensor {
     final x = this;
     out._setBackward([x], () {
       x._accumulateGrad(out._grad! * x.pow(exp - 1) * exp);
-    });
+    }, saved: [x]);
   }
 
   Tensor _unaryFwd({

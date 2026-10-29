@@ -47,11 +47,18 @@ extension TensorMatMul on Tensor {
         'Call .to(Device.CPU) or .to(Device.GPU) on one operand first.',
       );
     }
+    if (device == Device.GPU && gpuIndex != o.gpuIndex) {
+      throw ArgumentError(
+        'matmul: operands on different GPUs ($gpuIndex @ ${o.gpuIndex}). '
+        'Move one with .toGpu(...) first.',
+      );
+    }
 
     final Tensor out;
     if (device == Device.CPU) {
       out = _matmulCpu(o, m, k, n);
     } else {
+      _useDevice();
       out = Tensor._gpu([m, n], engine.matmulTensors(_handle!, o._handle!));
     }
 
@@ -73,7 +80,7 @@ extension TensorMatMul on Tensor {
           aT.dispose();
           b._accumulateGrad(contrib);
         }
-      });
+      }, saved: [a, b]);
     }
     return out;
   }

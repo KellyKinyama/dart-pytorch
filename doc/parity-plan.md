@@ -33,7 +33,7 @@ Grounded in the current `lib/core/tensor` implementation:
 | Op surface | ⚠️ ~25 ops (`+ - * /`, matmul, `relu/sigmoid/tanh/abs/log/pow`, `transpose/reshape`, `sum/mean`, softmax, LayerNorm, RMSNorm, crossEntropy, embedding, attention, concat, dropout, scatter, AFT) |
 | Higher-order grad | 🟡 `Tensor.grads(outputs, inputs, createGraph:)` lands 2nd+ order on CPU |
 | Broadcasting | 🟡 full NumPy broadcasting on CPU (fwd + backward reduce); GPU still scalar/row only |
-| In-place autograd | ❌ not tracked |
+| In-place autograd | 🟡 version counter + guard; `add_`/`mul_`/`zero_` landed |
 | Custom autograd API | 🟡 `AutogradFunction` / `AutogradContext` (single-output) landed |
 | `relu`/`abs` backward | ⚠️ CPU-only |
 | conv / hopfield | ⚠️ bypass the tape |
@@ -91,12 +91,19 @@ tests — a strong regression net to build on.
 - **Exit:** user-defined op participates in `backward()`/`grads()` and passes
   gradcheck — ✅ (single output).
 
-### A5. In-place op tracking
-- Version counter per tensor; backward asserts no saved tensor was mutated
-  after use (PyTorch's "modified by an inplace operation" guard).
-- Add a minimal set of safe in-place ops (`add_`, `mul_`, `zero_`).
+### A5. In-place op tracking  🟡 CPU done
+- ✅ Per-tensor `_version` counter, bumped by `assign` and the new in-place
+  ops `add_` / `mul_` / `zero_`.
+- ✅ Value-dependent ops (`*`, `/`, `pow`, `matmul`) snapshot saved input
+  versions via `_setBackward(..., saved:)`; the backward/`grads` walks call
+  `_checkSaved()` and throw a clear “In-place operation detected” error.
+- ✅ `test/inplace_autograd_test.dart`: correct values, guard fires for
+  unsafe mutation (incl. via `grads`), and no false-positive for ops whose
+  backward ignores values (`+`).
+- ⬜ Retrofit remaining value-reading ops (softmax, layerNorm, rmsNorm,
+  crossEntropy, embedding, attention, aft) with `saved:`.
 - **Exit:** in-place misuse raises a clear error; valid in-place passes
-  gradcheck.
+  gradcheck — ✅ (CPU).
 
 ### A6. Engine robustness
 - Replace recursive `visit()` with an explicit worklist to avoid stack
