@@ -47,17 +47,8 @@ double _argDouble(List<String> a, String name, double fallback) {
   return fallback;
 }
 
-/// Parse a UCI move string ("e2e4", "e7e8q") into a `chess` move map.
-Map<String, String>? _uciToMove(String u) {
-  if (u.length < 4) return null;
-  final m = {'from': u.substring(0, 2), 'to': u.substring(2, 4)};
-  if (u.length > 4) m['promotion'] = u.substring(4, 5);
-  return m;
-}
-
-/// UCI string for a `chess` [ch.Move].
-String _moveToUci(ch.Move m) =>
-    m.fromAlgebraic + m.toAlgebraic + (m.promotion?.name ?? '');
+/// Parse/format UCI moves and enumerate legal moves come from chess_util
+/// (`uciToMove`, `moveToUci`, `legalUciMoves`).
 
 void _save(String path, AFTLanguageModel m, CharTokenizer tok, int maxLen) {
   final obj = {
@@ -242,7 +233,7 @@ String? _chooseMove(
 ) {
   final legal = board.generate_moves();
   if (legal.isEmpty) return null;
-  final cands = [for (final m in legal) _moveToUci(m)];
+  final cands = [for (final m in legal) moveToUci(m)];
   final scores = [
     for (final s in cands) _scoreMove(model, tok, ctxIds, s, maxLen),
   ];
@@ -355,10 +346,10 @@ Future<void> main(List<String> args) async {
       final line = stdin.readLineSync()?.trim() ?? '';
       if (line.isEmpty) continue;
       if (line == 'quit' || line == 'q') break;
-      final mv = _uciToMove(line);
+      final mv = uciToMove(line);
       if (mv == null || !board.move(mv)) {
         print('  illegal move "$line" — legal examples: '
-            '${board.generate_moves().take(6).map(_moveToUci).join(" ")} ...');
+            '${board.generate_moves().take(6).map(moveToUci).join(" ")} ...');
         continue;
       }
       uci = line;
@@ -366,7 +357,7 @@ Future<void> main(List<String> args) async {
       final chosen =
           _chooseMove(model, tok, tok.encode(ctxStr), board, maxLen, temp, rng);
       if (chosen == null) break;
-      board.move(_uciToMove(chosen));
+      board.move(uciToMove(chosen));
       uci = chosen;
       print('  AFT (${whiteToMove ? "White" : "Black"}): $uci');
     }

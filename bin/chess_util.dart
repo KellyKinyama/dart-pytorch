@@ -159,3 +159,79 @@ String _synthUci(int games, int maxPlies, int seed) {
   return sb.toString();
 }
 
+// ---------------------------------------------------------------------------
+// Legality tester — shared by every chess demo so the replay-and-count logic
+// lives in one place.
+// ---------------------------------------------------------------------------
+
+/// Parse a UCI move string ("e2e4", "e7e8q") into a `chess` move map, or
+/// `null` if it is too short to be a move.
+Map<String, String>? uciToMove(String u) {
+  if (u.length < 4) return null;
+  final m = {'from': u.substring(0, 2), 'to': u.substring(2, 4)};
+  if (u.length > 4) m['promotion'] = u.substring(4, 5);
+  return m;
+}
+
+/// UCI string for a `chess` [ch.Move] ("e2e4", "e7e8q").
+String moveToUci(ch.Move m) =>
+    m.fromAlgebraic + m.toAlgebraic + (m.promotion?.name ?? '');
+
+/// The legal moves in the current position as UCI strings.
+List<String> legalUciMoves(ch.Chess board) =>
+    [for (final m in board.generate_moves()) moveToUci(m)];
+
+/// Result of replaying a UCI move sequence from the starting position.
+class LegalityReport {
+  /// Number of leading moves that were legal before the first illegal one.
+  final int legal;
+
+  /// Total whitespace-separated tokens examined.
+  final int total;
+
+  /// The first token that could not be legally played, or `null` if all were.
+  final String? firstIllegal;
+
+  /// ASCII board after the legal prefix was applied.
+  final String boardAscii;
+
+  const LegalityReport({
+    required this.legal,
+    required this.total,
+    required this.firstIllegal,
+    required this.boardAscii,
+  });
+
+  bool get allLegal => firstIllegal == null && total > 0;
+
+  @override
+  String toString() => 'legal move prefix: $legal / $total'
+      '${firstIllegal != null ? '  (stopped at "$firstIllegal")' : ''}';
+}
+
+/// Replay space-separated UCI [movesText] from the initial position and report
+/// how many leading moves are legal. This is the legality tester the demos
+/// use to score a generated continuation.
+LegalityReport checkUciLegality(String movesText) {
+  final board = ch.Chess.fromFEN(_startFen);
+  board.reset();
+  final tokens =
+      movesText.split(RegExp(r'\s+')).where((t) => t.isNotEmpty).toList();
+  var legal = 0;
+  String? firstIllegal;
+  for (final uci in tokens) {
+    final mv = uciToMove(uci);
+    if (board.game_over || mv == null || !board.move(mv)) {
+      firstIllegal = uci;
+      break;
+    }
+    legal++;
+  }
+  return LegalityReport(
+    legal: legal,
+    total: tokens.length,
+    firstIllegal: firstIllegal,
+    boardAscii: board.ascii,
+  );
+}
+

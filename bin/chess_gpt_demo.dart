@@ -17,14 +17,10 @@ library;
 import 'dart:convert';
 import 'dart:math' as math;
 
-import 'package:chess/chess.dart' as ch;
 import 'package:dart_pytorch/dart_pytorch.dart';
 
 import 'chess_util.dart';
 import 'shakespeare_util.dart' show paramScalarCount;
-
-const String _startFen =
-    'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
 
 int _argInt(List<String> a, String name, int fallback) {
   final i = a.indexOf(name);
@@ -41,14 +37,6 @@ double _argDouble(List<String> a, String name, double fallback) {
   final i = a.indexOf(name);
   if (i >= 0 && i + 1 < a.length) return double.tryParse(a[i + 1]) ?? fallback;
   return fallback;
-}
-
-/// Parse a UCI move string ("e2e4", "e7e8q") into a `chess` move map.
-Map<String, String>? _uciToMove(String u) {
-  if (u.length < 4) return null;
-  final m = {'from': u.substring(0, 2), 'to': u.substring(2, 4)};
-  if (u.length > 4) m['promotion'] = u.substring(4, 5);
-  return m;
 }
 
 /// Sample a continuation from [prompt] and report how many of the moves
@@ -74,24 +62,9 @@ void _sampleAndCheck(
   print('prompt:     ${jsonEncode(prompt)}');
   print('generated:  $text');
 
-  // Replay the moves on a board; count the legal prefix.
-  final board = ch.Chess.fromFEN(_startFen);
-  board.reset(); // start from the initial position
-  final tokens =
-      text.split(RegExp(r'\s+')).where((t) => t.isNotEmpty).toList();
-  var legal = 0;
-  String? firstIllegal;
-  for (final uci in tokens) {
-    final mv = _uciToMove(uci);
-    if (board.game_over || mv == null || !board.move(mv)) {
-      firstIllegal = uci;
-      break;
-    }
-    legal++;
-  }
-  print('legal move prefix: $legal / ${tokens.length}'
-      '${firstIllegal != null ? "  (stopped at \"$firstIllegal\")" : ""}');
-  if (legal > 0) print('position after legal moves:\n${board.ascii}');
+  final rep = checkUciLegality(text);
+  print(rep);
+  if (rep.legal > 0) print('position after legal moves:\n${rep.boardAscii}');
 }
 
 Future<void> main(List<String> args) async {
