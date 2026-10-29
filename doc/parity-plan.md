@@ -37,7 +37,7 @@ Grounded in the current `lib/core/tensor` implementation:
 | Custom autograd API | 🟡 `AutogradFunction` / `AutogradContext` (single-output) landed |
 | `relu`/`abs` backward | ⚠️ CPU-only |
 | conv / hopfield | ⚠️ bypass the tape |
-| gradcheck / tooling | 🟡 CPU harness landed (`test/gradcheck.dart`); GPU + anomaly pending |
+| gradcheck / tooling | 🟡 CPU gradcheck + hooks + anomaly detection landed; GPU pending |
 
 Test coverage already includes `test/autograd_test.dart` plus ~100 model/op
 tests — a strong regression net to build on.
@@ -105,12 +105,15 @@ tests — a strong regression net to build on.
 - **Exit:** in-place misuse raises a clear error; valid in-place passes
   gradcheck — ✅ (CPU).
 
-### A6. Engine robustness
-- Replace recursive `visit()` with an explicit worklist to avoid stack
-  overflow on deep graphs.
-- Add backward **hooks** (`registerHook`) and optional **anomaly detection**
-  (NaN/Inf origin tracking) — feeds Track D.
-- **Exit:** 10k-node chain backprops without overflow; hook fires.
+### A6. Engine robustness  🟡 CPU done
+- ✅ Replaced recursive `visit()` with an iterative worklist
+  (`_topoOrder`); a 20k-deep chain backprops without stack overflow.
+- ✅ Shared `_runNode` drives both `backward` and `grads`:
+  version-check → hooks → anomaly check → closure.
+- ✅ `registerHook` / `removeHook` (observe or replace a gradient) and
+  `Tensor.detectAnomaly` (NaN/Inf origin) — `test/engine_robustness_test.dart`.
+- ⬜ Engine parallelism (PyTorch's multithreaded C++ engine) — out of scope.
+- **Exit:** 10k-node chain backprops without overflow ✅; hook fires ✅.
 
 ---
 

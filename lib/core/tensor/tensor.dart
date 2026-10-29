@@ -87,6 +87,18 @@ class Tensor implements ffi.Finalizable {
   List<Tensor>? _savedForBackward;
   List<int>? _savedVersions;
 
+  // Backward hooks: fired (in registration order) when this tensor's
+  // gradient is finalized during the reverse walk. A hook may return a
+  // replacement gradient. See [registerHook].
+  Map<int, Tensor? Function(Tensor)>? _hooks;
+  int _nextHookId = 0;
+
+  /// When true, the reverse walk scans each finalized gradient for
+  /// NaN/Inf and throws, pointing at the offending node — the analog of
+  /// `torch.autograd.set_detect_anomaly(True)`. Off by default (it adds a
+  /// device→host copy per node).
+  static bool detectAnomaly = false;
+
   /// Debug-only accessor: shapes of this tensor's autograd children.
   List<List<int>> get debugChildShapes =>
       _children.map((c) => c.shape).toList();
@@ -770,6 +782,89 @@ class Tensor implements ffi.Finalizable {
 
   // ---------- Autograd core ----------
 
+  /// Register a hook fired when this tensor's gradient is finalized
+  /// during `backward` / `grads`. The hook receives the gradient and may
+  /// return a replacement (or `null` to leave it unchanged) — the analog
+  /// of `torch.Tensor.register_hook`. Returns an id for [removeHook].
+  int registerHook(Tensor? Function(Tensor grad) hook) {
+    final hooks = _hooks ??= {};
+    final id = _nextHookId++;
+    hooks[id] = hook;
+    return id;
+  }
+
+  /// Remove a hook previously added with [registerHook].
+  void removeHook(int id) {
+    _hooks?.remove(id);
+  }
+
+  /// Post-order (children-before-parents) topological traversal of the
+  /// graph reachable from `roots`, computed iteratively with an explicit
+  /// worklist so very deep graphs don't overflow the call stack.
+  static List<Tensor> _topoOrder(List<Tensor> roots) {
+    final ordered = <Tensor>[];
+    final visited = <Tensor>{};
+    final nodeStack = <Tensor>[];
+    final idxStack = <int>[];
+    for (final root in roots) {
+      if (!visited.add(root)) continue;
+      nodeStack.add(root);
+      idxStack.add(0);
+      while (nodeStack.isNotEmpty) {
+        final node = nodeStack.last;
+        final i = idxStack.last;
+        if (i < node._children.length) {
+          idxStack[idxStack.length - 1] = i + 1;
+          final child = node._children[i];
+          if (visited.add(child)) {
+            nodeStack.add(child);
+            idxStack.add(0);
+          }
+        } else {
+          ordered.add(node);
+          nodeStack.removeLast();
+          idxStack.removeLast();
+        }
+      }
+    }
+    return ordered;
+  }
+
+  /// Process one node during the reverse walk: verify saved versions,
+  /// fire gradient hooks, optionally check for anomalies, then run the
+  /// node's backward closure.
+  static void _runNode(Tensor t) {
+    t._checkSaved();
+    final hooks = t._hooks;
+    if (hooks != null && hooks.isNotEmpty && t._grad != null) {
+      for (final hook in hooks.values) {
+        final replaced = hook(t._grad!);
+        if (replaced != null && !identical(replaced, t._grad)) {
+          t._grad!.dispose();
+          t._grad = replaced;
+        }
+      }
+    }
+    if (detectAnomaly && t._gradHasNonFinite()) {
+      throw StateError(
+        'Autograd anomaly: non-finite gradient (NaN/Inf) at a node with '
+        'shape ${t.shape}, children ${t.debugChildShapes}. Enable this '
+        'check earlier or inspect the forward op feeding this node.',
+      );
+    }
+    t._backward?.call();
+  }
+
+  /// True if this tensor's current gradient holds any NaN/Inf value.
+  bool _gradHasNonFinite() {
+    final g = _grad;
+    if (g == null) return false;
+    for (final v in g.toList()) {
+      if (v.isNaN || v.isInfinite) return true;
+    }
+    return false;
+  }
+
   /// Trigger reverse-mode differentiation from this tensor. Typically
   /// called on a scalar loss. The root gradient is initialized to ones
   /// if not already set.
@@ -793,22 +888,11 @@ class Tensor implements ffi.Finalizable {
     }
     _grad ??= Tensor.fill(shape, 1.0, device: device);
 
-    final ordered = <Tensor>[];
-    final visited = <Tensor>{};
-    void visit(Tensor t) {
-      if (visited.contains(t)) return;
-      visited.add(t);
-      for (final c in t._children) {
-        visit(c);
-      }
-      ordered.add(t);
-    }
+    final ordered = _topoOrder([this]);
 
-    visit(this);
     for (int i = ordered.length - 1; i >= 0; i--) {
       final t = ordered[i];
-      t._checkSaved();
-      t._backward?.call();
+      _runNode(t);
       final hook = debugBackwardHook;
       if (hook != null) hook(ordered.length - 1 - i, t);
 
@@ -868,19 +952,9 @@ class Tensor implements ffi.Finalizable {
       );
     }
 
-    // Topological order of every node reachable from the outputs.
-    final ordered = <Tensor>[];
-    final visited = <Tensor>{};
-    void visit(Tensor t) {
-      if (!visited.add(t)) return;
-      for (final c in t._children) {
-        visit(c);
-      }
-      ordered.add(t);
-    }
-    for (final o in outputs) {
-      visit(o);
-    }
+    // Topological order of every node reachable from the outputs,
+    // computed iteratively (worklist) to stay stack-safe on deep graphs.
+    final ordered = _topoOrder(outputs);
 
     // Isolate this pass from any accumulated `.grad`.
     final saved = <Tensor, Tensor?>{};
@@ -900,8 +974,7 @@ class Tensor implements ffi.Finalizable {
 
     void run() {
       for (int i = ordered.length - 1; i >= 0; i--) {
-        ordered[i]._checkSaved();
-        ordered[i]._backward?.call();
+        _runNode(ordered[i]);
       }
     }
 
