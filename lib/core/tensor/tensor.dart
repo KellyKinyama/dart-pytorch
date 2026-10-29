@@ -790,6 +790,91 @@ class Tensor implements ffi.Finalizable {
     _grad = null;
   }
 
+  /// Compute gradients of [outputs] w.r.t. [inputs] — the functional,
+  /// `torch.autograd.grad`-style entry point. Unlike [backward] this does
+  /// **not** mutate any tensor's public [grad]: existing `.grad` values are
+  /// stashed for the duration of the call and restored afterwards.
+  ///
+  /// [gradOutputs] seeds the reverse pass (one per output; defaults to
+  /// ones, which yields the gradient of `outputs.sum()`). When
+  /// [createGraph] is true the returned gradients are themselves wired
+  /// into the autograd graph, so `grad(...)` can be called again on them
+  /// to obtain second- and higher-order derivatives.
+  ///
+  /// The forward graph is always retained (never freed), so the same
+  /// outputs can be differentiated repeatedly.
+  static List<Tensor?> grads(
+    List<Tensor> outputs,
+    List<Tensor> inputs, {
+    List<Tensor>? gradOutputs,
+    bool createGraph = false,
+  }) {
+    if (gradOutputs != null && gradOutputs.length != outputs.length) {
+      throw ArgumentError(
+        'grad: gradOutputs length ${gradOutputs.length} != '
+        'outputs length ${outputs.length}',
+      );
+    }
+
+    // Topological order of every node reachable from the outputs.
+    final ordered = <Tensor>[];
+    final visited = <Tensor>{};
+    void visit(Tensor t) {
+      if (!visited.add(t)) return;
+      for (final c in t._children) {
+        visit(c);
+      }
+      ordered.add(t);
+    }
+    for (final o in outputs) {
+      visit(o);
+    }
+
+    // Isolate this pass from any accumulated `.grad`.
+    final saved = <Tensor, Tensor?>{};
+    for (final t in ordered) {
+      saved[t] = t._grad;
+      t._grad = null;
+    }
+
+    for (int i = 0; i < outputs.length; i++) {
+      final o = outputs[i];
+      final seed = gradOutputs != null
+          ? gradOutputs[i]
+          : Tensor.fill(o.shape, 1.0, device: o.device);
+      if (createGraph) seed.requiresGrad = true;
+      o._grad = o._grad == null ? seed : o._grad! + seed;
+    }
+
+    void run() {
+      for (int i = ordered.length - 1; i >= 0; i--) {
+        ordered[i]._backward?.call();
+      }
+    }
+
+    // createGraph: let the backward ops build their own graph so the
+    // result is differentiable again. Otherwise suppress graph-building
+    // so the pass stays allocation-light.
+    if (createGraph) {
+      run();
+    } else {
+      Tensor.noGrad(run);
+    }
+
+    final inputSet = Set<Tensor>.identity()..addAll(inputs);
+    final results = [for (final inp in inputs) inp._grad];
+
+    // Restore public grads; dispose transient intermediate grads (but not
+    // when createGraph, since the result graph still references them).
+    for (final t in ordered) {
+      if (!createGraph && !inputSet.contains(t)) {
+        t._grad?.dispose();
+      }
+      t._grad = saved[t];
+    }
+    return results;
+  }
+
   /// Wire `fn` as this tensor's backward closure, remember its parents,
   /// and mark this node as requiring grad. Called by every op that
   /// participates in autograd. Skipped entirely inside a [noGrad] scope.

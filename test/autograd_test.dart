@@ -1,6 +1,17 @@
 import 'package:dart_pytorch/dart_pytorch.dart';
 import 'package:test/test.dart';
 
+/// True when a CUDA device + native lib are usable in this environment.
+/// GPU tests are skipped (not failed) when this returns false.
+bool _gpuAvailable() {
+  try {
+    Tensor.fromList([1], [1.0], device: Device.GPU).toList();
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
 void expectClose(
   List<double> got,
   List<double> want, {
@@ -243,7 +254,7 @@ void main() {
       xGpu.relu().sum().backward();
       expectClose(xGpu.grad!.toList(), xCpu.grad!.toList(), tol: 1e-6);
     });
-  });
+  }, skip: _gpuAvailable() ? null : 'no CUDA GPU / native lib in this env');
 
   group('one-step training loop (CPU)', () {
     test('linear regression converges toward target after N SGD steps', () {
@@ -309,6 +320,10 @@ void main() {
     // clones for the branch that reads g directly when both operands
     // require grad.
     for (final device in [Device.CPU, Device.GPU]) {
+      final skipGpu =
+          device == Device.GPU && !_gpuAvailable()
+          ? 'no CUDA GPU / native lib in this env'
+          : null;
       test('+ row-broadcast with both operands requires_grad ($device)', () {
         final a = Tensor.fromList(
           [4, 8],
@@ -339,7 +354,7 @@ void main() {
         expect(w.grad, isNotNull);
         expect(a.grad!.shape, [4, 8]);
         expect(b.grad!.shape, [1, 8]);
-      });
+      }, skip: skipGpu);
     }
   });
 }

@@ -31,7 +31,7 @@ Grounded in the current `lib/core/tensor` implementation:
 | Grad accumulation | ✅ `_accumulateGrad` + `_reduceForBroadcast` |
 | CPU/GPU parity | ✅ backward composed from forward ops; FFI CUDA kernels |
 | Op surface | ⚠️ ~25 ops (`+ - * /`, matmul, `relu/sigmoid/tanh/abs/log/pow`, `transpose/reshape`, `sum/mean`, softmax, LayerNorm, RMSNorm, crossEntropy, embedding, attention, concat, dropout, scatter, AFT) |
-| Higher-order grad | ❌ no `create_graph` / `grad()`; backwards not themselves differentiable |
+| Higher-order grad | 🟡 `Tensor.grads(outputs, inputs, createGraph:)` lands 2nd+ order on CPU |
 | Broadcasting | 🟡 full NumPy broadcasting on CPU (fwd + backward reduce); GPU still scalar/row only |
 | In-place autograd | ❌ not tracked |
 | Custom autograd API | ❌ edit the op file by hand |
@@ -68,14 +68,17 @@ tests — a strong regression net to build on.
 - **Exit:** `a + b` etc. match `torch` broadcasting on a shape matrix;
   gradcheck passes for broadcasted operands (CPU ✅, GPU pending).
 
-### A3. Higher-order gradients
-- Make backward closures build graph nodes when a `create_graph` flag is set
-  (backward of each op expressed via differentiable ops, already mostly true).
-- Add `Tensor.grad(outputs, inputs, {createGraph})` analogous to
-  `torch.autograd.grad`, returning grads without mutating `.grad`.
-- Keep `backward(freeGraph: false)` working for the inspect case.
-- **Exit:** second-order gradcheck (grad-of-grad) passes for a core subset
-  (`*`, matmul, `tanh`, `sum`, softmax).
+### A3. Higher-order gradients  🟡 CPU done
+- ✅ `Tensor.grads(outputs, inputs, {gradOutputs, createGraph})` — functional,
+  `torch.autograd.grad`-style; stashes/restores public `.grad`, retains the
+  forward graph, seeds with ones by default.
+- ✅ `createGraph: true` makes returned grads differentiable; second
+  derivatives of `x²`, `x³`, `tanh` verified in
+  `test/higher_order_grad_test.dart`.
+- ⬜ GPU second-order (needs CUDA host) and a `backward(createGraph:)`
+  convenience wrapper.
+- **Exit:** second-order gradcheck passes for a core subset — CPU ✅
+  (`*`, `pow`, `sum`, `tanh`); GPU pending.
 
 ### A4. Custom autograd `Function` API
 - Public `abstract class AutogradFunction { forward(ctx, inputs); backward(ctx, gradOut); }`
