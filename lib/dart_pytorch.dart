@@ -15,6 +15,7 @@ export 'core/nn/rms_norm.dart';
 export 'core/nn/ffn/swiglu.dart';
 export 'core/nn/embedding.dart';
 export 'core/nn/linear.dart';
+export 'core/nn/hadamard_ffn.dart';
 export 'core/nn/char_state_lm.dart';
 export 'core/nn/parallel_linear.dart';
 export 'core/nn/conv2d.dart';
