@@ -37,7 +37,7 @@ Grounded in the current `lib/core/tensor` implementation:
 | Custom autograd API | ❌ edit the op file by hand |
 | `relu`/`abs` backward | ⚠️ CPU-only |
 | conv / hopfield | ⚠️ bypass the tape |
-| gradcheck / tooling | ❌ none |
+| gradcheck / tooling | 🟡 CPU harness landed (`test/gradcheck.dart`); GPU + anomaly pending |
 
 Test coverage already includes `test/autograd_test.dart` plus ~100 model/op
 tests — a strong regression net to build on.
@@ -46,12 +46,16 @@ tests — a strong regression net to build on.
 
 ## Track A — Autograd engine parity
 
-### A1. Numerical `gradcheck` harness  _(foundation — do first)_
-- Add `test/gradcheck.dart` helper: finite-difference Jacobian vs analytic
-  `.grad`, per-op, CPU + GPU.
-- Wire every existing differentiable op into a parametrized gradcheck test.
-- **Exit:** all current ops pass gradcheck within tolerance; becomes the gate
-  for every new op in Track B.
+### A1. Numerical `gradcheck` harness  _(foundation — do first)_  🟡 in progress
+- ✅ Added `test/gradcheck.dart`: central finite-difference vs analytic `.grad`
+  with `gradCheck` / `expectGradCheck`, per-input tolerance.
+- ✅ `test/gradcheck_test.dart` covers the CPU op surface (binary, unary,
+  reshape/transpose, sum/mean, matmul, softmax, layerNorm, rmsNorm,
+  crossEntropy, embedding, concat) — 23 ops passing.
+- ⬜ Parametrize the same checks on GPU (`Device.GPU`) behind a CUDA guard.
+- ⬜ Add remaining ops as they land (dropout eval-mode, scatter, AFT).
+- **Exit:** all current ops pass gradcheck within tolerance on CPU **and** GPU;
+  becomes the gate for every new op in Track B.
 
 ### A2. Full broadcasting in autograd
 - Generalize `_reduceForBroadcast` to NumPy/PyTorch broadcasting rules
