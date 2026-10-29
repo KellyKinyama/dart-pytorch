@@ -66,6 +66,7 @@ fix so the CUDA driver stub is found. Drop it on native Linux.
 | C6 | Chess-move LM — **CharStateLM** (linear-attn state LM) | tiny | CPU | n/a | [bin/chess_moves_lm_demo.dart](bin/chess_moves_lm_demo.dart) — context-free recurrent-linear-attention LM; `--save`/`--load` checkpoints |
 | C7 | **AFT plays chess** (constrained legal decoding) | ~0.56M | CPU | n/a | [bin/chess_aft_play.dart](bin/chess_aft_play.dart) — scores the board's legal UCI moves under the AFT so every move is legal; self-play or `--vs white/black`; EMA best-checkpoint + Ctrl+C-safe training |
 | C8 | Chess-move LM — **Hadamard-FFN** decoder | ~0.21M | CPU | n/a | [bin/chess_hadamard_demo.dart](bin/chess_hadamard_demo.dart) — GPT-style LM with the dense FFN swapped for Needle's near-parameter-free Hadamard MLP (`3·dim` vs `~8·dim²` per layer); same corpus/flags as C4–C6 |
+| C9 | Chess-move LM — **Hadamard-FFN + engram memory** | ~2.3M | CPU | n/a | [bin/chess_engram_demo.dart](bin/chess_engram_demo.dart) — adds Needle's hashed n-gram **engram** (learnable table keyed by move n-grams); `--no-engram` ablates. On 200 games it cuts loss ~1.59 → ~1.34 vs C8 |
 | N1 | **Needle 3** (Cactus) `.cact` inspector | n/a | CPU | n/a | [bin/needle_describe.dart](bin/needle_describe.dart) — header geometry + tensor inventory + 581-tensor contract check for any `needle3.cact` |
 | N2 | **Needle 3** tool-calling model (Dart port) | 121M (CQ2, 35 MB) | CPU | ✅ embedded | [bin/needle_run.dart](bin/needle_run.dart) — loads real CQ2 weights, tokenizes, builds the tool prompt, runs the full forward (SAN attn, Hadamard/Monarch MLP, engram, mHC) and greedily decodes `<think>…</think><tool_call>[…]</tool_call>` |
 
@@ -164,6 +165,18 @@ Walsh-Hadamard rotation with learnable per-channel scales replaces the dense
 FFN, so each layer's feed-forward is `3·dim` params instead of `~8·dim²`. On
 the 200-game corpus it reaches the same loss as the GPT (~1.6) at a fraction of
 the FFN size, and trains fastest of the four (`--dim` must be a power of two).
+
+Adding Needle's **engram memory** — a learnable table keyed by hashed move
+n-grams — lets the model memorize common openings/continuations cheaply:
+
+```sh
+dart run bin/chess_engram_demo.dart --games 200 --steps 400 --temp 0.5 --topk 20            # engram on
+dart run bin/chess_engram_demo.dart --games 200 --steps 400 --temp 0.5 --topk 20 --no-engram # ablation
+```
+
+On 200 games the engram drops final loss from ~1.59 (off) to ~1.34 (on), at
+the cost of the table parameters (`--slots` rows × dim per n-gram order) — the
+same trade Needle makes: facts live in the gather-read memory, not the mixer.
 
 Shared flags: `--user`, `--games`, `--plies`, `--regen`, `--steps`,
 `--seq`, `--dim`, `--layers`, `--heads` (GPT/CharStateLM), `--prompt`,
