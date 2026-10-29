@@ -17,6 +17,7 @@ export 'core/nn/embedding.dart';
 export 'core/nn/linear.dart';
 export 'core/nn/hadamard_ffn.dart';
 export 'core/nn/engram_memory.dart';
+export 'core/nn/ladder.dart';
 export 'core/nn/char_state_lm.dart';
 export 'core/nn/parallel_linear.dart';
 export 'core/nn/conv2d.dart';
