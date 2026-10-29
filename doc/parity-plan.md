@@ -34,7 +34,7 @@ Grounded in the current `lib/core/tensor` implementation:
 | Higher-order grad | 🟡 `Tensor.grads(outputs, inputs, createGraph:)` lands 2nd+ order on CPU |
 | Broadcasting | 🟡 full NumPy broadcasting on CPU (fwd + backward reduce); GPU still scalar/row only |
 | In-place autograd | ❌ not tracked |
-| Custom autograd API | ❌ edit the op file by hand |
+| Custom autograd API | 🟡 `AutogradFunction` / `AutogradContext` (single-output) landed |
 | `relu`/`abs` backward | ⚠️ CPU-only |
 | conv / hopfield | ⚠️ bypass the tape |
 | gradcheck / tooling | 🟡 CPU harness landed (`test/gradcheck.dart`); GPU + anomaly pending |
@@ -80,12 +80,16 @@ tests — a strong regression net to build on.
 - **Exit:** second-order gradcheck passes for a core subset — CPU ✅
   (`*`, `pow`, `sum`, `tanh`); GPU pending.
 
-### A4. Custom autograd `Function` API
-- Public `abstract class AutogradFunction { forward(ctx, inputs); backward(ctx, gradOut); }`
-  with a `ctx.saveForBackward(...)`.
-- Reimplement one existing fused op (e.g. AFT or crossEntropy) on top of it as
-  the reference/dogfood.
-- **Exit:** user-defined op participates in `backward()` and passes gradcheck.
+### A4. Custom autograd `Function` API  🟡 CPU done
+- ✅ `AutogradFunction` (override `forward`/`backward`) + `AutogradContext`
+  (`saveForBackward`, `setData`/`getData`), spliced in via `apply` as one
+  opaque tape node; forward runs detached so backward is authoritative.
+- ✅ Dogfood + gradcheck in `test/autograd_function_test.dart`: `MulAdd`
+  (multi-input + broadcasting), a custom `ReLU` matching the built-in, and
+  a `Cube` that supports higher-order via `createGraph`.
+- ⬜ Multi-output functions (currently throws `UnsupportedError`).
+- **Exit:** user-defined op participates in `backward()`/`grads()` and passes
+  gradcheck — ✅ (single output).
 
 ### A5. In-place op tracking
 - Version counter per tensor; backward asserts no saved tensor was mutated

@@ -37,6 +37,7 @@ part 'concat.dart';
 part 'aft.dart';
 part 'scatter.dart';
 part 'im2col.dart';
+part 'autograd_function.dart';
 
 enum Device { CPU, GPU }
 
