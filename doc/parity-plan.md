@@ -125,13 +125,16 @@ tests — a strong regression net to build on.
   as intentionally detached + provide a differentiable path).
 - **Exit:** no op silently drops gradients; gradcheck on GPU for the full set.
 
-### B2. Core math op expansion
-- Unary: `exp`, `sqrt`, `rsqrt`, `neg`, `reciprocal`, `clamp`, `sin`, `cos`,
-  `silu`, `gelu` (exact + tanh), `softplus`, `erf`.
-- Reductions: `sum(axis, keepDim)`, `mean(axis)`, `max/min(axis)`, `var/std`,
-  `prod`, `logsumexp`.
-- Shape: `permute`, `view`/`flatten`, `squeeze`/`unsqueeze`, `cat(axis)`,
+### B2. Core math op expansion  🟡 unary done (CPU)
+- ✅ Unary primitives (CPU, explicit backward): `exp`, `sqrt`, `sin`, `cos`,
+  `erf`, `clamp` — each gradchecked in `test/unary_ops_test.dart`.
+- ✅ Composed helpers (autograd automatic): `neg`, `reciprocal`, `rsqrt`,
+  `silu`, `softplus`, `geluTanh`, `gelu` (exact) — gradchecked.
+- ⬜ Reductions: `sum(axis, keepDim)`, `mean(axis)`, `max/min(axis)`,
+  `var/std`, `prod`, `logsumexp`.
+- ⬜ Shape: `permute`, `view`/`flatten`, `squeeze`/`unsqueeze`, `cat(axis)`,
   `stack`, `split`, `slice`/`narrow`, `gather`, `index_select`.
+- ⬜ GPU kernels for the new unary ops (currently throw `UnsupportedError`).
 - **Exit:** each lands with a gradcheck test (A1 gate) and GPU kernel or
   documented CPU fallback.
 

@@ -430,6 +430,170 @@ extension TensorOps on Tensor {
     }, saved: [x]);
   }
 
+  // ---------------------------------------------------------------------
+  // Extended unary math (B2). CPU-only for now; GPU kernels are a
+  // separate task — these throw on GPU with a clear message. Composed
+  // helpers (neg/reciprocal/rsqrt/silu/softplus/gelu) are differentiable
+  // automatically through the ops they are built from.
+  // ---------------------------------------------------------------------
+
+  void _requireCpu(String op) {
+    if (device != Device.CPU) {
+      throw UnsupportedError(
+        '$op: not yet implemented on GPU — move the tensor to CPU first.',
+      );
+    }
+  }
+
+  /// e^x. Backward: `dX = dOut * e^x = dOut * out`.
+  Tensor exp() {
+    _requireCpu('exp');
+    final d = _cpuData!;
+    final o = Float32List(d.length);
+    for (int i = 0; i < d.length; i++) {
+      o[i] = math.exp(d[i]);
+    }
+    final out = Tensor._cpu(shape, o);
+    if (requiresGrad) {
+      final x = this;
+      out._setBackward([x], () {
+        x._accumulateGrad(out._grad! * out);
+      }, saved: [out]);
+    }
+    return out;
+  }
+
+  /// sqrt(x). Backward: `dX = dOut / (2*sqrt(x)) = dOut / (2*out)`.
+  Tensor sqrt() {
+    _requireCpu('sqrt');
+    final d = _cpuData!;
+    final o = Float32List(d.length);
+    for (int i = 0; i < d.length; i++) {
+      o[i] = math.sqrt(d[i]);
+    }
+    final out = Tensor._cpu(shape, o);
+    if (requiresGrad) {
+      final x = this;
+      out._setBackward([x], () {
+        x._accumulateGrad(out._grad! / (out * 2.0));
+      }, saved: [out]);
+    }
+    return out;
+  }
+
+  /// sin(x). Backward: `dX = dOut * cos(x)`.
+  Tensor sin() {
+    _requireCpu('sin');
+    final d = _cpuData!;
+    final o = Float32List(d.length);
+    for (int i = 0; i < d.length; i++) {
+      o[i] = math.sin(d[i]);
+    }
+    final out = Tensor._cpu(shape, o);
+    if (requiresGrad) {
+      final x = this;
+      out._setBackward([x], () {
+        x._accumulateGrad(out._grad! * x.cos());
+      }, saved: [x]);
+    }
+    return out;
+  }
+
+  /// cos(x). Backward: `dX = -dOut * sin(x)`.
+  Tensor cos() {
+    _requireCpu('cos');
+    final d = _cpuData!;
+    final o = Float32List(d.length);
+    for (int i = 0; i < d.length; i++) {
+      o[i] = math.cos(d[i]);
+    }
+    final out = Tensor._cpu(shape, o);
+    if (requiresGrad) {
+      final x = this;
+      out._setBackward([x], () {
+        x._accumulateGrad(out._grad! * x.sin() * -1.0);
+      }, saved: [x]);
+    }
+    return out;
+  }
+
+  /// Gauss error function. Backward: `dX = dOut * (2/√π) e^(-x²)`.
+  Tensor erf() {
+    _requireCpu('erf');
+    final d = _cpuData!;
+    final o = Float32List(d.length);
+    for (int i = 0; i < d.length; i++) {
+      o[i] = _erfScalar(d[i]);
+    }
+    final out = Tensor._cpu(shape, o);
+    if (requiresGrad) {
+      final x = this;
+      out._setBackward([x], () {
+        final xd = x._cpuData!;
+        final f = Float32List(xd.length);
+        const c = 1.1283791670955126; // 2/sqrt(pi)
+        for (int i = 0; i < xd.length; i++) {
+          f[i] = c * math.exp(-xd[i] * xd[i]);
+        }
+        x._accumulateGrad(out._grad! * Tensor._cpu(x.shape, f));
+      }, saved: [x]);
+    }
+    return out;
+  }
+
+  /// Elementwise clamp to `[lo, hi]`. Backward passes the gradient only
+  /// where the input was strictly inside the bounds.
+  Tensor clamp(double lo, double hi) {
+    _requireCpu('clamp');
+    final d = _cpuData!;
+    final o = Float32List(d.length);
+    for (int i = 0; i < d.length; i++) {
+      final v = d[i];
+      o[i] = v < lo ? lo : (v > hi ? hi : v);
+    }
+    final out = Tensor._cpu(shape, o);
+    if (requiresGrad) {
+      final x = this;
+      out._setBackward([x], () {
+        final xd = x._cpuData!;
+        final mask = Float32List(xd.length);
+        for (int i = 0; i < xd.length; i++) {
+          mask[i] = (xd[i] > lo && xd[i] < hi) ? 1.0 : 0.0;
+        }
+        x._accumulateGrad(out._grad! * Tensor._cpu(x.shape, mask));
+      }, saved: [x]);
+    }
+    return out;
+  }
+
+  /// Negation `-x` (composed; autograd automatic).
+  Tensor neg() => this * -1.0;
+
+  /// Reciprocal `1/x` (composed via `pow(-1)`).
+  Tensor reciprocal() => pow(-1.0);
+
+  /// Reciprocal square root `1/√x` (composed via `pow(-0.5)`).
+  Tensor rsqrt() => pow(-0.5);
+
+  /// SiLU / swish `x · sigmoid(x)` (composed; autograd automatic).
+  Tensor silu() => this * sigmoid();
+
+  /// Softplus `log(1 + e^x)` (composed via [exp]).
+  Tensor softplus() => (exp() + 1.0).log();
+
+  /// Tanh-approximation GELU (GPT-2 `gelu_new`).
+  Tensor geluTanh() {
+    const c = 0.7978845608028654; // sqrt(2/pi)
+    final inner = (this + pow(3.0) * 0.044715) * c;
+    return this * (inner.tanh() + 1.0) * 0.5;
+  }
+
+  /// Exact (erf-based) GELU.
+  Tensor gelu() {
+    const invSqrt2 = 0.7071067811865476; // 1/sqrt(2)
+    return this * ((this * invSqrt2).erf() + 1.0) * 0.5;
+  }
+
   Tensor _unaryFwd({
     required double Function(double) cpuFn,
     required _GpuOp1 Function() gpu,
@@ -595,3 +759,19 @@ extension TensorOps on Tensor {
     return out;
   }
 }
+
+/// Abramowitz & Stegun 7.1.26 approximation of erf (|error| < 1.5e-7).
+double _erfScalar(double x) {
+  final sign = x < 0 ? -1.0 : 1.0;
+  final ax = x.abs();
+  final t = 1.0 / (1.0 + 0.3275911 * ax);
+  final y = 1.0 -
+      (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t -
+                  0.284496736) *
+              t +
+          0.254829592) *
+          t *
+          math.exp(-ax * ax);
+  return sign * y;
+}
+
